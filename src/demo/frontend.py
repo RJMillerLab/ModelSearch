@@ -44,6 +44,32 @@ HTML_TEMPLATE = """
         .input-section {
             margin-bottom: 30px;
         }
+        .mode-selector {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        .mode-option {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .mode-option input[type="radio"] {
+            margin-right: 8px;
+        }
+        .mode-option label {
+            margin: 0;
+            font-weight: normal;
+            cursor: pointer;
+        }
+        .mode-input {
+            margin-top: 15px;
+            display: none;
+        }
+        .mode-input.active {
+            display: block;
+        }
         label {
             display: block;
             margin-bottom: 8px;
@@ -101,6 +127,10 @@ HTML_TEMPLATE = """
         }
         .log-timestamp {
             color: #858585;
+            margin-right: 8px;
+        }
+        .log-message {
+            color: #d4d4d4;
         }
         .results-section {
             margin-top: 30px;
@@ -217,8 +247,27 @@ HTML_TEMPLATE = """
         <p>Compare Card2Card (dense semantic) vs Card2Tab2Card (table-based) search</p>
         
         <div class="input-section">
-            <label for="query">Query Text:</label>
-            <input type="text" id="query" placeholder="e.g., transformer model for code generation" value="transformer model for code generation">
+            <div class="mode-selector">
+                <label style="margin-bottom: 10px;">Search Mode:</label>
+                <div class="mode-option">
+                    <input type="radio" id="mode_query" name="search_mode" value="query" checked onchange="toggleMode()">
+                    <label for="mode_query">Query → ModelCard → Search</label>
+                </div>
+                <div class="mode-option">
+                    <input type="radio" id="mode_modelid" name="search_mode" value="modelid" onchange="toggleMode()">
+                    <label for="mode_modelid">ModelID → Search (direct)</label>
+                </div>
+            </div>
+            
+            <div class="mode-input active" id="query-input">
+                <label for="query">Query Text:</label>
+                <input type="text" id="query" placeholder="e.g., transformer model for code generation" value="transformer model for code generation">
+            </div>
+            
+            <div class="mode-input" id="modelid-input">
+                <label for="model_id">Model ID:</label>
+                <input type="text" id="model_id" placeholder="e.g., Salesforce/codet5-base">
+            </div>
             
             <label for="top_k" style="margin-top: 15px;">Top K Results:</label>
             <input type="number" id="top_k" value="20" min="1" max="100">
@@ -244,11 +293,18 @@ HTML_TEMPLATE = """
         let eventSource = null;
         
         async function startSearch() {
+            const mode = document.querySelector('input[name="search_mode"]:checked').value;
             const query = document.getElementById('query').value.trim();
+            const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt(document.getElementById('top_k').value);
             
-            if (!query) {
+            // Validate input based on mode
+            if (mode === 'query' && !query) {
                 showError('Please enter a query');
+                return;
+            }
+            if (mode === 'modelid' && !modelId) {
+                showError('Please enter a model ID');
                 return;
             }
             
@@ -261,10 +317,20 @@ HTML_TEMPLATE = """
             
             try {
                 // Start search
+                const requestBody = {
+                    mode: mode,
+                    top_k: topK
+                };
+                if (mode === 'query') {
+                    requestBody.query = query;
+                } else {
+                    requestBody.model_id = modelId;
+                }
+                
                 const response = await fetch('{{BACKEND_URL}}/api/search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({query: query, top_k: topK})
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
@@ -298,7 +364,7 @@ HTML_TEMPLATE = """
                     return;
                 }
                 
-                addLog(data.message || data.timestamp + ': ' + data.message);
+                addLog(data);
             };
             
             eventSource.onerror = function(error) {
@@ -307,13 +373,48 @@ HTML_TEMPLATE = """
             };
         }
         
-        function addLog(message) {
-            const container = document.getElementById('logContainer');
-            const entry = document.createElement('div');
-            entry.className = 'log-entry';
-            entry.textContent = message;
-            container.appendChild(entry);
-            container.scrollTop = container.scrollHeight;
+        function toggleMode() {
+            const mode = document.querySelector('input[name="search_mode"]:checked').value;
+            const queryInput = document.getElementById('query-input');
+            const modelIdInput = document.getElementById('modelid-input');
+            
+            if (mode === 'query') {
+                queryInput.classList.add('active');
+                modelIdInput.classList.remove('active');
+            } else {
+                queryInput.classList.remove('active');
+                modelIdInput.classList.add('active');
+            }
+        }
+        
+        function addLog(logData) {
+            const logContainer = document.getElementById('logContainer');
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            
+            // Handle both string and object formats
+            let message, timestamp;
+            if (typeof logData === 'string') {
+                message = logData;
+                timestamp = new Date().toISOString();
+            } else {
+                message = logData.message || '';
+                timestamp = logData.timestamp || new Date().toISOString();
+            }
+            
+            // Format timestamp for display
+            const date = new Date(timestamp);
+            const timestampStr = date.toLocaleTimeString('en-US', { 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                fractionalSecondDigits: 3
+            });
+            
+            logEntry.innerHTML = `<span class="log-timestamp">[${timestampStr}]</span><span class="log-message">${message}</span>`;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
         }
         
         async function pollResults(jobId) {

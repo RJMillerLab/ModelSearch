@@ -10,6 +10,7 @@ import json
 import uuid
 import threading
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context
@@ -23,7 +24,8 @@ from src.search import (
     search_query2modelcard,
     search_card2card,
     search_card2tab2card,
-    get_tables_for_model
+    get_tables_for_model,
+    load_relationship_parquet
 )
 
 app = Flask(__name__)
@@ -50,11 +52,14 @@ class JobLogger:
         self.results = None
     
     def log(self, message: str):
-        """Add log message"""
+        """Add log message with timestamp"""
         with self.lock:
-            timestamp = datetime.now().isoformat()
+            now = datetime.now()
+            timestamp = now.isoformat()
+            # Format timestamp for display: YYYY-MM-DD HH:MM:SS.mmm
+            timestamp_display = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             self.logs.append({"timestamp": timestamp, "message": message})
-            print(f"[{self.job_id}] {message}")
+            print(f"[{timestamp_display}] [{self.job_id}] {message}")
     
     def get_logs(self) -> List[Dict]:
         """Get all logs"""
@@ -73,42 +78,93 @@ class JobLogger:
             self.status = "completed"
 
 
-def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
-    """Run the complete search pipeline in background"""
+def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None):
+    """Run the complete search pipeline in background
+    
+    Args:
+        job_id: Job identifier
+        query: Text query (for query mode)
+        top_k: Number of results to return
+        model_id: Model ID (for modelid mode)
+    """
     logger = jobs[job_id]
+    
+    # Record start time
+    start_time = time.time()
     
     try:
         logger.set_status("running")
         logger.log("Starting search pipeline...")
-        logger.log(f"Query: {query}")
         
-        # Step 1: Extract model card from query
-        logger.log("Step 1: Extracting model card from query...")
-        model_results = search_query2modelcard(
-            query=query,
-            emb_npz=DEFAULT_EMB_NPZ,
-            faiss_index=DEFAULT_FAISS_INDEX,
-            top_k=1,  # Get top 1 as the query model
-            device="cuda",
-            output_json=None
-        )
-        
-        if not model_results:
-            raise ValueError("No model card found for query")
-        
-        model_id = model_results[0]
-        logger.log(f"✅ Extracted model: {model_id}")
+        # Step 1: Get model ID (either from query or directly provided)
+        if model_id:
+            # Direct model ID mode
+            logger.log(f"Mode: ModelID → Search (direct)")
+            logger.log(f"Model ID: {model_id}")
+            
+            # Verify model ID exists in the index
+            logger.log("Step 1: Verifying model ID exists in index...")
+            try:
+                import numpy as np
+                data = np.load(DEFAULT_EMB_NPZ)
+                ids = data['ids'].tolist()
+                if model_id not in ids:
+                    raise ValueError(f"Model ID '{model_id}' not found in corpus. Please check the model ID.")
+                logger.log(f"✅ Model ID verified: {model_id}")
+            except Exception as e:
+                logger.log(f"❌ Error verifying model ID: {str(e)}")
+                raise
+        else:
+            # Query mode: Extract model card from query
+            logger.log(f"Mode: Query → ModelCard → Search")
+            logger.log(f"Query: {query}")
+            logger.log("Step 1: Extracting model card from query...")
+            model_results = search_query2modelcard(
+                query=query,
+                emb_npz=DEFAULT_EMB_NPZ,
+                faiss_index=DEFAULT_FAISS_INDEX,
+                top_k=1,  # Get top 1 as the query model
+                device="cuda",
+                output_json=None
+            )
+            
+            if not model_results:
+                raise ValueError("No model card found for query")
+            
+            model_id = model_results[0]
+            logger.log(f"✅ Extracted model: {model_id}")
         
         # Step 2: Check if model has tables for Card2Tab2Card
         logger.log("Step 2: Checking if model has tables...")
         model_tables = []
         has_tables = False
+        relationship_df = None
+        
         try:
-            model_tables = get_tables_for_model(
-                model_id=model_id,
-                schema_log_path=DEFAULT_SCHEMA_LOG,
-                use_citationlake=True
-            )
+            # Try to use CitationLake first, fallback to relationship_parquet if not available
+            try:
+                from src.search.card2tab2card import USE_CITATIONLAKE_GET_FROM
+            except ImportError:
+                USE_CITATIONLAKE_GET_FROM = False
+            
+            if USE_CITATIONLAKE_GET_FROM:
+                # Try CitationLake approach
+                model_tables = get_tables_for_model(
+                    model_id=model_id,
+                    schema_log_path=DEFAULT_SCHEMA_LOG,
+                    use_citationlake=True
+                )
+            else:
+                # CitationLake not available, use relationship_parquet
+                logger.log("⚠️  CitationLake not available, using relationship_parquet...")
+                relationship_df = load_relationship_parquet(DEFAULT_RELATIONSHIP_PARQUET)
+                model_tables = get_tables_for_model(
+                    model_id=model_id,
+                    relationship_df=relationship_df,
+                    schema_log_path=DEFAULT_SCHEMA_LOG,
+                    use_citationlake=False
+                )
+            
             if not model_tables:
                 logger.log(f"⚠️  Model {model_id} has no tables - Card2Tab2Card pipeline will be skipped")
                 logger.log(f"   This model card does not have associated tables, so table-based search cannot be performed.")
@@ -332,10 +388,39 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
             json.dump(results_data, f, ensure_ascii=False, indent=2)
         
         logger.log(f"✅ Results saved to {output_json}")
+        
+        # Calculate and log running time
+        end_time = time.time()
+        running_time = end_time - start_time
+        minutes = int(running_time // 60)
+        seconds = int(running_time % 60)
+        milliseconds = int((running_time % 1) * 1000)
+        
+        if minutes > 0:
+            logger.log(f"⏱️  Total running time: {minutes}m {seconds}s {milliseconds}ms")
+        else:
+            logger.log(f"⏱️  Total running time: {seconds}s {milliseconds}ms")
+        
+        # Add running time to results
+        results_data["running_time_seconds"] = round(running_time, 3)
+        results_data["running_time_formatted"] = f"{minutes}m {seconds}s {milliseconds}ms" if minutes > 0 else f"{seconds}s {milliseconds}ms"
+        
         logger.set_results(results_data)
         logger.log("Pipeline completed successfully!")
         
     except Exception as e:
+        # Calculate running time even on error
+        end_time = time.time()
+        running_time = end_time - start_time
+        minutes = int(running_time // 60)
+        seconds = int(running_time % 60)
+        milliseconds = int((running_time % 1) * 1000)
+        
+        if minutes > 0:
+            logger.log(f"⏱️  Running time before error: {minutes}m {seconds}s {milliseconds}ms")
+        else:
+            logger.log(f"⏱️  Running time before error: {seconds}s {milliseconds}ms")
+        
         logger.log(f"❌ Error: {str(e)}")
         logger.set_status("error")
         import traceback
@@ -353,11 +438,21 @@ def search():
     """Main search endpoint - starts pipeline"""
     try:
         data = request.json or {}
-        query = data.get('query')
-        if not query:
-            return jsonify({"status": "error", "message": "query is required"}), 400
-        
+        mode = data.get('mode', 'query')  # 'query' or 'modelid'
         top_k = data.get('top_k', 20)
+        
+        if mode == 'query':
+            query = data.get('query')
+            if not query:
+                return jsonify({"status": "error", "message": "query is required for query mode"}), 400
+            model_id = None
+        elif mode == 'modelid':
+            model_id = data.get('model_id')
+            if not model_id:
+                return jsonify({"status": "error", "message": "model_id is required for modelid mode"}), 400
+            query = None
+        else:
+            return jsonify({"status": "error", "message": f"Invalid mode: {mode}. Must be 'query' or 'modelid'"}), 400
         
         # Create job
         job_id = str(uuid.uuid4())
@@ -366,7 +461,7 @@ def search():
         # Start pipeline in background thread
         thread = threading.Thread(
             target=run_search_pipeline,
-            args=(job_id, query, top_k)
+            args=(job_id, query, top_k, model_id)
         )
         thread.daemon = True
         thread.start()
