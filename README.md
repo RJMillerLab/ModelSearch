@@ -137,6 +137,11 @@ python -m src.search.card2card search \
 - Table structure: `tokenized`, `tableid`, `colid`, `rowid`, `filename`, `table_group`, `table_type`
 - Created from CSV files using `create_index_duckdb.py` script
 
+```bash
+# change src/Blend_internal/config/config.ini to modellake path
+python -m src.Blend_internal.scripts.check_db --db_path data_citationlake/modellake.db
+```
+
 **To create `modellake.db` (if not exists):**
 ```bash
 python -m src.Blend_internal.scripts.create_index_duckdb \
@@ -150,28 +155,38 @@ Test table-to-table search using Blend_internal:
 
 ```bash
 # List all tables in modellake.db
-python -m src.search.tab2tab --list_tables --db_path data/modellake.db
+python -m src.search.tab2tab --list_tables --db_path modellake.db
 
 # Single column search
 python -m src.search.tab2tab \
   --search_type single_column \
-  --query "value1,value2,value3" \
+  --query "train, dataset, model" \
   --k 10 \
-  --db_path data_citationlake/modellake.db \
+  --db_path modellake.db \
   --output data/tab2tab_results.json
 
-# Multi column search
-python -m src.search.tab2tab \
-  --search_type multi_column \
-  --query path/to/query_table.csv \
-  --k 10 \
-  --output data/tab2tab_results.json
+# Multi column search (haven't tested yet)
+# python -m src.search.tab2tab \
+#   --search_type multi_column \
+#   --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+#   --k 10 \
+#   --db_path data_citationlake/modellake.db \
+#   --output data/tab2tab_results.json
 
 # Keyword search
 python -m src.search.tab2tab \
   --search_type keyword \
-  --query "keyword1,keyword2,keyword3" \
+  --query "train, dataset, model" \
   --k 10 \
+  --db_path modellake.db \
+  --output data/tab2tab_results.json
+
+# Unionable search (find tables with unionable columns)
+python -m src.search.tab2tab \
+  --search_type unionable \
+  --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+  --k 10 \
+  --db_path modellake.db \
   --output data/tab2tab_results.json
 
 # Test with specific table ID from modellake.db

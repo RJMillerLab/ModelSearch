@@ -40,6 +40,7 @@ _BLEND_INTERNAL_PATH = blend_path_abs if os.path.exists(blend_path_abs) else ble
 _SingleColumnJoinSearch = None
 _MultiColumnJoinSearch = None
 _KeywordSearch = None
+_UnionSearch = None
 
 def _update_blend_config(db_path: str):
     """Update Blend_internal config.ini with the correct db_path before importing."""
@@ -79,7 +80,7 @@ def _update_blend_config(db_path: str):
 
 def _lazy_import_blend():
     """Lazy import Blend_internal functions after config is set."""
-    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch
+    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch
     if _SingleColumnJoinSearch is None:
         # CRITICAL: Ensure Blend_internal path is at the front of sys.path
         # This must be done before any imports to ensure Blend_internal's src/utils.py
@@ -106,6 +107,7 @@ def _lazy_import_blend():
                 'src.Tasks.SingleColumnJoinSearch',
                 'src.Tasks.MultiColumnJoinSearch', 
                 'src.Tasks.KeywordSearch',
+                'src.Tasks.UnionSearch',
                 'src.Plan',
                 'src.Operators',
                 'src.Operators.OperatorBase',
@@ -124,9 +126,11 @@ def _lazy_import_blend():
             from src.Tasks.SingleColumnJoinSearch import SingleColumnJoinSearch
             from src.Tasks.MultiColumnJoinSearch import MultiColumnJoinSearch
             from src.Tasks.KeywordSearch import KeywordSearch
+            from src.Tasks.UnionSearch import UnionSearch
             _SingleColumnJoinSearch = SingleColumnJoinSearch
             _MultiColumnJoinSearch = MultiColumnJoinSearch
             _KeywordSearch = KeywordSearch
+            _UnionSearch = UnionSearch
         finally:
             # Restore ModelSearchDemo root to sys.path if we removed it
             if modelsearch_removed and modelsearch_root not in sys.path:
@@ -267,6 +271,36 @@ def search_keyword(
     return plan.run()
 
 
+def search_unionable(
+    query_dataset: pd.DataFrame,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Search for unionable tables (tables with unionable columns).
+    
+    Args:
+        query_dataset: DataFrame with query data
+        k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    # Always update config before importing (even if db_path is None, use default)
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        # Use default path
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    _lazy_import_blend()
+    plan = _UnionSearch(query_dataset, k)
+    return plan.run()
+
+
 def search_table2table(
     query: Any,
     search_type: str = "single_column",
@@ -281,7 +315,7 @@ def search_table2table(
             - Iterable of values (for single_column)
             - pd.DataFrame (for multi_column)
             - List[str] (for keyword)
-        search_type: Type of search - "single_column", "multi_column", or "keyword"
+        search_type: Type of search - "single_column", "multi_column", "keyword", or "unionable"
         k: Number of results to return
     
     Returns:
@@ -299,8 +333,12 @@ def search_table2table(
         if not isinstance(query, list) or not all(isinstance(x, str) for x in query):
             raise ValueError("For keyword search, query must be a list of strings")
         return search_keyword(query, k, db_path=db_path)
+    elif search_type == "unionable":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For unionable search, query must be a pandas DataFrame")
+        return search_unionable(query, k, db_path=db_path)
     else:
-        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', or 'keyword'")
+        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', or 'unionable'")
 
 
 def main():
@@ -325,11 +363,12 @@ To create modellake.db, use:
     --table modellake_index
         """
     )
-    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword'],
+    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'],
                        default='single_column', help='Type of search to perform')
     parser.add_argument('--query', default=None,
                        help='Query data. For single_column: comma-separated values. '
-                            'For multi_column: path to CSV file. For keyword: comma-separated keywords.')
+                            'For multi_column: path to CSV file. For keyword: comma-separated keywords. '
+                            'For unionable: path to CSV file.')
     parser.add_argument('--k', type=int, default=10,
                        help='Number of results to return')
     parser.add_argument('--db_path', default='data/modellake.db',
@@ -378,6 +417,8 @@ To create modellake.db, use:
         if args.search_type == 'single_column':
             query = [x.strip() for x in args.query.split(',')]
         elif args.search_type == 'multi_column':
+            query = pd.read_csv(args.query)
+        elif args.search_type == 'unionable':
             query = pd.read_csv(args.query)
         elif args.search_type == 'keyword':
             query = [x.strip() for x in args.query.split(',')]
