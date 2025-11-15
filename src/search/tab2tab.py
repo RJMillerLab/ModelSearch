@@ -17,19 +17,120 @@ import duckdb
 # Try src/Blend_internal first (if cloned into ModelSearchDemo)
 blend_path = os.path.join(os.path.dirname(__file__), '..', 'Blend_internal')
 blend_path_abs = os.path.abspath(blend_path)
-if os.path.exists(blend_path_abs) and blend_path_abs not in sys.path:
-    sys.path.insert(0, blend_path_abs)
-else:
+if not os.path.exists(blend_path_abs):
     # Fallback: try parent directory (if Blend_internal is sibling to ModelSearchDemo)
     blend_path_parent = os.path.join(os.path.dirname(__file__), '..', '..', 'Blend_internal')
     blend_path_parent_abs = os.path.abspath(blend_path_parent)
-    if os.path.exists(blend_path_parent_abs) and blend_path_parent_abs not in sys.path:
-        sys.path.insert(0, blend_path_parent_abs)
+    if os.path.exists(blend_path_parent_abs):
+        blend_path_abs = blend_path_parent_abs
 
-# Import Blend_internal search functions
-from src.Tasks.SingleColumnJoinSearch import SingleColumnJoinSearch
-from src.Tasks.MultiColumnJoinSearch import MultiColumnJoinSearch
-from src.Tasks.KeywordSearch import KeywordSearch
+# CRITICAL: Insert Blend_internal path at the BEGINNING of sys.path
+# This ensures Blend_internal's src/utils.py is found before ModelSearchDemo's src/utils/
+if blend_path_abs and os.path.exists(blend_path_abs):
+    # Remove if already in path to avoid duplicates
+    if blend_path_abs in sys.path:
+        sys.path.remove(blend_path_abs)
+    # Insert at position 0 to give highest priority
+    sys.path.insert(0, blend_path_abs)
+
+# Store Blend_internal path for later use
+_BLEND_INTERNAL_PATH = blend_path_abs if os.path.exists(blend_path_abs) else blend_path_parent_abs if os.path.exists(blend_path_parent_abs) else None
+
+# Lazy import - will be imported when needed, after config is set
+_SingleColumnJoinSearch = None
+_MultiColumnJoinSearch = None
+_KeywordSearch = None
+
+def _update_blend_config(db_path: str):
+    """Update Blend_internal config.ini with the correct db_path before importing."""
+    if _BLEND_INTERNAL_PATH is None:
+        raise FileNotFoundError("Blend_internal not found. Please clone it first: git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal")
+    
+    import configparser
+    config_path = os.path.join(_BLEND_INTERNAL_PATH, 'config', 'config.ini')
+    
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Blend_internal config.ini not found at {config_path}")
+    
+    # Read and update config
+    config = configparser.ConfigParser()
+    config.read(config_path)
+    
+    # Convert relative path to absolute if needed
+    if not os.path.isabs(db_path):
+        # Make path relative to ModelSearchDemo root
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        db_path_abs = os.path.abspath(os.path.join(modelsearch_root, db_path))
+    else:
+        db_path_abs = os.path.abspath(db_path)
+    
+    # Update config
+    if 'Database' not in config:
+        config['Database'] = {}
+    config['Database']['path'] = db_path_abs
+    config['Database']['dbms'] = 'duckdb'
+    config['Database']['index_table'] = 'modellake_index'
+    
+    # Write back
+    with open(config_path, 'w') as f:
+        config.write(f)
+    
+    return config_path
+
+def _lazy_import_blend():
+    """Lazy import Blend_internal functions after config is set."""
+    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch
+    if _SingleColumnJoinSearch is None:
+        # CRITICAL: Ensure Blend_internal path is at the front of sys.path
+        # This must be done before any imports to ensure Blend_internal's src/utils.py
+        # is found instead of ModelSearchDemo's src/utils/ package
+        if _BLEND_INTERNAL_PATH and os.path.exists(_BLEND_INTERNAL_PATH):
+            if _BLEND_INTERNAL_PATH in sys.path:
+                sys.path.remove(_BLEND_INTERNAL_PATH)
+            sys.path.insert(0, _BLEND_INTERNAL_PATH)
+        
+        # CRITICAL: Temporarily remove ModelSearchDemo root from sys.path if present
+        # This prevents Python from finding ModelSearchDemo's src/utils/ package
+        # instead of Blend_internal's src/utils.py module
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        modelsearch_removed = False
+        if modelsearch_root in sys.path:
+            sys.path.remove(modelsearch_root)
+            modelsearch_removed = True
+        
+        try:
+            # Clear any cached imports to ensure fresh import with updated config
+            # IMPORTANT: Also clear src.utils to ensure Blend_internal's src/utils.py is used
+            # instead of ModelSearchDemo's src/utils/ package
+            modules_to_clear = [
+                'src.Tasks.SingleColumnJoinSearch',
+                'src.Tasks.MultiColumnJoinSearch', 
+                'src.Tasks.KeywordSearch',
+                'src.Plan',
+                'src.Operators',
+                'src.Operators.OperatorBase',
+                'src.Operators.Seekers',
+                'src.Operators.Seekers.MultiColumnOverlap',
+                'src.DBHandler',
+                'src.utils',  # CRITICAL: Clear this to use Blend_internal's src/utils.py
+            ]
+            for mod in modules_to_clear:
+                if mod in sys.modules:
+                    del sys.modules[mod]
+            
+            # Now import with updated config
+            # The Blend_internal path is now at sys.path[0], so src.utils will resolve to
+            # Blend_internal/src/utils.py instead of ModelSearchDemo/src/utils/
+            from src.Tasks.SingleColumnJoinSearch import SingleColumnJoinSearch
+            from src.Tasks.MultiColumnJoinSearch import MultiColumnJoinSearch
+            from src.Tasks.KeywordSearch import KeywordSearch
+            _SingleColumnJoinSearch = SingleColumnJoinSearch
+            _MultiColumnJoinSearch = MultiColumnJoinSearch
+            _KeywordSearch = KeywordSearch
+        finally:
+            # Restore ModelSearchDemo root to sys.path if we removed it
+            if modelsearch_removed and modelsearch_root not in sys.path:
+                sys.path.append(modelsearch_root)
 
 
 def get_tables_from_modellake_db(
@@ -78,7 +179,8 @@ def get_tables_from_modellake_db(
 
 def search_single_column(
     query_values: Iterable[Any],
-    k: int = 10
+    k: int = 10,
+    db_path: Optional[str] = None
 ) -> List[int]:
     """
     Search for tables with overlapping values in a single column.
@@ -86,17 +188,29 @@ def search_single_column(
     Args:
         query_values: Iterable of values to search for
         k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
     
     Returns:
         List of table IDs (integers)
     """
-    plan = SingleColumnJoinSearch(query_values, k)
+    # Always update config before importing (even if db_path is None, use default)
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        # Use default path
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    _lazy_import_blend()
+    plan = _SingleColumnJoinSearch(query_values, k)
     return plan.run()
 
 
 def search_multi_column(
     query_dataset: pd.DataFrame,
-    k: int = 10
+    k: int = 10,
+    db_path: Optional[str] = None
 ) -> List[int]:
     """
     Search for tables with overlapping values across multiple columns.
@@ -104,17 +218,29 @@ def search_multi_column(
     Args:
         query_dataset: DataFrame with query data
         k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
     
     Returns:
         List of table IDs (integers)
     """
-    plan = MultiColumnJoinSearch(query_dataset, k)
+    # Always update config before importing (even if db_path is None, use default)
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        # Use default path
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    _lazy_import_blend()
+    plan = _MultiColumnJoinSearch(query_dataset, k)
     return plan.run()
 
 
 def search_keyword(
     query_values: List[str],
-    k: int = 10
+    k: int = 10,
+    db_path: Optional[str] = None
 ) -> List[int]:
     """
     Search for tables using keyword matching.
@@ -122,18 +248,30 @@ def search_keyword(
     Args:
         query_values: List of keyword strings to search for
         k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
     
     Returns:
         List of table IDs (integers)
     """
-    plan = KeywordSearch(query_values, k)
+    # Always update config before importing (even if db_path is None, use default)
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        # Use default path
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    _lazy_import_blend()
+    plan = _KeywordSearch(query_values, k)
     return plan.run()
 
 
 def search_table2table(
     query: Any,
     search_type: str = "single_column",
-    k: int = 10
+    k: int = 10,
+    db_path: Optional[str] = None
 ) -> List[int]:
     """
     Unified interface for table-to-table search.
@@ -152,15 +290,15 @@ def search_table2table(
     if search_type == "single_column":
         if not isinstance(query, (list, tuple, pd.Series)):
             raise ValueError("For single_column search, query must be an iterable of values")
-        return search_single_column(query, k)
+        return search_single_column(query, k, db_path=db_path)
     elif search_type == "multi_column":
         if not isinstance(query, pd.DataFrame):
             raise ValueError("For multi_column search, query must be a pandas DataFrame")
-        return search_multi_column(query, k)
+        return search_multi_column(query, k, db_path=db_path)
     elif search_type == "keyword":
         if not isinstance(query, list) or not all(isinstance(x, str) for x in query):
             raise ValueError("For keyword search, query must be a list of strings")
-        return search_keyword(query, k)
+        return search_keyword(query, k, db_path=db_path)
     else:
         raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', or 'keyword'")
 
@@ -205,6 +343,15 @@ To create modellake.db, use:
     
     args = parser.parse_args()
     
+    # Update Blend_internal config with db_path BEFORE any imports
+    # This must happen before _lazy_import_blend() is called
+    try:
+        _update_blend_config(args.db_path)
+        print(f"✅ Updated Blend_internal config to use db_path: {args.db_path}")
+    except Exception as e:
+        print(f"⚠️  Warning: Could not update config: {e}")
+        print("   Continuing with default config...")
+    
     # List tables if requested
     if args.list_tables:
         try:
@@ -243,7 +390,7 @@ To create modellake.db, use:
     
     # Perform search
     try:
-        results = search_table2table(query, args.search_type, args.k)
+        results = search_table2table(query, args.search_type, args.k, db_path=args.db_path)
         print(f"Found {len(results)} tables:")
         for i, table_id in enumerate(results, 1):
             print(f"  {i}. Table ID: {table_id}")

@@ -14,11 +14,14 @@ pip install -r requirements.txt
 
 The `tab2tab` and `card2tab2card` search functions require Blend_internal for table-to-table search functionality. Clone it into the `src/` directory:
 
+**For private repository (SSH):**
 ```bash
-git clone https://github.com/DoraDong-2023/Blend_internal.git src/Blend_internal
+git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
 ```
 
-**Note:** The `src/Blend_internal/` directory is excluded from this repository (see `.gitignore`). You need to clone it separately for inference.
+**Note:** 
+- The `src/Blend_internal/` directory is excluded from this repository (see `.gitignore`). You need to clone it separately for inference.
+- For SSH clone, ensure your SSH key is added to GitHub (see [GitHub SSH setup](https://docs.github.com/en/authentication/connecting-to-github-with-ssh))
 
 ## Repository Structure
 
@@ -120,6 +123,10 @@ python -m src.search.card2card search \
 **Prerequisites:**
 1. **Blend_internal must be cloned** (see Installation step 2 above):
    ```bash
+   # For private repository (SSH)
+   git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
+   
+   # Or for public repository (HTTPS)
    git clone https://github.com/DoraDong-2023/Blend_internal.git src/Blend_internal
    ```
 2. **`data/modellake.db` must be created** (see below)
@@ -134,9 +141,9 @@ python -m src.search.card2card search \
 ```bash
 python -m src.Blend_internal.scripts.create_index_duckdb \
   --db_path data/modellake.db \
-  --data_glob "data_citationlake/processed/deduped_hugging_csvs/*.csv,data_citationlake/processed/deduped_github_csvs/*.csv" \
+  --data_glob "data_citationlake/processed/deduped_hugging_csvs/*.csv,data_citationlake/processed/deduped_github_csvs/*.csv,data_citationlake/processed/tables_output/*.csv" \
   --table modellake_index
-  # --mask path/to/mask_file.txt  # Optional: list of CSV files to include
+  --mask ../CitationLake/data/analysis/all_valid_title_valid.txt  # Optional: list of CSV files to include
 ```
 
 Test table-to-table search using Blend_internal:
@@ -150,6 +157,7 @@ python -m src.search.tab2tab \
   --search_type single_column \
   --query "value1,value2,value3" \
   --k 10 \
+  --db_path data_citationlake/modellake.db \
   --output data/tab2tab_results.json
 
 # Multi column search
