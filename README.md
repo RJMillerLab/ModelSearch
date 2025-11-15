@@ -235,10 +235,13 @@ python -m src.search.card2tab2card \
 Compare two search pipelines (Card2Card vs Card2Tab2Card) with a web interface:
 
 ```bash
-# Start backend server
+# Start backend server (port 5000)
 python -m src.demo.backend
 
-# Open http://localhost:5000 in your browser
+# Start frontend server (port 5001) in another terminal
+python -m src.demo.frontend
+
+# Open http://localhost:5001 in your browser
 ```
 
 **Pipeline:**
