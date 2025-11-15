@@ -194,13 +194,31 @@ python -m src.search.tab2tab \
 
 Two-stage search: find tables for a model card, then find similar model cards via table search:
 
+**Pipeline:** Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards
+
 ```bash
-# Using CitationLake get_from (recommended) - Keyword search
+# Mode: ALL - Run all three search types automatically
+# Note: --query must be a CSV file path when --mode=all
+# Saves to: {output_folder}/card2tab2card_singlecol_results.json
+#           {output_folder}/card2tab2card_keyword_results.json
+#           {output_folder}/card2tab2card_unionable_results.json
+# logs saved to logs/card2tab2card.log
+python -m src.search.card2tab2card \
+  --model_id Salesforce/codet5-base \
+  --schema_log data_citationlake/logs/parquet_schema.log \
+  --query data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv \
+  --mode all \
+  --output_folder data \
+  --db_path data_citationlake/modellake.db \
+  --k 10
+
+# Mode: SINGLE - Using CitationLake get_from (recommended) - Keyword search
 python -m src.search.card2tab2card \
   --model_id Salesforce/codet5-base \
   --schema_log data_citationlake/logs/parquet_schema.log \
   --query "train,model,dataset" \
   --search_type keyword \
+  --mode single \
   --db_path data_citationlake/modellake.db \
   --k 10 \
   --output_json data/card2tab2card_keyword_results.json
@@ -209,21 +227,21 @@ python -m src.search.card2tab2card \
 python -m src.search.card2tab2card \
   --model_id Salesforce/codet5-base \
   --schema_log data_citationlake/logs/parquet_schema.log \
-  --query "value1,value2,value3" \
+  --query "train,model,dataset" \
   --search_type single_column \
   --db_path data_citationlake/modellake.db \
   --k 10 \
   --output_json data/card2tab2card_singlecol_results.json
 
 # Multi column search
-python -m src.search.card2tab2card \
-  --model_id Salesforce/codet5-base \
-  --schema_log data_citationlake/logs/parquet_schema.log \
-  --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
-  --search_type multi_column \
-  --db_path data_citationlake/modellake.db \
-  --k 10 \
-  --output_json data/card2tab2card_multicol_results.json
+# python -m src.search.card2tab2card \
+#   --model_id Salesforce/codet5-base \
+#   --schema_log data_citationlake/logs/parquet_schema.log \
+#   --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+#   --search_type multi_column \
+#   --db_path data_citationlake/modellake.db \
+#   --k 10 \
+#   --output_json data/card2tab2card_multicol_results.json
 
 # Without query - uses model's tables automatically
 python -m src.search.card2tab2card \

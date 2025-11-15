@@ -314,6 +314,7 @@ def search_card2tab2card(
     if query is None:
         # Use the query model's tables as the search query
         # For keyword search, use table basenames
+        print(f"ℹ️  No query provided, using model's table basenames as query")
         if search_type == "keyword":
             query = [os.path.basename(str(t)) for t in query_tables[:10]]  # Limit to first 10
         else:
@@ -321,6 +322,8 @@ def search_card2tab2card(
             # For now, default to keyword search
             query = [os.path.basename(str(t)) for t in query_tables[:10]]
             search_type = "keyword"
+    else:
+        print(f"ℹ️  Using provided query (not model's tables)")
     
     # Step 2: Tables -> Retrieved Tables
     print(f"\n{'='*60}")
@@ -329,8 +332,10 @@ def search_card2tab2card(
     print(f"✅ Search type: {search_type}")
     if search_type == "keyword":
         print(f"✅ Query keywords: {query[:5]}{'...' if len(query) > 5 else ''}")
+        print(f"   (Total {len(query)} keywords)")
     elif search_type == "single_column":
         print(f"✅ Query values: {query[:5]}{'...' if len(query) > 5 else ''}")
+        print(f"   (Total {len(query)} values)")
     elif search_type in ["multi_column", "unionable"]:
         print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
     print(f"✅ Top K: {k}")
@@ -346,6 +351,10 @@ def search_card2tab2card(
         print(f"🔎 Searching for similar tables...")
         similar_table_ids = search_table2table(query, search_type, k, db_path=db_path)
         print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
+        
+        if not similar_table_ids:
+            print(f"⚠️  No tables retrieved, cannot proceed to Step 3")
+            return []
         
         # Get filenames for retrieved tables from database
         import duckdb
@@ -385,6 +394,10 @@ def search_card2tab2card(
     con = duckdb.connect(db_path, read_only=True)
     try:
         # Get distinct filenames for the retrieved table IDs
+        if not similar_table_ids:
+            print(f"⚠️  No table IDs to map")
+            return []
+        
         table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
         filename_query = f"""
             SELECT DISTINCT tableid, filename 
@@ -395,6 +408,10 @@ def search_card2tab2card(
         tableid_to_filename = {tid: filename for tid, filename in filename_results}
         retrieved_filenames = list(tableid_to_filename.values())
         print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database")
+        
+        if not retrieved_filenames:
+            print(f"⚠️  No filenames found for retrieved table IDs")
+            return []
     finally:
         con.close()
     
@@ -588,7 +605,7 @@ def main():
     parser.add_argument('--schema_log', default='data_citationlake/logs/parquet_schema.log',
                        help='Path to parquet_schema.log (for CitationLake approach)')
     parser.add_argument('--query', default=None,
-                       help='Query data for table search (comma-separated for single_column/keyword, CSV path for multi_column). If None, uses model tables.')
+                       help='Query data for table search. For mode=single: comma-separated for single_column/keyword, CSV path for multi_column/unionable. For mode=all: CSV file path (required). If None, uses model tables.')
     parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'],
                        default='keyword',
                        help='Type of table search')
@@ -602,53 +619,170 @@ def main():
                        help='Disable CitationLake approach, use relationship_parquet instead')
     parser.add_argument('--output_json', default='data/card2tab2card_results.json',
                        help='Path to save results as JSON (default: data/card2tab2card_results.json)')
+    parser.add_argument('--output_folder', default='data',
+                       help='Output folder for results when mode=all (default: data)')
+    parser.add_argument('--mode', choices=['single', 'all'], default='single',
+                       help='Search mode: single (one search type) or all (run all three: single_column, keyword, unionable)')
     parser.add_argument('--db_path', default='data_citationlake/modellake.db',
                        help='Path to modellake.db (default: data_citationlake/modellake.db)')
     
     args = parser.parse_args()
     
     try:
-        # If table_search_json is provided, use pre-computed results
-        if args.table_search_json:
-            import json
-            with open(args.table_search_json, 'r') as f:
-                table_search_results = json.load(f)
-            results = search_card2tab2card_from_tables(
-                model_id=args.model_id,
-                table_search_results=table_search_results,
-                relationship_parquet=args.relationship_parquet,
-                schema_log_path=args.schema_log,
-                use_citationlake=args.use_citationlake,
-                k=args.k
-            )
-        else:
-            # Parse query based on search type (if provided)
-            query = None
-            if args.query:
-                if args.search_type == 'single_column':
-                    query = [x.strip() for x in args.query.split(',')]
-                elif args.search_type == 'multi_column':
-                    query = pd.read_csv(args.query)
-                elif args.search_type == 'unionable':
-                    query = pd.read_csv(args.query)
-                elif args.search_type == 'keyword':
-                    query = [x.strip() for x in args.query.split(',')]
+        # If mode=all, run all three search types
+        if args.mode == 'all':
+            print(f"\n{'='*60}")
+            print(f"🚀 Running ALL search modes")
+            print(f"{'='*60}")
+            print(f"Output folder: {args.output_folder}")
+            print(f"Will run: single_column, keyword, unionable")
+            print(f"{'='*60}\n")
             
-            results = search_card2tab2card(
-                model_id=args.model_id,
-                relationship_parquet=args.relationship_parquet,
-                query=query,
-                search_type=args.search_type,
-                k=args.k,
-                schema_log_path=args.schema_log,
-                use_citationlake=args.use_citationlake,
-                output_json=args.output_json or "data/card2tab2card_results.json",
-                db_path=args.db_path
-            )
-        
-        print(f"Found {len(results)} similar model cards for {args.model_id}:")
-        for i, model_id in enumerate(results, 1):
-            print(f"  {i}. {model_id}")
+            # For mode=all, query must be a CSV file path
+            if not args.query:
+                print(f"❌ Error: --query is required when --mode=all")
+                print(f"   Please provide a CSV file path, e.g., --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv")
+                sys.exit(1)
+            
+            if not os.path.exists(args.query):
+                print(f"❌ Error: CSV file not found: {args.query}")
+                sys.exit(1)
+            
+            print(f"✅ Using CSV file as query: {args.query}")
+            
+            # Load CSV once for all search types
+            query_df = pd.read_csv(args.query)
+            print(f"✅ Loaded CSV with {len(query_df)} rows and {len(query_df.columns)} columns")
+            
+            # Ensure output folder exists
+            os.makedirs(args.output_folder, exist_ok=True)
+            
+            # Define search configurations
+            search_configs = [
+                {
+                    'type': 'single_column',
+                    'output': os.path.join(args.output_folder, 'card2tab2card_singlecol_results.json')
+                },
+                {
+                    'type': 'keyword',
+                    'output': os.path.join(args.output_folder, 'card2tab2card_keyword_results.json')
+                },
+                {
+                    'type': 'unionable',
+                    'output': os.path.join(args.output_folder, 'card2tab2card_unionable_results.json')
+                }
+            ]
+            
+            all_results = {}
+            
+            for config in search_configs:
+                search_type = config['type']
+                output_path = config['output']
+                
+                print(f"\n{'='*60}")
+                print(f"🔄 Running {search_type} search...")
+                print(f"{'='*60}")
+                
+                # Parse query based on search type (all from the same CSV)
+                query = None
+                if search_type == 'single_column':
+                    # Extract all values from first column as a list
+                    first_col = query_df.columns[0]
+                    query = query_df[first_col].dropna().astype(str).tolist()
+                    print(f"✅ Using first column '{first_col}' with {len(query)} values for single_column search")
+                    print(f"   Sample values: {query[:3]}{'...' if len(query) > 3 else ''}")
+                elif search_type == 'keyword':
+                    # Extract all values from first column as keywords
+                    first_col = query_df.columns[0]
+                    query = query_df[first_col].dropna().astype(str).tolist()
+                    print(f"✅ Using first column '{first_col}' with {len(query)} keywords for keyword search")
+                    print(f"   Sample keywords: {query[:3]}{'...' if len(query) > 3 else ''}")
+                elif search_type == 'unionable':
+                    # Use the entire DataFrame
+                    query = query_df
+                    print(f"✅ Using entire DataFrame ({len(query)} rows, {len(query.columns)} columns) for unionable search")
+                
+                try:
+                    results = search_card2tab2card(
+                        model_id=args.model_id,
+                        relationship_parquet=args.relationship_parquet,
+                        query=query,
+                        search_type=search_type,
+                        k=args.k,
+                        schema_log_path=args.schema_log,
+                        use_citationlake=args.use_citationlake,
+                        output_json=output_path,
+                        db_path=args.db_path
+                    )
+                    all_results[search_type] = {
+                        'count': len(results),
+                        'results': results,
+                        'output': output_path
+                    }
+                    print(f"✅ {search_type} search completed: {len(results)} results saved to {output_path}")
+                except Exception as e:
+                    print(f"❌ Error in {search_type} search: {e}")
+                    all_results[search_type] = {
+                        'count': 0,
+                        'results': [],
+                        'output': output_path,
+                        'error': str(e)
+                    }
+            
+            # Summary
+            print(f"\n{'='*60}")
+            print(f"📊 Summary of ALL search modes")
+            print(f"{'='*60}")
+            for search_type, result_info in all_results.items():
+                if 'error' in result_info:
+                    print(f"❌ {search_type}: Error - {result_info['error']}")
+                else:
+                    print(f"✅ {search_type}: {result_info['count']} results -> {result_info['output']}")
+            print(f"{'='*60}\n")
+            
+        else:
+            # Single mode - original behavior
+            # If table_search_json is provided, use pre-computed results
+            if args.table_search_json:
+                import json
+                with open(args.table_search_json, 'r') as f:
+                    table_search_results = json.load(f)
+                results = search_card2tab2card_from_tables(
+                    model_id=args.model_id,
+                    table_search_results=table_search_results,
+                    relationship_parquet=args.relationship_parquet,
+                    schema_log_path=args.schema_log,
+                    use_citationlake=args.use_citationlake,
+                    k=args.k
+                )
+            else:
+                # Parse query based on search type (if provided)
+                query = None
+                if args.query:
+                    if args.search_type == 'single_column':
+                        query = [x.strip() for x in args.query.split(',')]
+                    elif args.search_type == 'multi_column':
+                        query = pd.read_csv(args.query)
+                    elif args.search_type == 'unionable':
+                        query = pd.read_csv(args.query)
+                    elif args.search_type == 'keyword':
+                        query = [x.strip() for x in args.query.split(',')]
+                
+                results = search_card2tab2card(
+                    model_id=args.model_id,
+                    relationship_parquet=args.relationship_parquet,
+                    query=query,
+                    search_type=args.search_type,
+                    k=args.k,
+                    schema_log_path=args.schema_log,
+                    use_citationlake=args.use_citationlake,
+                    output_json=args.output_json or "data/card2tab2card_results.json",
+                    db_path=args.db_path
+                )
+            
+            print(f"Found {len(results)} similar model cards for {args.model_id}:")
+            for i, model_id in enumerate(results, 1):
+                print(f"  {i}. {model_id}")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

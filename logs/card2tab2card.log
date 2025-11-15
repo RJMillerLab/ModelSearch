@@ -1,0 +1,212 @@
+============================================================
+🚀 Running ALL search modes
+============================================================
+Output folder: data
+Will run: single_column, keyword, unionable
+============================================================
+
+✅ Using CSV file as query: data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv
+✅ Loaded CSV with 5 rows and 4 columns
+
+============================================================
+🔄 Running single_column search...
+============================================================
+✅ Using first column ' resolution ' with 5 values for single_column search
+   Sample values: [' :---: ', ' 200x200x16 ', ' 200x200x16 ']...
+
+============================================================
+🔍 Card2Tab2Card Search Pipeline
+============================================================
+Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards
+============================================================
+
+⚠️  CitationLake not available, found default relationship_parquet: data_citationlake/processed/modelcard_step3_dedup.parquet
+⚠️  CitationLake not available, using relationship_parquet: data_citationlake/processed/modelcard_step3_dedup.parquet
+
+============================================================
+📊 Step 1: Query -> ModelCard -> Tables (Part of Pipeline)
+============================================================
+✅ Query Model ID: Salesforce/codet5-base
+✅ Found 52 tables for model Salesforce/codet5-base
+📝 Sample tables (showing first 2):
+   1. 2207.01780_table16.csv
+   2. 2109.00859_table8.csv
+   ... and 50 more tables
+ℹ️  Using provided query (not model's tables)
+
+============================================================
+🔍 Step 2: Tables -> Retrieved Tables
+============================================================
+✅ Search type: single_column
+✅ Query values: [' :---: ', ' 200x200x16 ', ' 200x200x16 ', ' mesh vertices', ' mesh vertices']
+   (Total 5 values)
+✅ Top K: 10
+✅ Database: data_citationlake/modellake.db
+🔎 Searching for similar tables...
+-------- Database Configuration --------
+Using Duckdb database, with index table modellake_index
+You are not using the ML optimizer, so the frequency dict will not be loaded. Set the USE_ML_OPTIMIZER flag to True to use it.
+----------------------------------------
+✅ Found 5 retrieved tables (table IDs)
+📝 Sample retrieved tables (showing first 2):
+   1. Table ID 143857: 2302.07817_table15_t.csv
+   2. Table ID 21439: 2302.07817_table15.csv
+   ... and 2 more retrieved tables
+
+============================================================
+🔄 Step 3: Retrieved Tables -> Corresponding ModelCards
+============================================================
+✅ Mapping 5 retrieved tables to model cards...
+✅ Retrieved 4 unique filenames from database
+📋 Using relationship_parquet to map tables to model cards...
+📝 Matching 4 table basenames against relationship data...
+✅ Matched 2 model cards from relationship data
+✅ Found 2 unique model cards (excluding query model)
+
+============================================================
+📊 Final Results Summary
+============================================================
+✅ Query Model: Salesforce/codet5-base
+✅ Found 2 similar model cards (top 10)
+📝 Sample results (showing first 2):
+   1. gntmky/mm3dtest
+   2. lilelife/SyntheOcc
+============================================================
+
+✅ Results saved to data/card2tab2card_singlecol_results.json
+✅ single_column search completed: 2 results saved to data/card2tab2card_singlecol_results.json
+
+============================================================
+🔄 Running keyword search...
+============================================================
+✅ Using first column ' resolution ' with 5 keywords for keyword search
+   Sample keywords: [' :---: ', ' 200x200x16 ', ' 200x200x16 ']...
+
+============================================================
+🔍 Card2Tab2Card Search Pipeline
+============================================================
+Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards
+============================================================
+
+⚠️  CitationLake not available, found default relationship_parquet: data_citationlake/processed/modelcard_step3_dedup.parquet
+⚠️  CitationLake not available, using relationship_parquet: data_citationlake/processed/modelcard_step3_dedup.parquet
+
+============================================================
+📊 Step 1: Query -> ModelCard -> Tables (Part of Pipeline)
+============================================================
+✅ Query Model ID: Salesforce/codet5-base
+✅ Found 52 tables for model Salesforce/codet5-base
+📝 Sample tables (showing first 2):
+   1. 2207.01780_table16.csv
+   2. 2109.00859_table8.csv
+   ... and 50 more tables
+ℹ️  Using provided query (not model's tables)
+
+============================================================
+🔍 Step 2: Tables -> Retrieved Tables
+============================================================
+✅ Search type: keyword
+✅ Query keywords: [' :---: ', ' 200x200x16 ', ' 200x200x16 ', ' mesh vertices', ' mesh vertices']
+   (Total 5 keywords)
+✅ Top K: 10
+✅ Database: data_citationlake/modellake.db
+🔎 Searching for similar tables...
+✅ Found 4 retrieved tables (table IDs)
+📝 Sample retrieved tables (showing first 2):
+   1. Table ID 143857: 2302.07817_table15_t.csv
+   2. Table ID 6: 0021c79d4e1a37579ca87328864d67a5_table_0.csv
+   ... and 2 more retrieved tables
+
+============================================================
+🔄 Step 3: Retrieved Tables -> Corresponding ModelCards
+============================================================
+✅ Mapping 4 retrieved tables to model cards...
+✅ Retrieved 4 unique filenames from database
+📋 Using relationship_parquet to map tables to model cards...
+📝 Matching 4 table basenames against relationship data...
+✅ Matched 2 model cards from relationship data
+✅ Found 2 unique model cards (excluding query model)
+
+============================================================
+📊 Final Results Summary
+============================================================
+✅ Query Model: Salesforce/codet5-base
+✅ Found 2 similar model cards (top 10)
+📝 Sample results (showing first 2):
+   1. gntmky/mm3dtest
+   2. lilelife/SyntheOcc
+============================================================
+
+✅ Results saved to data/card2tab2card_keyword_results.json
+✅ keyword search completed: 2 results saved to data/card2tab2card_keyword_results.json
+
+============================================================
+🔄 Running unionable search...
+============================================================
+✅ Using entire DataFrame (5 rows, 4 columns) for unionable search
+
+============================================================
+🔍 Card2Tab2Card Search Pipeline
+============================================================
+Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards
+============================================================
+
+⚠️  CitationLake not available, found default relationship_parquet: data_citationlake/processed/modelcard_step3_dedup.parquet
+⚠️  CitationLake not available, using relationship_parquet: data_citationlake/processed/modelcard_step3_dedup.parquet
+
+============================================================
+📊 Step 1: Query -> ModelCard -> Tables (Part of Pipeline)
+============================================================
+✅ Query Model ID: Salesforce/codet5-base
+✅ Found 52 tables for model Salesforce/codet5-base
+📝 Sample tables (showing first 2):
+   1. 2207.01780_table16.csv
+   2. 2109.00859_table8.csv
+   ... and 50 more tables
+ℹ️  Using provided query (not model's tables)
+
+============================================================
+🔍 Step 2: Tables -> Retrieved Tables
+============================================================
+✅ Search type: unionable
+✅ Query: DataFrame with 5 rows and 4 columns
+✅ Top K: 10
+✅ Database: data_citationlake/modellake.db
+🔎 Searching for similar tables...
+✅ Found 10 retrieved tables (table IDs)
+📝 Sample retrieved tables (showing first 2):
+   1. Table ID 9980: 2103.01913_table17.csv
+   2. Table ID 13226: 2110.07058_table68.csv
+   ... and 8 more retrieved tables
+
+============================================================
+🔄 Step 3: Retrieved Tables -> Corresponding ModelCards
+============================================================
+✅ Mapping 10 retrieved tables to model cards...
+✅ Retrieved 10 unique filenames from database
+📋 Using relationship_parquet to map tables to model cards...
+📝 Matching 10 table basenames against relationship data...
+✅ Matched 157 model cards from relationship data
+✅ Found 157 unique model cards (excluding query model)
+
+============================================================
+📊 Final Results Summary
+============================================================
+✅ Query Model: Salesforce/codet5-base
+✅ Found 10 similar model cards (top 10)
+📝 Sample results (showing first 2):
+   1. Teklia/pylaia-norhand-v2
+   2. google/paligemma-3b-ft-tallyqa-448-jax
+   ... and 8 more model cards
+============================================================
+
+✅ Results saved to data/card2tab2card_unionable_results.json
+✅ unionable search completed: 10 results saved to data/card2tab2card_unionable_results.json
+
+============================================================
+📊 Summary of ALL search modes
+============================================================
+✅ single_column: 2 results -> data/card2tab2card_singlecol_results.json
+✅ keyword: 2 results -> data/card2tab2card_keyword_results.json
+✅ unionable: 10 results -> data/card2tab2card_unionable_results.json
+============================================================

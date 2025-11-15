@@ -50,7 +50,7 @@ data/
 src/Blend_internal/
 
 # Logs
-*.log
+#*.log
 
 # OS
 .DS_Store
