@@ -147,6 +147,61 @@ HTML_TEMPLATE = """
             background: white;
             border-radius: 4px;
         }
+        .expand-toggle {
+            cursor: pointer;
+            color: #007bff;
+            font-weight: bold;
+            padding: 5px 10px;
+            margin: 5px 0;
+            display: inline-block;
+            user-select: none;
+        }
+        .expand-toggle:hover {
+            color: #0056b3;
+            text-decoration: underline;
+        }
+        .expand-toggle::before {
+            content: '▶ ';
+            display: inline-block;
+            transition: transform 0.2s;
+        }
+        .expand-toggle.expanded::before {
+            transform: rotate(90deg);
+        }
+        .collapsible-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .collapsible-content.expanded {
+            max-height: 5000px;
+        }
+        .search-type-section {
+            margin: 15px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        .search-type-header {
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            background: white;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .search-type-header:hover {
+            background: #e9ecef;
+        }
+        .search-type-header::after {
+            content: '▶';
+            transition: transform 0.2s;
+        }
+        .search-type-header.expanded::after {
+            transform: rotate(90deg);
+        }
         .error {
             color: #dc3545;
             padding: 10px;
@@ -285,23 +340,69 @@ HTML_TEMPLATE = """
         function displayResults(results) {
             const container = document.getElementById('resultsContent');
             
+            // Helper function to format model display (handle both string and object formats)
+            function formatModel(model) {
+                if (typeof model === 'string') {
+                    return `<a href="https://huggingface.co/${model}" target="_blank">${model}</a>`;
+                } else if (model && model.model_id) {
+                    return `<a href="${model.url || `https://huggingface.co/${model.model_id}`}" target="_blank">${model.model_id}</a>`;
+                }
+                return model;
+            }
+            
+            // Generate unique IDs for expandable sections
+            const card2cardMoreId = 'card2card-more-' + Date.now();
+            const card2tab2cardIds = {};
+            Object.keys(results.card2tab2card_results).forEach((type, idx) => {
+                card2tab2cardIds[type] = 'card2tab2card-' + type + '-' + Date.now() + '-' + idx;
+            });
+            
             let html = `
                 <div class="results-grid">
                     <div class="result-card">
                         <h3>Card2Card Results (${results.card2card_results.length})</h3>
                         <ul class="result-list">
-                            ${results.card2card_results.slice(0, 10).map(m => `<li class="result-item">${m}</li>`).join('')}
-                            ${results.card2card_results.length > 10 ? `<li>... and ${results.card2card_results.length - 10} more</li>` : ''}
+                            ${results.card2card_results.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
+                            ${results.card2card_results.length > 10 ? `
+                                <li class="collapsible-content" id="${card2cardMoreId}">
+                                    ${results.card2card_results.slice(10).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
+                                </li>
+                                <li>
+                                    <span class="expand-toggle" onclick="toggleExpand('${card2cardMoreId}', this)">
+                                        Show ${results.card2card_results.length - 10} more
+                                    </span>
+                                </li>
+                            ` : ''}
                         </ul>
                     </div>
                     <div class="result-card">
                         <h3>Card2Tab2Card Results</h3>
-                        ${Object.entries(results.card2tab2card_results).map(([type, models]) => `
-                            <h4>${type} (${Array.isArray(models) ? models.length : 0})</h4>
-                            <ul class="result-list">
-                                ${Array.isArray(models) ? models.slice(0, 5).map(m => `<li class="result-item">${m}</li>`).join('') : '<li>Error</li>'}
-                            </ul>
-                        `).join('')}
+                        ${Object.entries(results.card2tab2card_results).map(([type, models]) => {
+                            const sectionId = card2tab2cardIds[type];
+                            const hasMore = Array.isArray(models) && models.length > 5;
+                            return `
+                                <div class="search-type-section">
+                                    <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
+                                        <h4>${type} (${Array.isArray(models) ? models.length : 0})</h4>
+                                    </div>
+                                    <div class="collapsible-content expanded" id="${sectionId}">
+                                        <ul class="result-list">
+                                            ${Array.isArray(models) ? models.slice(0, 5).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('') : '<li>Error</li>'}
+                                            ${hasMore ? `
+                                                <li class="collapsible-content" id="${sectionId}-more">
+                                                    ${models.slice(5).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
+                                                </li>
+                                                <li>
+                                                    <span class="expand-toggle" onclick="toggleExpand('${sectionId}-more', this)">
+                                                        Show ${models.length - 5} more
+                                                    </span>
+                                                </li>
+                                            ` : ''}
+                                        </ul>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
                 </div>
             `;
@@ -324,6 +425,30 @@ HTML_TEMPLATE = """
             const errorDiv = document.getElementById('errorMsg');
             errorDiv.textContent = message;
             errorDiv.style.display = 'block';
+        }
+        
+        function toggleExpand(elementId, toggleElement) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.classList.toggle('expanded');
+                const isExpanded = element.classList.contains('expanded');
+                const currentText = toggleElement.textContent;
+                if (currentText.includes('Show')) {
+                    const count = currentText.match(/Show (\d+)/)[1];
+                    toggleElement.textContent = `Hide ${count} more`;
+                } else {
+                    const count = currentText.match(/Hide (\d+)/)[1];
+                    toggleElement.textContent = `Show ${count} more`;
+                }
+            }
+        }
+        
+        function toggleSearchType(sectionId, headerElement) {
+            const element = document.getElementById(sectionId);
+            if (element) {
+                element.classList.toggle('expanded');
+                headerElement.classList.toggle('expanded');
+            }
         }
     </script>
 </body>

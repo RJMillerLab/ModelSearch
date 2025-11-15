@@ -22,7 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.search import (
     search_query2modelcard,
     search_card2card,
-    search_card2tab2card
+    search_card2tab2card,
+    get_tables_for_model
 )
 
 app = Flask(__name__)
@@ -98,20 +99,64 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
         model_id = model_results[0]
         logger.log(f"✅ Extracted model: {model_id}")
         
-        # Step 2: Prepare query CSV for Card2Tab2Card
-        logger.log("Step 2: Preparing query CSV for table search...")
+        # Step 2: Check if model has tables for Card2Tab2Card
+        logger.log("Step 2: Checking if model has tables...")
+        model_tables = []
+        has_tables = False
+        try:
+            model_tables = get_tables_for_model(
+                model_id=model_id,
+                schema_log_path=DEFAULT_SCHEMA_LOG,
+                use_citationlake=True
+            )
+            if not model_tables:
+                logger.log(f"⚠️  Model {model_id} has no tables - Card2Tab2Card pipeline will be skipped")
+                logger.log(f"   This model card does not have associated tables, so table-based search cannot be performed.")
+                has_tables = False
+            else:
+                logger.log(f"✅ Model has {len(model_tables)} tables - Card2Tab2Card pipeline can proceed")
+                has_tables = True
+        except Exception as e:
+            logger.log(f"⚠️  Error checking tables for model: {str(e)}")
+            logger.log(f"   Card2Tab2Card pipeline may fail")
+            has_tables = False
+            model_tables = []
+        
+        # Prepare query CSV for Card2Tab2Card
         query_csv = None
         
         # Try to find a CSV file from the model's tables
-        default_csvs = [
-            "data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv",
-            "data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv"
-        ]
+        if has_tables and model_tables:
+            # Try to use one of the model's actual tables
+            for table_path in model_tables[:5]:  # Try first 5 tables
+                # Check if it's a full path or basename
+                if os.path.exists(table_path):
+                    query_csv = table_path
+                    break
+                else:
+                    # Try to find in common locations
+                    for base_dir in [
+                        "data_citationlake/processed/deduped_hugging_csvs",
+                        "data_citationlake/processed/deduped_github_csvs",
+                        "data_citationlake/processed/tables_output"
+                    ]:
+                        full_path = os.path.join(base_dir, os.path.basename(table_path))
+                        if os.path.exists(full_path):
+                            query_csv = full_path
+                            break
+                    if query_csv:
+                        break
         
-        for csv_path in default_csvs:
-            if os.path.exists(csv_path):
-                query_csv = csv_path
-                break
+        # Fallback to default CSV if model tables not found
+        if not query_csv:
+            default_csvs = [
+                "data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv",
+                "data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv"
+            ]
+            for csv_path in default_csvs:
+                if os.path.exists(csv_path):
+                    query_csv = csv_path
+                    break
         
         if not query_csv:
             logger.log("⚠️  No CSV found, using model's table basenames as query")
@@ -182,21 +227,33 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
         card2card_results = None
         card2tab2card_all = {}
         
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            # Submit all tasks
-            futures = {}
-            
-            # Submit Card2Card
-            futures['card2card'] = executor.submit(run_card2card)
-            
-            # Submit all three Card2Tab2Card search types
-            for search_type_name in ['single_column', 'keyword', 'unionable']:
-                query_parsed = queries_parsed[search_type_name]
-                futures[search_type_name] = executor.submit(
-                    run_card2tab2card_search, 
-                    search_type_name, 
-                    query_parsed
-                )
+        # Only run Card2Tab2Card if model has tables
+        if not has_tables:
+            logger.log("⚠️  Skipping Card2Tab2Card pipeline - model has no tables")
+            # Only run Card2Card
+            card2card_results = run_card2card()
+            # Set empty results for Card2Tab2Card
+            card2tab2card_all = {
+                'single_column': [],
+                'keyword': [],
+                'unionable': []
+            }
+        else:
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                # Submit all tasks
+                futures = {}
+                
+                # Submit Card2Card
+                futures['card2card'] = executor.submit(run_card2card)
+                
+                # Submit all three Card2Tab2Card search types
+                for search_type_name in ['single_column', 'keyword', 'unionable']:
+                    query_parsed = queries_parsed[search_type_name]
+                    futures[search_type_name] = executor.submit(
+                        run_card2tab2card_search, 
+                        search_type_name, 
+                        query_parsed
+                    )
             
             # Collect results as they complete
             for future in as_completed(futures.values()):
@@ -235,6 +292,27 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
                     "card2tab2card_only": list(tab2card_set - card2card_set)
                 }
         
+        # Add hyperlinks to model IDs
+        def add_hyperlinks(model_list):
+            """Add HuggingFace hyperlinks to model IDs"""
+            if isinstance(model_list, list):
+                return [
+                    {
+                        "model_id": model_id,
+                        "url": f"https://huggingface.co/{model_id}"
+                    }
+                    for model_id in model_list
+                ]
+            return model_list
+        
+        card2card_results_with_links = add_hyperlinks(card2card_results)
+        card2tab2card_all_with_links = {}
+        for search_type, results in card2tab2card_all.items():
+            if isinstance(results, list):
+                card2tab2card_all_with_links[search_type] = add_hyperlinks(results)
+            else:
+                card2tab2card_all_with_links[search_type] = results
+        
         # Save results
         output_json = os.path.join('data', f'compare_search_{job_id}.json')
         os.makedirs('data', exist_ok=True)
@@ -242,9 +320,10 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
             "job_id": job_id,
             "query": query,
             "model_id": model_id,
+            "model_url": f"https://huggingface.co/{model_id}",
             "top_k": top_k,
-            "card2card_results": card2card_results,
-            "card2tab2card_results": card2tab2card_all,
+            "card2card_results": card2card_results_with_links,
+            "card2tab2card_results": card2tab2card_all_with_links,
             "comparison": comparison,
             "timestamp": datetime.now().isoformat()
         }
