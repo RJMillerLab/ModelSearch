@@ -313,14 +313,46 @@ def search_card2tab2card(
     # If query is provided, use it; otherwise search based on query_tables
     if query is None:
         # Use the query model's tables as the search query
-        # For keyword search, use table basenames
-        print(f"ℹ️  No query provided, using model's table basenames as query")
+        # For keyword search, we need to load the actual CSV files to get headers
+        # (Blend_internal uses rowid=-1 which represents headers in the index)
+        print(f"ℹ️  No query provided, using model's tables as query")
         if search_type == "keyword":
-            query = [os.path.basename(str(t)) for t in query_tables[:10]]  # Limit to first 10
+            # Load headers from model's tables (consistent with Blend_internal)
+            all_headers = []
+            for table_path in query_tables[:10]:  # Limit to first 10 tables
+                try:
+                    # Try to find the CSV file
+                    csv_path = None
+                    if os.path.exists(table_path):
+                        csv_path = table_path
+                    else:
+                        # Try common locations
+                        basename = os.path.basename(str(table_path))
+                        for base_dir in [
+                            "data_citationlake/processed/deduped_hugging_csvs",
+                            "data_citationlake/processed/deduped_github_csvs",
+                            "data_citationlake/processed/tables_output"
+                        ]:
+                            full_path = os.path.join(base_dir, basename)
+                            if os.path.exists(full_path):
+                                csv_path = full_path
+                                break
+                    
+                    if csv_path:
+                        df_temp = pd.read_csv(csv_path, nrows=0)
+                        headers = [str(col).lower().strip() for col in df_temp.columns]
+                        headers = [h for h in headers if h]  # Filter empty
+                        all_headers.extend(headers)
+                except Exception:
+                    continue
+            query = list(set(all_headers))  # Remove duplicates
+            if not query:
+                # Fallback: use table basenames if no headers found
+                query = [os.path.basename(str(t)) for t in query_tables[:10]]
         else:
             # For other search types, we'd need to load the actual table data
             # For now, default to keyword search
-            query = [os.path.basename(str(t)) for t in query_tables[:10]]
+            query = None
             search_type = "keyword"
     else:
         print(f"ℹ️  Using provided query (not model's tables)")
@@ -686,17 +718,20 @@ def main():
                 # Parse query based on search type (all from the same CSV)
                 query = None
                 if search_type == 'single_column':
-                    # Extract all values from first column as a list
+                    # Use values from first column (consistent with Blend_internal README examples)
+                    # From README: Seekers.SC(dataset[clm_name], k) - uses single column
+                    # From ComplexSearch: Seekers.SC(examples[examples.columns[0]], k) - uses first column
                     first_col = query_df.columns[0]
                     query = query_df[first_col].dropna().astype(str).tolist()
                     print(f"✅ Using first column '{first_col}' with {len(query)} values for single_column search")
                     print(f"   Sample values: {query[:3]}{'...' if len(query) > 3 else ''}")
                 elif search_type == 'keyword':
-                    # Extract all values from first column as keywords
-                    first_col = query_df.columns[0]
-                    query = query_df[first_col].dropna().astype(str).tolist()
-                    print(f"✅ Using first column '{first_col}' with {len(query)} keywords for keyword search")
-                    print(f"   Sample keywords: {query[:3]}{'...' if len(query) > 3 else ''}")
+                    # Use headers (column names) - consistent with Blend_internal
+                    # Blend_internal uses rowid=-1 which represents headers in the index
+                    headers = [str(col).lower().strip() for col in query_df.columns]
+                    headers = [h for h in headers if h]  # Filter empty headers
+                    query = headers
+                    print(f"✅ Using {len(headers)} headers for keyword search: {headers[:5]}{'...' if len(headers) > 5 else ''}")
                 elif search_type == 'unionable':
                     # Use the entire DataFrame
                     query = query_df

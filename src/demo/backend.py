@@ -206,8 +206,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         # Fallback to default CSV if model tables not found
         if not query_csv:
             default_csvs = [
-                "data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv",
-                "data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv"
+                "data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv",
+                "data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv"
             ]
             for csv_path in default_csvs:
                 if os.path.exists(csv_path):
@@ -268,11 +268,28 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 return search_type_name, {"error": str(e)}
         
         # Prepare queries for all three search types
+        # Follow Blend_internal logic from README examples:
+        # - keyword: use headers (column names) - rowid=-1 in index
+        # - single_column: use values from first column (Seekers.SC(dataset[clm_name], k) uses single column)
+        # - unionable: use entire DataFrame
         queries_parsed = {}
         if query_df is not None:
+            # For single_column: use values from first column
+            # From README: Seekers.SC(dataset[clm_name], k) - uses single column
+            # From ComplexSearch: Seekers.SC(examples[examples.columns[0]], k) - uses first column
             first_col = query_df.columns[0]
             queries_parsed['single_column'] = query_df[first_col].dropna().astype(str).tolist()
-            queries_parsed['keyword'] = query_df[first_col].dropna().astype(str).tolist()
+            logger.log(f"ℹ️  Single_column search using first column '{first_col}' with {len(queries_parsed['single_column'])} values")
+            
+            # For keyword: use headers (column names) - consistent with Blend_internal
+            # Blend_internal uses rowid=-1 which represents headers in the index
+            headers = [str(col).lower().strip() for col in query_df.columns]
+            # Filter out empty headers (consistent with Blend_internal self_keyword.py)
+            headers = [h for h in headers if h]
+            queries_parsed['keyword'] = headers
+            logger.log(f"ℹ️  Keyword search using {len(headers)} headers: {headers[:5]}{'...' if len(headers) > 5 else ''}")
+            
+            # For unionable: use entire DataFrame (same as Blend_internal)
             queries_parsed['unionable'] = query_df
         else:
             queries_parsed['single_column'] = None

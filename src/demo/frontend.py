@@ -266,7 +266,7 @@ HTML_TEMPLATE = """
             
             <div class="mode-input" id="modelid-input">
                 <label for="model_id">Model ID:</label>
-                <input type="text" id="model_id" placeholder="e.g., Salesforce/codet5-base">
+                <input type="text" id="model_id" value="Salesforce/codet5-base" placeholder="Enter HuggingFace model ID">
             </div>
             
             <label for="top_k" style="margin-top: 15px;">Top K Results:</label>
