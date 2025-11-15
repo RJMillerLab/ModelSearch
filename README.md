@@ -163,7 +163,7 @@ python -m src.search.tab2tab \
   --query "train, dataset, model" \
   --k 10 \
   --db_path modellake.db \
-  --output data/tab2tab_results.json
+  --output data/tab2tab_join_sing_results.json
 
 # Multi column search (haven't tested yet)
 # python -m src.search.tab2tab \
@@ -171,7 +171,7 @@ python -m src.search.tab2tab \
 #   --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
 #   --k 10 \
 #   --db_path data_citationlake/modellake.db \
-#   --output data/tab2tab_results.json
+#   --output data/tab2tab_join_multi_results.json
 
 # Keyword search
 python -m src.search.tab2tab \
@@ -179,7 +179,7 @@ python -m src.search.tab2tab \
   --query "train, dataset, model" \
   --k 10 \
   --db_path modellake.db \
-  --output data/tab2tab_results.json
+  --output data/tab2tab_keyword_results.json
 
 # Unionable search (find tables with unionable columns)
 python -m src.search.tab2tab \
@@ -187,38 +187,52 @@ python -m src.search.tab2tab \
   --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
   --k 10 \
   --db_path modellake.db \
-  --output data/tab2tab_results.json
-
-# Test with specific table ID from modellake.db
-python -m src.search.tab2tab \
-  --test_table_id 123 \
-  --k 10 \
-  --output data/tab2tab_results.json
+  --output data/tab2tab_union_results.json
 ```
-
-**Output:** `data/tab2tab_results.json`
 
 ### 5. Card to Tab to Card Search (Main Script)
 
 Two-stage search: find tables for a model card, then find similar model cards via table search:
 
 ```bash
-# Using CitationLake get_from (recommended)
+# Using CitationLake get_from (recommended) - Keyword search
 python -m src.search.card2tab2card \
   --model_id Salesforce/codet5-base \
   --schema_log data_citationlake/logs/parquet_schema.log \
-  --query "keyword1,keyword2" \
+  --query "train,model,dataset" \
   --search_type keyword \
+  --db_path data_citationlake/modellake.db \
   --k 10 \
-  --output_json data/card2tab2card_results.json
+  --output_json data/card2tab2card_keyword_results.json
+
+# Single column search
+python -m src.search.card2tab2card \
+  --model_id Salesforce/codet5-base \
+  --schema_log data_citationlake/logs/parquet_schema.log \
+  --query "value1,value2,value3" \
+  --search_type single_column \
+  --db_path data_citationlake/modellake.db \
+  --k 10 \
+  --output_json data/card2tab2card_singlecol_results.json
+
+# Multi column search
+python -m src.search.card2tab2card \
+  --model_id Salesforce/codet5-base \
+  --schema_log data_citationlake/logs/parquet_schema.log \
+  --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+  --search_type multi_column \
+  --db_path data_citationlake/modellake.db \
+  --k 10 \
+  --output_json data/card2tab2card_multicol_results.json
 
 # Without query - uses model's tables automatically
 python -m src.search.card2tab2card \
   --model_id Salesforce/codet5-base \
   --schema_log data_citationlake/logs/parquet_schema.log \
   --search_type keyword \
+  --db_path data_citationlake/modellake.db \
   --k 10 \
-  --output_json data/card2tab2card_results.json
+  --output_json data/card2tab2card_keyword_results.json
 
 # Using pre-computed table search results
 python -m src.search.card2tab2card \
@@ -226,17 +240,18 @@ python -m src.search.card2tab2card \
   --schema_log data_citationlake/logs/parquet_schema.log \
   --table_search_json data/table_search.json \
   --k 10 \
-  --output_json data/card2tab2card_results.json
+  --output_json data/card2tab2card_keyword_results.json
 
 # Fallback: using relationship_parquet (if CitationLake not available)
 python -m src.search.card2tab2card \
   --model_id Salesforce/codet5-base \
   --relationship_parquet data_citationlake/processed/modelcard_step3_dedup.parquet \
   --no_citationlake \
-  --query "keyword1,keyword2" \
+  --query "train,model,dataset" \
   --search_type keyword \
+  --db_path data_citationlake/modellake.db \
   --k 10 \
-  --output_json data/card2tab2card_results.json
+  --output_json data/card2tab2card_keyword_results.json
 ```
 
 **Output:** `data/card2tab2card_results.json`

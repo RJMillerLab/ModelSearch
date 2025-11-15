@@ -208,29 +208,39 @@ def search_card2tab2card(
     k: int = 10,
     schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
     use_citationlake: bool = True,
-    output_json: str = "data/card2tab2card_results.json"
+    output_json: str = "data/card2tab2card_results.json",
+    db_path: Optional[str] = None
 ) -> List[str]:
     """
     Search for model cards via table search.
     
+    Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards
+    
     Process:
     1. Get tables for the query model using CitationLake's get_from (or relationship parquet)
     2. Use tab2tab to search for similar tables
-    3. Map similar tables back to model cards using CitationLake's get_from (or relationship)
+    3. Map retrieved tables back to model cards using CitationLake's get_from (or relationship)
     
     Args:
         model_id: Hugging Face model ID to search from
         relationship_parquet: Optional path to relationship parquet file (fallback if CitationLake not available)
         query: Optional query data for table search. If None, uses tables from the model
-        search_type: Type of table search - "single_column", "multi_column", or "keyword"
+        search_type: Type of table search - "single_column", "multi_column", "keyword", or "unionable"
         k: Number of table results to retrieve
         schema_log_path: Path to parquet_schema.log (for CitationLake approach)
         use_citationlake: Whether to use CitationLake get_from (default: True)
         output_json: Optional path to save results as JSON
+        db_path: Path to modellake.db (default: data_citationlake/modellake.db)
     
     Returns:
         List of model IDs that have similar tables
     """
+    # Print pipeline overview
+    print(f"\n{'='*60}")
+    print(f"🔍 Card2Tab2Card Search Pipeline")
+    print(f"{'='*60}")
+    print(f"Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards")
+    print(f"{'='*60}\n")
     # Get tables for the query model
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
         query_tables = get_tables_for_model(
@@ -238,7 +248,43 @@ def search_card2tab2card(
             schema_log_path=schema_log_path,
             use_citationlake=True
         )
+    elif use_citationlake and not USE_CITATIONLAKE_GET_FROM:
+        # User wants CitationLake but it's not available, try to find default relationship_parquet
+        if relationship_parquet is None:
+            # Try to find default relationship parquet files
+            default_paths = [
+                "data_citationlake/processed/modelcard_step3_dedup.parquet",
+                "data_citationlake/processed/modelcard_step3.parquet",
+            ]
+            for default_path in default_paths:
+                if os.path.exists(default_path):
+                    relationship_parquet = default_path
+                    print(f"⚠️  CitationLake not available, found default relationship_parquet: {relationship_parquet}")
+                    break
+        
+        if relationship_parquet is None:
+            raise ValueError(
+                "CitationLake get_from is not available and no relationship_parquet found. Please either:\n"
+                "  1. Install/configure CitationLake (ensure CitationLake/src/data_analysis/get_from.py exists), or\n"
+                "  2. Use --relationship_parquet to specify the path to modelcard_step3_dedup.parquet, or\n"
+                "  3. Place modelcard_step3_dedup.parquet in data_citationlake/processed/"
+            )
+        
+        if not os.path.exists(relationship_parquet):
+            raise FileNotFoundError(
+                f"relationship_parquet not found: {relationship_parquet}\n"
+                "Please check the path or use --relationship_parquet to specify the correct path."
+            )
+        
+        print(f"⚠️  CitationLake not available, using relationship_parquet: {relationship_parquet}")
+        relationship_df = load_relationship_parquet(relationship_parquet)
+        query_tables = get_tables_for_model(
+            model_id=model_id,
+            relationship_df=relationship_df,
+            use_citationlake=False
+        )
     else:
+        # use_citationlake=False, use relationship_parquet
         if relationship_parquet is None:
             raise ValueError("relationship_parquet is required when use_citationlake=False")
         relationship_df = load_relationship_parquet(relationship_parquet)
@@ -249,10 +295,20 @@ def search_card2tab2card(
         )
     
     if not query_tables:
-        print(f"Warning: No tables found for model {model_id}")
+        print(f"⚠️  Warning: No tables found for model {model_id}")
         return []
     
-    print(f"Found {len(query_tables)} tables for model {model_id}")
+    # Step 1: Query -> ModelCard -> Tables (Part of Pipeline)
+    print(f"\n{'='*60}")
+    print(f"📊 Step 1: Query -> ModelCard -> Tables (Part of Pipeline)")
+    print(f"{'='*60}")
+    print(f"✅ Query Model ID: {model_id}")
+    print(f"✅ Found {len(query_tables)} tables for model {model_id}")
+    print(f"📝 Sample tables (showing first 2):")
+    for i, table in enumerate(query_tables[:2], 1):
+        print(f"   {i}. {os.path.basename(str(table))}")
+    if len(query_tables) > 2:
+        print(f"   ... and {len(query_tables) - 2} more tables")
     
     # If query is provided, use it; otherwise search based on query_tables
     if query is None:
@@ -266,30 +322,91 @@ def search_card2tab2card(
             query = [os.path.basename(str(t)) for t in query_tables[:10]]
             search_type = "keyword"
     
+    # Step 2: Tables -> Retrieved Tables
+    print(f"\n{'='*60}")
+    print(f"🔍 Step 2: Tables -> Retrieved Tables")
+    print(f"{'='*60}")
+    print(f"✅ Search type: {search_type}")
+    if search_type == "keyword":
+        print(f"✅ Query keywords: {query[:5]}{'...' if len(query) > 5 else ''}")
+    elif search_type == "single_column":
+        print(f"✅ Query values: {query[:5]}{'...' if len(query) > 5 else ''}")
+    elif search_type in ["multi_column", "unionable"]:
+        print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
+    print(f"✅ Top K: {k}")
+    
     # Search for similar tables using tab2tab (lazy import)
+    # Default db_path to data_citationlake/modellake.db if not provided
+    if db_path is None:
+        db_path = "data_citationlake/modellake.db"
+    print(f"✅ Database: {db_path}")
+    
     try:
         search_table2table = _get_search_table2table()
-        similar_table_ids = search_table2table(query, search_type, k)
+        print(f"🔎 Searching for similar tables...")
+        similar_table_ids = search_table2table(query, search_type, k, db_path=db_path)
+        print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
+        
+        # Get filenames for retrieved tables from database
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        try:
+            # Get distinct filenames for the retrieved table IDs
+            table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
+            filename_query = f"""
+                SELECT DISTINCT tableid, filename 
+                FROM modellake_index 
+                WHERE tableid IN ({table_ids_str}) AND rowid = -1
+            """
+            filename_results = con.execute(filename_query).fetchall()
+            retrieved_table_files = {tid: filename for tid, filename in filename_results}
+            print(f"📝 Sample retrieved tables (showing first 2):")
+            for i, (tid, filename) in enumerate(list(retrieved_table_files.items())[:2], 1):
+                print(f"   {i}. Table ID {tid}: {filename}")
+            if len(retrieved_table_files) > 2:
+                print(f"   ... and {len(retrieved_table_files) - 2} more retrieved tables")
+        finally:
+            con.close()
+            
     except Exception as e:
-        print(f"Error in table search: {e}")
+        print(f"❌ Error in table search: {e}")
+        import traceback
+        traceback.print_exc()
         return []
+    
+    # Step 3: Retrieved Tables -> Corresponding ModelCards
+    print(f"\n{'='*60}")
+    print(f"🔄 Step 3: Retrieved Tables -> Corresponding ModelCards")
+    print(f"{'='*60}")
+    print(f"✅ Mapping {len(similar_table_ids)} retrieved tables to model cards...")
+    
+    # Get filenames for retrieved tables from database
+    import duckdb
+    con = duckdb.connect(db_path, read_only=True)
+    try:
+        # Get distinct filenames for the retrieved table IDs
+        table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
+        filename_query = f"""
+            SELECT DISTINCT tableid, filename 
+            FROM modellake_index 
+            WHERE tableid IN ({table_ids_str}) AND rowid = -1
+        """
+        filename_results = con.execute(filename_query).fetchall()
+        tableid_to_filename = {tid: filename for tid, filename in filename_results}
+        retrieved_filenames = list(tableid_to_filename.values())
+        print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database")
+    finally:
+        con.close()
     
     # Map similar tables back to model cards
     similar_model_ids = set()
     
-    # For each retrieved table ID, find which model IDs have it
-    # Note: This requires mapping Blend_internal table IDs to CSV paths/basenames
-    # For now, we'll assume table IDs can be used directly or need conversion
-    # This is a simplified approach - you may need to adjust based on Blend_internal's table ID format
-    
     # If using CitationLake get_from, we can map table paths to model IDs
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        for table_id in similar_table_ids:
-            # Convert table ID to string and try to find model IDs
-            # Note: You may need to map Blend_internal table IDs to actual CSV paths
-            table_path = str(table_id)
+        print(f"📋 Using CitationLake get_from to map tables to model cards...")
+        for filename in retrieved_filenames:
             model_ids = get_modelids_from_table(
-                table_path=table_path,
+                table_path=filename,
                 schema_log_path=schema_log_path,
                 debug=False
             )
@@ -299,24 +416,48 @@ def search_card2tab2card(
         if relationship_parquet is None:
             raise ValueError("relationship_parquet is required when use_citationlake=False")
         relationship_df = load_relationship_parquet(relationship_parquet)
+        print(f"📋 Using relationship_parquet to map tables to model cards...")
         
-        # Convert table IDs to basenames (simplified - may need adjustment)
-        table_basenames = [os.path.basename(str(tid)) for tid in similar_table_ids]
+        # Use filenames (basenames) to match with relationship_df
+        table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
+        print(f"📝 Matching {len(table_basenames)} table basenames against relationship data...")
         
-        similar_model_ids = set(relationship_df.loc[
+        matched_models = relationship_df.loc[
             relationship_df["csv_basename"].isin(table_basenames),
             "modelId"
-        ].dropna().unique().tolist())
+        ].dropna().unique().tolist()
+        
+        similar_model_ids = set(matched_models)
+        print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
     # Remove the query model itself
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
+    
+    print(f"✅ Found {len(similar_model_ids)} unique model cards (excluding query model)")
+    
+    # Limit to top k
+    final_results = list(similar_model_ids)[:k]
+    
+    # Final summary
+    print(f"\n{'='*60}")
+    print(f"📊 Final Results Summary")
+    print(f"{'='*60}")
+    print(f"✅ Query Model: {model_id}")
+    print(f"✅ Found {len(final_results)} similar model cards (top {k})")
+    if final_results:
+        print(f"📝 Sample results (showing first 2):")
+        for i, model_id_result in enumerate(final_results[:2], 1):
+            print(f"   {i}. {model_id_result}")
+        if len(final_results) > 2:
+            print(f"   ... and {len(final_results) - 2} more model cards")
+    print(f"{'='*60}\n")
     
     # Save if requested
     if output_json:
         result = {
             "query_model": model_id,
             "query_tables": query_tables,
-            "similar_models": list(similar_model_ids)
+            "similar_models": final_results
         }
         os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
         with open(output_json, 'w', encoding='utf-8') as f:
@@ -324,7 +465,7 @@ def search_card2tab2card(
             json.dump(result, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {output_json}")
     
-    return list(similar_model_ids)
+    return final_results
 
 
 def search_card2tab2card_from_tables(
@@ -418,7 +559,23 @@ def search_card2tab2card_from_tables(
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
     
     # Limit to top k
-    return list(similar_model_ids)[:k]
+    final_results = list(similar_model_ids)[:k]
+    
+    # Final summary
+    print(f"\n{'='*60}")
+    print(f"📊 Final Results Summary")
+    print(f"{'='*60}")
+    print(f"✅ Query Model: {model_id}")
+    print(f"✅ Found {len(final_results)} similar model cards (top {k})")
+    if final_results:
+        print(f"📝 Sample results (showing first 2):")
+        for i, model_id_result in enumerate(final_results[:2], 1):
+            print(f"   {i}. {model_id_result}")
+        if len(final_results) > 2:
+            print(f"   ... and {len(final_results) - 2} more model cards")
+    print(f"{'='*60}\n")
+    
+    return final_results
 
 
 def main():
@@ -432,7 +589,7 @@ def main():
                        help='Path to parquet_schema.log (for CitationLake approach)')
     parser.add_argument('--query', default=None,
                        help='Query data for table search (comma-separated for single_column/keyword, CSV path for multi_column). If None, uses model tables.')
-    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword'],
+    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'],
                        default='keyword',
                        help='Type of table search')
     parser.add_argument('--k', type=int, default=10,
@@ -445,6 +602,8 @@ def main():
                        help='Disable CitationLake approach, use relationship_parquet instead')
     parser.add_argument('--output_json', default='data/card2tab2card_results.json',
                        help='Path to save results as JSON (default: data/card2tab2card_results.json)')
+    parser.add_argument('--db_path', default='data_citationlake/modellake.db',
+                       help='Path to modellake.db (default: data_citationlake/modellake.db)')
     
     args = parser.parse_args()
     
@@ -470,6 +629,8 @@ def main():
                     query = [x.strip() for x in args.query.split(',')]
                 elif args.search_type == 'multi_column':
                     query = pd.read_csv(args.query)
+                elif args.search_type == 'unionable':
+                    query = pd.read_csv(args.query)
                 elif args.search_type == 'keyword':
                     query = [x.strip() for x in args.query.split(',')]
             
@@ -481,7 +642,8 @@ def main():
                 k=args.k,
                 schema_log_path=args.schema_log,
                 use_citationlake=args.use_citationlake,
-                output_json=args.output_json or "data/card2tab2card_results.json"
+                output_json=args.output_json or "data/card2tab2card_results.json",
+                db_path=args.db_path
             )
         
         print(f"Found {len(results)} similar model cards for {args.model_id}:")
