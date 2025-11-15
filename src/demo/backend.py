@@ -10,6 +10,7 @@ import json
 import uuid
 import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
@@ -97,27 +98,11 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
         model_id = model_results[0]
         logger.log(f"✅ Extracted model: {model_id}")
         
-        # Step 2: Run Card2Card pipeline
-        logger.log("Step 2: Running Card2Card pipeline (dense semantic search)...")
-        card2card_results = search_card2card(
-            model_id=model_id,
-            emb_npz=DEFAULT_EMB_NPZ,
-            faiss_index=DEFAULT_FAISS_INDEX,
-            top_k=top_k,
-            output_json=None
-        )
-        logger.log(f"✅ Card2Card: Found {len(card2card_results)} results")
-        
-        # Step 3: Run Card2Tab2Card pipeline (all three types)
-        logger.log("Step 3: Running Card2Tab2Card pipeline (table-based search)...")
-        
-        # Get tables for the model to use as query CSV
-        # For now, we'll use a default CSV or extract from model
-        # In production, you might want to get the model's tables first
+        # Step 2: Prepare query CSV for Card2Tab2Card
+        logger.log("Step 2: Preparing query CSV for table search...")
         query_csv = None
         
         # Try to find a CSV file from the model's tables
-        # This is a simplified version - in production, extract actual tables
         default_csvs = [
             "data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv",
             "data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv"
@@ -132,28 +117,38 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
             logger.log("⚠️  No CSV found, using model's table basenames as query")
             query_csv = None
         
-        card2tab2card_all = {}
+        # Load CSV once for all search types
+        import pandas as pd
+        if query_csv:
+            query_df = pd.read_csv(query_csv)
+            logger.log(f"✅ Loaded CSV: {query_csv} ({len(query_df)} rows, {len(query_df.columns)} columns)")
+        else:
+            query_df = None
         
-        # Run all three search types
-        for search_type_name in ['single_column', 'keyword', 'unionable']:
-            logger.log(f"  Running {search_type_name} search...")
+        # Step 3: Run Card2Card and Card2Tab2Card in parallel
+        logger.log("Step 3: Running Card2Card and Card2Tab2Card pipelines in parallel...")
+        
+        def run_card2card():
+            """Run Card2Card pipeline"""
+            logger.log("  [Card2Card] Starting dense semantic search...")
             try:
-                if query_csv:
-                    import pandas as pd
-                    query_df = pd.read_csv(query_csv)
-                    
-                    if search_type_name == 'single_column':
-                        first_col = query_df.columns[0]
-                        query_parsed = query_df[first_col].dropna().astype(str).tolist()
-                    elif search_type_name == 'keyword':
-                        first_col = query_df.columns[0]
-                        query_parsed = query_df[first_col].dropna().astype(str).tolist()
-                    elif search_type_name == 'unionable':
-                        query_parsed = query_df
-                else:
-                    # Use model's table basenames
-                    query_parsed = None
-                
+                results = search_card2card(
+                    model_id=model_id,
+                    emb_npz=DEFAULT_EMB_NPZ,
+                    faiss_index=DEFAULT_FAISS_INDEX,
+                    top_k=top_k,
+                    output_json=None
+                )
+                logger.log(f"  ✅ [Card2Card] Found {len(results)} results")
+                return results
+            except Exception as e:
+                logger.log(f"  ❌ [Card2Card] Error: {str(e)}")
+                return {"error": str(e)}
+        
+        def run_card2tab2card_search(search_type_name, query_parsed):
+            """Run one Card2Tab2Card search type"""
+            logger.log(f"  [Card2Tab2Card-{search_type_name}] Starting...")
+            try:
                 results = search_card2tab2card(
                     model_id=model_id,
                     relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
@@ -165,11 +160,61 @@ def run_search_pipeline(job_id: str, query: str, top_k: int = 20):
                     output_json=None,
                     db_path=DEFAULT_DB_PATH
                 )
-                card2tab2card_all[search_type_name] = results
-                logger.log(f"  ✅ {search_type_name}: Found {len(results)} results")
+                logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Found {len(results)} results")
+                return search_type_name, results
             except Exception as e:
-                logger.log(f"  ❌ {search_type_name}: Error - {str(e)}")
-                card2tab2card_all[search_type_name] = {"error": str(e)}
+                logger.log(f"  ❌ [Card2Tab2Card-{search_type_name}] Error: {str(e)}")
+                return search_type_name, {"error": str(e)}
+        
+        # Prepare queries for all three search types
+        queries_parsed = {}
+        if query_df is not None:
+            first_col = query_df.columns[0]
+            queries_parsed['single_column'] = query_df[first_col].dropna().astype(str).tolist()
+            queries_parsed['keyword'] = query_df[first_col].dropna().astype(str).tolist()
+            queries_parsed['unionable'] = query_df
+        else:
+            queries_parsed['single_column'] = None
+            queries_parsed['keyword'] = None
+            queries_parsed['unionable'] = None
+        
+        # Run all searches in parallel using ThreadPoolExecutor
+        card2card_results = None
+        card2tab2card_all = {}
+        
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # Submit all tasks
+            futures = {}
+            
+            # Submit Card2Card
+            futures['card2card'] = executor.submit(run_card2card)
+            
+            # Submit all three Card2Tab2Card search types
+            for search_type_name in ['single_column', 'keyword', 'unionable']:
+                query_parsed = queries_parsed[search_type_name]
+                futures[search_type_name] = executor.submit(
+                    run_card2tab2card_search, 
+                    search_type_name, 
+                    query_parsed
+                )
+            
+            # Collect results as they complete
+            for future in as_completed(futures.values()):
+                try:
+                    result = future.result()
+                    if isinstance(result, tuple):
+                        # Card2Tab2Card result
+                        search_type_name, results = result
+                        card2tab2card_all[search_type_name] = results
+                    else:
+                        # Card2Card result
+                        card2card_results = result
+                except Exception as e:
+                    logger.log(f"  ❌ Future error: {str(e)}")
+        
+        # Ensure we got card2card results
+        if card2card_results is None or isinstance(card2card_results, dict) and "error" in card2card_results:
+            raise ValueError("Card2Card search failed")
         
         # Step 4: Compare results
         logger.log("Step 4: Comparing results...")
