@@ -600,8 +600,8 @@ def main():
     parser = argparse.ArgumentParser(description="Card to Tab to Card Search")
     parser.add_argument('--model_id', required=True,
                        help='Hugging Face model ID to search from')
-    parser.add_argument('--relationship_parquet', default=None,
-                       help='Path to relationship parquet file (fallback if CitationLake not available)')
+    parser.add_argument('--relationship_parquet', default='data_citationlake/processed/modelcard_step3_dedup.parquet',
+                       help='Path to relationship parquet file (default: data_citationlake/processed/modelcard_step3_dedup.parquet)')
     parser.add_argument('--schema_log', default='data_citationlake/logs/parquet_schema.log',
                        help='Path to parquet_schema.log (for CitationLake approach)')
     parser.add_argument('--query', default=None,

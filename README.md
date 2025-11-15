@@ -192,212 +192,68 @@ python -m src.search.tab2tab \
 
 ### 5. Card to Tab to Card Search (Main Script)
 
-Two-stage search: find tables for a model card, then find similar model cards via table search:
+Two-stage search: find tables for a model card, then find similar model cards via table search.
 
 **Pipeline:** Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards
+
+**Default:** Uses `data_citationlake/processed/modelcard_step3_dedup.parquet` for relationship mapping.
 
 ```bash
 # Mode: ALL - Run all three search types automatically
 # Note: --query must be a CSV file path when --mode=all
-# Saves to: {output_folder}/card2tab2card_singlecol_results.json
-#           {output_folder}/card2tab2card_keyword_results.json
-#           {output_folder}/card2tab2card_unionable_results.json
-# logs saved to logs/card2tab2card.log
+# Outputs:
+#   - {output_folder}/card2tab2card_singlecol_results.json
+#   - {output_folder}/card2tab2card_keyword_results.json
+#   - {output_folder}/card2tab2card_unionable_results.json
 python -m src.search.card2tab2card \
   --model_id Salesforce/codet5-base \
-  --schema_log data_citationlake/logs/parquet_schema.log \
   --query data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv \
   --mode all \
   --output_folder data \
   --db_path data_citationlake/modellake.db \
   --k 10
+```
 
-# Mode: SINGLE - Using CitationLake get_from (recommended) - Keyword search
+<details>
+<summary>Other modes (single search type)</summary>
+
+```bash
+# Single search type examples
 python -m src.search.card2tab2card \
   --model_id Salesforce/codet5-base \
-  --schema_log data_citationlake/logs/parquet_schema.log \
   --query "train,model,dataset" \
   --search_type keyword \
   --mode single \
   --db_path data_citationlake/modellake.db \
   --k 10 \
   --output_json data/card2tab2card_keyword_results.json
-
-# Single column search
-python -m src.search.card2tab2card \
-  --model_id Salesforce/codet5-base \
-  --schema_log data_citationlake/logs/parquet_schema.log \
-  --query "train,model,dataset" \
-  --search_type single_column \
-  --db_path data_citationlake/modellake.db \
-  --k 10 \
-  --output_json data/card2tab2card_singlecol_results.json
-
-# Multi column search
-# python -m src.search.card2tab2card \
-#   --model_id Salesforce/codet5-base \
-#   --schema_log data_citationlake/logs/parquet_schema.log \
-#   --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
-#   --search_type multi_column \
-#   --db_path data_citationlake/modellake.db \
-#   --k 10 \
-#   --output_json data/card2tab2card_multicol_results.json
-
-# Without query - uses model's tables automatically
-python -m src.search.card2tab2card \
-  --model_id Salesforce/codet5-base \
-  --schema_log data_citationlake/logs/parquet_schema.log \
-  --search_type keyword \
-  --db_path data_citationlake/modellake.db \
-  --k 10 \
-  --output_json data/card2tab2card_keyword_results.json
-
-# Using pre-computed table search results
-python -m src.search.card2tab2card \
-  --model_id Salesforce/codet5-base \
-  --schema_log data_citationlake/logs/parquet_schema.log \
-  --table_search_json data/table_search.json \
-  --k 10 \
-  --output_json data/card2tab2card_keyword_results.json
-
-# Fallback: using relationship_parquet (if CitationLake not available)
-python -m src.search.card2tab2card \
-  --model_id Salesforce/codet5-base \
-  --relationship_parquet data_citationlake/processed/modelcard_step3_dedup.parquet \
-  --no_citationlake \
-  --query "train,model,dataset" \
-  --search_type keyword \
-  --db_path data_citationlake/modellake.db \
-  --k 10 \
-  --output_json data/card2tab2card_keyword_results.json
 ```
-
-**Output:** `data/card2tab2card_results.json`
+</details>
 
 ### 6. Interactive Demo
 
-#### Frontend (CLI Interactive)
+Compare two search pipelines (Card2Card vs Card2Tab2Card) with a web interface:
 
 ```bash
-python -m src.demo.frontend
-```
-
-Interactive menu for testing all search functions. All results saved to `data/` directory.
-
-#### Backend (REST API)
-
-```bash
+# Start backend server
 python -m src.demo.backend
+
+# Open http://localhost:5000 in your browser
 ```
 
-Starts a Flask REST API server on `http://localhost:5000` with endpoints:
+**Pipeline:**
+1. Input: Text query (e.g., "transformer model for code generation")
+2. Extract model card from query
+3. Run two parallel pipelines:
+   - **Card2Card**: Dense semantic search
+   - **Card2Tab2Card**: Table-based search (all three types)
+4. Display progress logs in real-time
+5. Visualize results side-by-side
 
-- `POST /api/build-index` - Build FAISS index
-- `POST /api/query2modelcard` - Search with text query
-- `POST /api/card2card` - Search similar model cards
-- `POST /api/tab2tab` - Table to table search (testing)
-- `POST /api/card2tab2card` - Card to tab to card search
-- `GET /api/health` - Health check
+See [docs/demo.md](docs/demo.md) for detailed documentation.
 
-**Example API call:**
-```bash
-curl -X POST http://localhost:5000/api/query2modelcard \
-  -H "Content-Type: application/json" \
-  -d '{"query": "transformer model", "top_k": 20}'
-```
+## Documentation
 
-All API results are saved to `data/` directory.
-
-## Using Search Functions in Python
-
-All search functions can be imported and used programmatically:
-
-```python
-from src.search import (
-    build_card_index,
-    search_card2card,
-    search_table2table,
-    search_query2modelcard,
-    search_card2tab2card
-)
-
-# 1. Build index (first time only)
-# Option 1: Using CitationLake raw data
-build_card_index(
-    field="card",
-    raw_dir="data_citationlake/raw",  # or "data/raw" for local data
-    output_index="data/card2card.faiss"
-)
-
-# Option 2: Using processed parquet (faster)
-build_card_index(
-    field="card_readme",
-    parquet="data_citationlake/processed/modelcard_step1.parquet",
-    output_index="data/card2card.faiss"
-)
-
-# 2. Query to modelcard (most common)
-results = search_query2modelcard(
-    query="transformer model for NLP",
-    faiss_index="data/card2card.faiss",
-    top_k=20
-)
-
-# 3. Card to card
-neighbors = search_card2card(
-    model_id="Salesforce/codet5-base",
-    faiss_index="data/card2card.faiss",
-    top_k=20
-)
-
-# 4. Table to table (testing)
-table_ids = search_table2table(
-    query=["value1", "value2"],
-    search_type="single_column",
-    k=10
-)
-
-# 5. Card to tab to card
-similar_models = search_card2tab2card(
-    model_id="Salesforce/codet5-base",
-    schema_log_path="data_citationlake/logs/parquet_schema.log",
-    query=["keyword1", "keyword2"],
-    search_type="keyword",
-    k=10
-)
-```
-
-## Batch Evaluation (Optional)
-
-For batch evaluation, you can use the batch search functions:
-
-```python
-from src.search import search_card2card_batch
-
-# Search all models at once
-all_neighbors = search_card2card_batch(
-    emb_npz="data/card2card_embeddings.npz",
-    faiss_index="data/card2card.faiss",
-    top_k=20,
-    output_json="data/card2card_neighbors.json"
-)
-```
-
-## Legacy Commands
-
-#### Build Index (Legacy)
-
-```bash
-bash src/modelsearch/base_densesearch.sh
-```
-
-#### Compare Baselines
-
-```bash
-python -m src.modelsearch.compare_baselines \
-  --model_id Salesforce/codet5-base \
-  --relationship_parquet data/processed/modelcard_step3_dedup.parquet \
-  --starmie_json results/table_search.json \
-  --dense_neighbors output/modelsearch_neighbors.json \
-  --output_md output/compare.md
-```
+- [Python API Usage](docs/api.md) - Programmatic usage of search functions
+- [Interactive Demo](docs/demo.md) - Web interface documentation
+- [Legacy Commands](docs/legacy.md) - Legacy scripts and commands
