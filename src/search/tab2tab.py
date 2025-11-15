@@ -14,9 +14,17 @@ import argparse
 import duckdb
 
 # Add Blend_internal to path (now in src/)
-blend_path = os.path.join(os.path.dirname(__file__), '../Blend_internal')
-if blend_path not in sys.path:
-    sys.path.insert(0, blend_path)
+# Try src/Blend_internal first (if cloned into ModelSearchDemo)
+blend_path = os.path.join(os.path.dirname(__file__), '..', 'Blend_internal')
+blend_path_abs = os.path.abspath(blend_path)
+if os.path.exists(blend_path_abs) and blend_path_abs not in sys.path:
+    sys.path.insert(0, blend_path_abs)
+else:
+    # Fallback: try parent directory (if Blend_internal is sibling to ModelSearchDemo)
+    blend_path_parent = os.path.join(os.path.dirname(__file__), '..', '..', 'Blend_internal')
+    blend_path_parent_abs = os.path.abspath(blend_path_parent)
+    if os.path.exists(blend_path_parent_abs) and blend_path_parent_abs not in sys.path:
+        sys.path.insert(0, blend_path_parent_abs)
 
 # Import Blend_internal search functions
 from src.Tasks.SingleColumnJoinSearch import SingleColumnJoinSearch

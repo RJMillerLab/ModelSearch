@@ -61,25 +61,16 @@ python -m src.search.card2card build-index \
   --output_jsonl data/card2card_corpus.jsonl \
   --output_npz data/card2card_embeddings.npz \
   --output_index data/card2card.faiss \
-  --device cpu
-
-# Or using local data/raw directory (uses local utils)
-python -m src.search.card2card build-index \
-  --field card \
-  --raw_dir data/raw \
-  --output_jsonl data/card2card_corpus.jsonl \
-  --output_npz data/card2card_embeddings.npz \
-  --output_index data/card2card.faiss \
   --device cuda
 
 # Or using processed parquet (faster, if available)
-python -m src.search.card2card build-index \
-  --field card_readme \
-  --parquet data_citationlake/processed/modelcard_step1.parquet \
-  --output_jsonl data/card2card_corpus.jsonl \
-  --output_npz data/card2card_embeddings.npz \
-  --output_index data/card2card.faiss \
-  --device cuda
+# python -m src.search.card2card build-index \
+#   --field card_readme \
+#   --parquet data_citationlake/processed/modelcard_step1.parquet \
+#   --output_jsonl data/card2card_corpus.jsonl \
+#   --output_npz data/card2card_embeddings.npz \
+#   --output_index data/card2card.faiss \
+#   --device cuda
 ```
 
 **Output files:**
@@ -101,8 +92,6 @@ python -m src.search.query2modelcard \
   --output_json data/query2modelcard_results.json
 ```
 
-**Output:** `data/query2modelcard_results.json`
-
 ### 3. Card to Card Search
 
 Search for similar model cards given a model ID:
@@ -117,18 +106,23 @@ python -m src.search.card2card search \
   --output_json data/card2card_results.json
 
 # Search for all models (batch)
-python -m src.search.card2card search-batch \
-  --emb_npz data/card2card_embeddings.npz \
-  --faiss_index data/card2card.faiss \
-  --top_k 20 \
-  --output_json data/card2card_neighbors.json
+# python -m src.search.card2card search-batch \
+#   --emb_npz data/card2card_embeddings.npz \
+#   --faiss_index data/card2card.faiss \
+#   --top_k 20 \
+#   --output_json data/card2card_neighbors.json
 ```
-
-**Output:** `data/card2card_results.json` or `data/card2card_neighbors.json`
 
 ### 4. Table to Table Search (Testing Tool)
 
-**Note: This is a testing tool. Requires `data/modellake.db` to be set up.**
+**⚠️ Important: This requires Blend_internal to be cloned first!**
+
+**Prerequisites:**
+1. **Blend_internal must be cloned** (see Installation step 2 above):
+   ```bash
+   git clone https://github.com/DoraDong-2023/Blend_internal.git src/Blend_internal
+   ```
+2. **`data/modellake.db` must be created** (see below)
 
 **What is `modellake.db`?**
 - A DuckDB database containing an indexed table (`modellake_index`) created from all CSV files
@@ -138,20 +132,11 @@ python -m src.search.card2card search-batch \
 
 **To create `modellake.db` (if not exists):**
 ```bash
-# Create modellake.db from CSV files
-python -m src.Blend_internal.scripts.create_index_duckdb \
-  --db_path data/modellake.db \
-  --data_glob "path/to/your/csvs/*.csv" \
-  --table modellake_index \
-  --mask path/to/mask_file.txt  # Optional: list of CSV files to include
-```
-
-**Example:** If you have CSV files from CitationLake:
-```bash
 python -m src.Blend_internal.scripts.create_index_duckdb \
   --db_path data/modellake.db \
   --data_glob "data_citationlake/processed/deduped_hugging_csvs/*.csv,data_citationlake/processed/deduped_github_csvs/*.csv" \
   --table modellake_index
+  # --mask path/to/mask_file.txt  # Optional: list of CSV files to include
 ```
 
 Test table-to-table search using Blend_internal:
