@@ -546,24 +546,28 @@ def get_table_preview():
         # Limit to first 5 columns
         df_preview = df.iloc[:, :5]
         
-        # Convert to markdown table
-        markdown_lines = []
+        # Convert to simple HTML table (no markdown)
+        html_table = "<table style='width: 100%; border-collapse: collapse; font-size: 11px;'>"
         # Header
         headers = df_preview.columns.tolist()
-        markdown_lines.append("| " + " | ".join(str(h) for h in headers) + " |")
-        markdown_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+        html_table += "<tr>"
+        for h in headers:
+            html_table += f"<th style='border: 1px solid #dee2e6; padding: 4px; background: #f8f9fa; text-align: left;'>{h}</th>"
+        html_table += "</tr>"
         # Rows
         for _, row in df_preview.iterrows():
-            markdown_lines.append("| " + " | ".join(str(val) for val in row.values) + " |")
-        
-        markdown_table = "\n".join(markdown_lines)
+            html_table += "<tr>"
+            for val in row.values:
+                html_table += f"<td style='border: 1px solid #dee2e6; padding: 4px;'>{val}</td>"
+            html_table += "</tr>"
+        html_table += "</table>"
         
         return jsonify({
             "status": "success",
             "table_path": csv_path,
             "rows": len(df_preview),
             "columns": len(df_preview.columns),
-            "markdown": markdown_table
+            "html": html_table
         })
     except Exception as e:
         return jsonify({

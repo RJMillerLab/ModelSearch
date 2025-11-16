@@ -527,19 +527,18 @@ HTML_TEMPLATE = """
                                                                         ${modelTables.map((table, tableIdx) => {
                                                                             const tableBasename = table.split('/').pop();
                                                                             const tableExpandId = `${modelExpandId}-table-${tableIdx}`;
-                                                                            // Escape single quotes in table path for onclick
-                                                                            const tablePathEscaped = table.replace(/'/g, "\\'");
+                                                                            // Use data attribute to store table path safely
                                                                             return `
                                                                                 <div style="padding: 4px 0; border-bottom: 1px solid #dee2e6;">
                                                                                     <div style="display: flex; align-items: center;">
-                                                                                        <span class="expand-toggle" onclick="toggleTablePreview('${tableExpandId}', '${tablePathEscaped}', this)" style="margin-right: 5px; font-size: 10px;">
+                                                                                        <span class="expand-toggle" data-table-path="${table.replace(/"/g, '&quot;')}" onclick="toggleTablePreview('${tableExpandId}', this)" style="margin-right: 5px; font-size: 10px; cursor: pointer;">
                                                                                             ▶
                                                                                         </span>
                                                                                         <span style="font-weight: 500; color: #495057;">📄 ${tableBasename}</span>
                                                                                     </div>
                                                                                     <div class="collapsible-content" id="${tableExpandId}" style="margin-left: 20px; margin-top: 5px; display: none;">
                                                                                         <div style="padding: 8px; background: white; border-radius: 4px; border: 1px solid #dee2e6;">
-                                                                                            <div style="font-size: 11px; color: #999; margin-bottom: 5px;">Loading preview...</div>
+                                                                                            <div style="font-size: 11px; color: #999;">Loading preview...</div>
                                                                                         </div>
                                                                                     </div>
                                                                                 </div>
@@ -605,9 +604,13 @@ HTML_TEMPLATE = """
             }
         }
         
-        async function toggleTablePreview(tableExpandId, tablePath, toggleElement) {
+        async function toggleTablePreview(tableExpandId, toggleElement) {
             const element = document.getElementById(tableExpandId);
             if (!element) return;
+            
+            // Get table path from data attribute
+            const tablePath = toggleElement.getAttribute('data-table-path');
+            if (!tablePath) return;
             
             const isExpanded = element.style.display !== 'none';
             
@@ -624,51 +627,27 @@ HTML_TEMPLATE = """
                 
                 // Check if already loaded
                 const contentDiv = element.querySelector('div');
-                if (contentDiv && contentDiv.textContent === 'Loading preview...') {
+                if (contentDiv && contentDiv.textContent.trim() === 'Loading preview...') {
                     // Load preview
                     try {
                         const response = await fetch(`{{BACKEND_URL}}/api/table-preview?path=${encodeURIComponent(tablePath)}`);
                         const data = await response.json();
                         
                         if (data.status === 'success') {
-                            // Convert markdown to HTML table
-                            const markdown = data.markdown;
-                            // Handle both escaped and actual newlines
-                            const lines = markdown.replace(/\\n/g, '\n').split('\n').filter(l => l.trim());
-                            let html = '<table style="width: 100%; border-collapse: collapse; font-size: 11px;">';
-                            
-                            let isHeader = true;
-                            lines.forEach((line, idx) => {
-                                if (line.trim().startsWith('|')) {
-                                    const cells = line.split('|').filter(c => c.trim()).map(c => c.trim());
-                                    // Skip separator row (contains only ---)
-                                    if (cells.every(c => c.match(/^-+$/))) {
-                                        return;
-                                    }
-                                    const tag = isHeader ? 'th' : 'td';
-                                    html += '<tr>';
-                                    cells.forEach(cell => {
-                                        html += `<${tag} style="border: 1px solid #dee2e6; padding: 4px; text-align: left;">${cell}</${tag}>`;
-                                    });
-                                    html += '</tr>';
-                                    isHeader = false;
-                                }
-                            });
-                            html += '</table>';
-                            
+                            // Use HTML directly from backend
                             contentDiv.innerHTML = `
                                 <div style="font-size: 10px; color: #999; margin-bottom: 5px;">
                                     Preview: ${data.rows} rows × ${data.columns} columns (first 5 rows, first 5 columns)
                                 </div>
                                 <div style="max-height: 200px; overflow: auto;">
-                                    ${html}
+                                    ${data.html || ''}
                                 </div>
                             `;
                         } else {
-                            contentDiv.innerHTML = `<div style="color: #dc3545; font-size: 11px;">Error: ${data.message || 'Failed to load preview'}</div>`;
+                            contentDiv.innerHTML = '<div style="color: #dc3545; font-size: 11px;">Error: ' + (data.message || 'Failed to load preview') + '</div>';
                         }
                     } catch (error) {
-                        contentDiv.innerHTML = `<div style="color: #dc3545; font-size: 11px;">Error: ${error.message}</div>`;
+                        contentDiv.innerHTML = '<div style="color: #dc3545; font-size: 11px;">Error: ' + error.message + '</div>';
                     }
                 }
             }
