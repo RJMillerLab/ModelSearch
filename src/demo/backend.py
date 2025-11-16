@@ -28,6 +28,7 @@ from src.search import (
     load_relationship_parquet
 )
 
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend
 
@@ -250,6 +251,12 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             """Run one Card2Tab2Card search type"""
             logger.log(f"  [Card2Tab2Card-{search_type_name}] Starting...")
             try:
+                # Use a temporary JSON file to capture intermediate results
+                import tempfile
+                import json
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
+                    tmp_json_path = tmp_file.name
+                
                 results = search_card2tab2card(
                     model_id=model_id,
                     relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
@@ -258,11 +265,25 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                     k=top_k,
                     schema_log_path=DEFAULT_SCHEMA_LOG,
                     use_citationlake=True,
-                    output_json=None,
+                    output_json=tmp_json_path,
                     db_path=DEFAULT_DB_PATH
                 )
+                
+                # Read intermediate results from JSON
+                intermediate_data = {}
+                try:
+                    with open(tmp_json_path, 'r', encoding='utf-8') as f:
+                        full_results = json.load(f)
+                        intermediate_data = full_results.get('intermediate', {})
+                    os.unlink(tmp_json_path)  # Clean up temp file
+                except Exception as e:
+                    logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Could not read intermediate data: {str(e)}")
+                
                 logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Found {len(results)} results")
-                return search_type_name, results
+                return search_type_name, {
+                    "model_ids": results,
+                    "intermediate": intermediate_data
+                }
             except Exception as e:
                 logger.log(f"  ❌ [Card2Tab2Card-{search_type_name}] Error: {str(e)}")
                 return search_type_name, {"error": str(e)}
@@ -352,8 +373,16 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         comparison = {}
         
         for search_type_name, tab2card_results in card2tab2card_all.items():
-            if isinstance(tab2card_results, list):
-                tab2card_set = set(tab2card_results)
+            # Handle both old format (list) and new format (dict with model_ids and intermediate)
+            if isinstance(tab2card_results, dict) and "model_ids" in tab2card_results:
+                model_ids_list = tab2card_results["model_ids"]
+            elif isinstance(tab2card_results, list):
+                model_ids_list = tab2card_results
+            else:
+                model_ids_list = []
+            
+            if model_ids_list:
+                tab2card_set = set(model_ids_list)
                 overlap = card2card_set & tab2card_set
                 comparison[search_type_name] = {
                     "card2card_count": len(card2card_set),
@@ -381,7 +410,13 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         card2card_results_with_links = add_hyperlinks(card2card_results)
         card2tab2card_all_with_links = {}
         for search_type, results in card2tab2card_all.items():
-            if isinstance(results, list):
+            # Handle new format with intermediate data
+            if isinstance(results, dict) and "model_ids" in results:
+                card2tab2card_all_with_links[search_type] = {
+                    "model_ids": add_hyperlinks(results["model_ids"]),
+                    "intermediate": results.get("intermediate", {})
+                }
+            elif isinstance(results, list):
                 card2tab2card_all_with_links[search_type] = add_hyperlinks(results)
             else:
                 card2tab2card_all_with_links[search_type] = results

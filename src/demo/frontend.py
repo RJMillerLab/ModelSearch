@@ -267,6 +267,9 @@ HTML_TEMPLATE = """
             <div class="mode-input" id="modelid-input">
                 <label for="model_id">Model ID:</label>
                 <input type="text" id="model_id" value="Salesforce/codet5-base" placeholder="Enter HuggingFace model ID">
+                <p style="font-size: 12px; color: #666; margin-top: 5px;">
+                    Default CSV: data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv
+                </p>
             </div>
             
             <label for="top_k" style="margin-top: 15px;">Top K Results:</label>
@@ -289,8 +292,8 @@ HTML_TEMPLATE = """
     </div>
     
     <script>
-        let currentJobId = null;
-        let eventSource = null;
+               let currentJobId = null;
+               let eventSource = null;
         
         async function startSearch() {
             const mode = document.querySelector('input[name="search_mode"]:checked').value;
@@ -478,17 +481,23 @@ HTML_TEMPLATE = """
                     </div>
                     <div class="result-card">
                         <h3>Card2Tab2Card Results</h3>
-                        ${Object.entries(results.card2tab2card_results).map(([type, models]) => {
+                        ${Object.entries(results.card2tab2card_results).map(([type, data]) => {
                             const sectionId = card2tab2cardIds[type];
-                            const hasMore = Array.isArray(models) && models.length > 5;
+                            // Handle both old format (array) and new format (object with model_ids and intermediate)
+                            const models = Array.isArray(data) ? data : (data.model_ids || []);
+                            const intermediate = data.intermediate || {};
+                            const hasMore = models.length > 5;
+                            const hasIntermediate = intermediate && Object.keys(intermediate).length > 0;
+                            
                             return `
                                 <div class="search-type-section">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
-                                        <h4>${type} (${Array.isArray(models) ? models.length : 0})</h4>
+                                        <h4>${type} (${models.length} models)</h4>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}">
+                                        <h5 style="margin-top: 10px; color: #495057;">Model Results:</h5>
                                         <ul class="result-list">
-                                            ${Array.isArray(models) ? models.slice(0, 5).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('') : '<li>Error</li>'}
+                                            ${models.length > 0 ? models.slice(0, 5).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('') : '<li>No results</li>'}
                                             ${hasMore ? `
                                                 <li class="collapsible-content" id="${sectionId}-more">
                                                     ${models.slice(5).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
@@ -500,6 +509,35 @@ HTML_TEMPLATE = """
                                                 </li>
                                             ` : ''}
                                         </ul>
+                                        ${hasIntermediate ? `
+                                            <h5 style="margin-top: 15px; color: #495057;">Intermediate State:</h5>
+                                            <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                                                <strong>Retrieved Tables:</strong> ${intermediate.retrieved_table_filenames ? intermediate.retrieved_table_filenames.length : 0} tables
+                                                ${intermediate.retrieved_table_filenames && intermediate.retrieved_table_filenames.length > 0 ? `
+                                                    <div style="margin-top: 5px; max-height: 150px; overflow-y: auto; background: #f8f9fa; padding: 8px; border-radius: 4px;">
+                                                        ${intermediate.retrieved_table_filenames.slice(0, 10).map(f => `<div style="padding: 2px 0;">📄 ${f}</div>`).join('')}
+                                                        ${intermediate.retrieved_table_filenames.length > 10 ? `<div style="color: #999;">... and ${intermediate.retrieved_table_filenames.length - 10} more</div>` : ''}
+                                                    </div>
+                                                ` : ''}
+                                            </div>
+                                            ${intermediate.table_to_models && Object.keys(intermediate.table_to_models).length > 0 ? `
+                                                <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                                                    <strong>Table → Model Mapping:</strong>
+                                                    <div style="margin-top: 5px; max-height: 200px; overflow-y: auto; background: #f8f9fa; padding: 8px; border-radius: 4px;">
+                                                        ${Object.entries(intermediate.table_to_models).slice(0, 5).map(([table, modelList]) => `
+                                                            <div style="padding: 4px 0; border-bottom: 1px solid #dee2e6;">
+                                                                <div style="font-weight: bold; color: #495057;">📄 ${table.split('/').pop()}</div>
+                                                                <div style="margin-left: 15px; margin-top: 2px;">
+                                                                    → ${modelList.slice(0, 3).map(m => `<a href="https://huggingface.co/${m}" target="_blank" style="color: #007bff;">${m}</a>`).join(', ')}
+                                                                    ${modelList.length > 3 ? ` (+${modelList.length - 3} more)` : ''}
+                                                                </div>
+                                                            </div>
+                                                        `).join('')}
+                                                        ${Object.keys(intermediate.table_to_models).length > 5 ? `<div style="color: #999; margin-top: 5px;">... and ${Object.keys(intermediate.table_to_models).length - 5} more table mappings</div>` : ''}
+                                                    </div>
+                                                </div>
+                                            ` : ''}
+                                        ` : ''}
                                     </div>
                                 </div>
                             `;

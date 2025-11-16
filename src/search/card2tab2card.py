@@ -449,6 +449,7 @@ def search_card2tab2card(
     
     # Map similar tables back to model cards
     similar_model_ids = set()
+    table_to_models = {}  # Map table filename to list of model IDs
     
     # If using CitationLake get_from, we can map table paths to model IDs
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
@@ -460,6 +461,7 @@ def search_card2tab2card(
                 debug=False
             )
             similar_model_ids.update(model_ids)
+            table_to_models[filename] = list(model_ids)
     else:
         # Fallback: use relationship_df
         if relationship_parquet is None:
@@ -471,16 +473,24 @@ def search_card2tab2card(
         table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
         print(f"📝 Matching {len(table_basenames)} table basenames against relationship data...")
         
-        matched_models = relationship_df.loc[
-            relationship_df["csv_basename"].isin(table_basenames),
-            "modelId"
-        ].dropna().unique().tolist()
+        for filename in retrieved_filenames:
+            basename = os.path.basename(filename)
+            matched_models = relationship_df.loc[
+                relationship_df["csv_basename"] == basename,
+                "modelId"
+            ].dropna().unique().tolist()
+            if matched_models:
+                similar_model_ids.update(matched_models)
+                table_to_models[filename] = matched_models
         
-        similar_model_ids = set(matched_models)
         print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
     # Remove the query model itself
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
+    
+    # Also remove query model from table_to_models
+    for filename in table_to_models:
+        table_to_models[filename] = [mid for mid in table_to_models[filename] if mid != model_id]
     
     print(f"✅ Found {len(similar_model_ids)} unique model cards (excluding query model)")
     
@@ -503,10 +513,21 @@ def search_card2tab2card(
     
     # Save if requested
     if output_json:
+        # Build table_id to filename mapping
+        table_id_to_filename = {}
+        for tid, filename in tableid_to_filename.items():
+            table_id_to_filename[tid] = filename
+        
         result = {
             "query_model": model_id,
             "query_tables": query_tables,
-            "similar_models": final_results
+            "model_ids": final_results,
+            "intermediate": {
+                "retrieved_table_ids": similar_table_ids,
+                "retrieved_table_filenames": retrieved_filenames,
+                "table_id_to_filename": table_id_to_filename,
+                "table_to_models": table_to_models
+            }
         }
         os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
         with open(output_json, 'w', encoding='utf-8') as f:
