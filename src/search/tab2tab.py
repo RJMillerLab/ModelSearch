@@ -42,99 +42,109 @@ _MultiColumnJoinSearch = None
 _KeywordSearch = None
 _UnionSearch = None
 
+# Thread lock for thread-safe lazy import and config update
+import threading
+_import_lock = threading.Lock()
+_config_lock = threading.Lock()
+
 def _update_blend_config(db_path: str):
     """Update Blend_internal config.ini with the correct db_path before importing."""
-    if _BLEND_INTERNAL_PATH is None:
-        raise FileNotFoundError("Blend_internal not found. Please clone it first: git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal")
-    
-    import configparser
-    config_path = os.path.join(_BLEND_INTERNAL_PATH, 'config', 'config.ini')
-    
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Blend_internal config.ini not found at {config_path}")
-    
-    # Read and update config
-    config = configparser.ConfigParser()
-    config.read(config_path)
-    
-    # Convert relative path to absolute if needed
-    if not os.path.isabs(db_path):
-        # Make path relative to ModelSearchDemo root
-        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        db_path_abs = os.path.abspath(os.path.join(modelsearch_root, db_path))
-    else:
-        db_path_abs = os.path.abspath(db_path)
-    
-    # Update config
-    if 'Database' not in config:
-        config['Database'] = {}
-    config['Database']['path'] = db_path_abs
-    config['Database']['dbms'] = 'duckdb'
-    config['Database']['index_table'] = 'modellake_index'
-    
-    # Write back
-    with open(config_path, 'w') as f:
-        config.write(f)
-    
-    return config_path
+    with _config_lock:  # Thread-safe config update
+        if _BLEND_INTERNAL_PATH is None:
+            raise FileNotFoundError("Blend_internal not found. Please clone it first: git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal")
+        
+        import configparser
+        config_path = os.path.join(_BLEND_INTERNAL_PATH, 'config', 'config.ini')
+        
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Blend_internal config.ini not found at {config_path}")
+        
+        # Read and update config
+        config = configparser.ConfigParser()
+        config.read(config_path)
+        
+        # Convert relative path to absolute if needed
+        if not os.path.isabs(db_path):
+            # Make path relative to ModelSearchDemo root
+            modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            db_path_abs = os.path.abspath(os.path.join(modelsearch_root, db_path))
+        else:
+            db_path_abs = os.path.abspath(db_path)
+        
+        # Update config
+        if 'Database' not in config:
+            config['Database'] = {}
+        config['Database']['path'] = db_path_abs
+        config['Database']['dbms'] = 'duckdb'
+        config['Database']['index_table'] = 'modellake_index'
+        
+        # Write back
+        with open(config_path, 'w') as f:
+            config.write(f)
+        
+        return config_path
 
 def _lazy_import_blend():
     """Lazy import Blend_internal functions after config is set."""
     global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch
+    # Use double-checked locking pattern for thread safety
     if _SingleColumnJoinSearch is None:
-        # CRITICAL: Ensure Blend_internal path is at the front of sys.path
-        # This must be done before any imports to ensure Blend_internal's src/utils.py
-        # is found instead of ModelSearchDemo's src/utils/ package
-        if _BLEND_INTERNAL_PATH and os.path.exists(_BLEND_INTERNAL_PATH):
-            if _BLEND_INTERNAL_PATH in sys.path:
-                sys.path.remove(_BLEND_INTERNAL_PATH)
-            sys.path.insert(0, _BLEND_INTERNAL_PATH)
-        
-        # CRITICAL: Temporarily remove ModelSearchDemo root from sys.path if present
-        # This prevents Python from finding ModelSearchDemo's src/utils/ package
-        # instead of Blend_internal's src/utils.py module
-        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        modelsearch_removed = False
-        if modelsearch_root in sys.path:
-            sys.path.remove(modelsearch_root)
-            modelsearch_removed = True
-        
-        try:
-            # Clear any cached imports to ensure fresh import with updated config
-            # IMPORTANT: Also clear src.utils to ensure Blend_internal's src/utils.py is used
-            # instead of ModelSearchDemo's src/utils/ package
-            modules_to_clear = [
-                'src.Tasks.SingleColumnJoinSearch',
-                'src.Tasks.MultiColumnJoinSearch', 
-                'src.Tasks.KeywordSearch',
-                'src.Tasks.UnionSearch',
-                'src.Plan',
-                'src.Operators',
-                'src.Operators.OperatorBase',
-                'src.Operators.Seekers',
-                'src.Operators.Seekers.MultiColumnOverlap',
-                'src.DBHandler',
-                'src.utils',  # CRITICAL: Clear this to use Blend_internal's src/utils.py
-            ]
-            for mod in modules_to_clear:
-                if mod in sys.modules:
-                    del sys.modules[mod]
-            
-            # Now import with updated config
-            # The Blend_internal path is now at sys.path[0], so src.utils will resolve to
-            # Blend_internal/src/utils.py instead of ModelSearchDemo/src/utils/
-            from src.Tasks.SingleColumnJoinSearch import SingleColumnJoinSearch
-            from src.Tasks.MultiColumnJoinSearch import MultiColumnJoinSearch
-            from src.Tasks.KeywordSearch import KeywordSearch
-            from src.Tasks.UnionSearch import UnionSearch
-            _SingleColumnJoinSearch = SingleColumnJoinSearch
-            _MultiColumnJoinSearch = MultiColumnJoinSearch
-            _KeywordSearch = KeywordSearch
-            _UnionSearch = UnionSearch
-        finally:
-            # Restore ModelSearchDemo root to sys.path if we removed it
-            if modelsearch_removed and modelsearch_root not in sys.path:
-                sys.path.append(modelsearch_root)
+        with _import_lock:
+            # Check again after acquiring lock (double-checked locking)
+            if _SingleColumnJoinSearch is None:
+                # CRITICAL: Ensure Blend_internal path is at the front of sys.path
+                # This must be done before any imports to ensure Blend_internal's src/utils.py
+                # is found instead of ModelSearchDemo's src/utils/ package
+                if _BLEND_INTERNAL_PATH and os.path.exists(_BLEND_INTERNAL_PATH):
+                    if _BLEND_INTERNAL_PATH in sys.path:
+                        sys.path.remove(_BLEND_INTERNAL_PATH)
+                    sys.path.insert(0, _BLEND_INTERNAL_PATH)
+                
+                # CRITICAL: Temporarily remove ModelSearchDemo root from sys.path if present
+                # This prevents Python from finding ModelSearchDemo's src/utils/ package
+                # instead of Blend_internal's src/utils.py module
+                modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+                modelsearch_removed = False
+                if modelsearch_root in sys.path:
+                    sys.path.remove(modelsearch_root)
+                    modelsearch_removed = True
+                
+                try:
+                    # Clear any cached imports to ensure fresh import with updated config
+                    # IMPORTANT: Also clear src.utils to ensure Blend_internal's src/utils.py is used
+                    # instead of ModelSearchDemo's src/utils/ package
+                    modules_to_clear = [
+                        'src.Tasks.SingleColumnJoinSearch',
+                        'src.Tasks.MultiColumnJoinSearch', 
+                        'src.Tasks.KeywordSearch',
+                        'src.Tasks.UnionSearch',
+                        'src.Plan',
+                        'src.Operators',
+                        'src.Operators.OperatorBase',
+                        'src.Operators.Seekers',
+                        'src.Operators.Seekers.MultiColumnOverlap',
+                        'src.DBHandler',
+                        'src.utils',  # CRITICAL: Clear this to use Blend_internal's src/utils.py
+                    ]
+                    for mod in modules_to_clear:
+                        if mod in sys.modules:
+                            del sys.modules[mod]
+                    
+                    # Now import with updated config
+                    # The Blend_internal path is now at sys.path[0], so src.utils will resolve to
+                    # Blend_internal/src/utils.py instead of ModelSearchDemo/src/utils/
+                    from src.Tasks.SingleColumnJoinSearch import SingleColumnJoinSearch
+                    from src.Tasks.MultiColumnJoinSearch import MultiColumnJoinSearch
+                    from src.Tasks.KeywordSearch import KeywordSearch
+                    from src.Tasks.UnionSearch import UnionSearch
+                    _SingleColumnJoinSearch = SingleColumnJoinSearch
+                    _MultiColumnJoinSearch = MultiColumnJoinSearch
+                    _KeywordSearch = KeywordSearch
+                    _UnionSearch = UnionSearch
+                finally:
+                    # Restore ModelSearchDemo root to sys.path if we removed it
+                    if modelsearch_removed and modelsearch_root not in sys.path:
+                        sys.path.append(modelsearch_root)
 
 
 def get_tables_from_modellake_db(

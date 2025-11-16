@@ -31,7 +31,12 @@ def _get_search_table2table():
     """Lazy import search_table2table from tab2tab."""
     global _tab2tab_search_table2table
     if _tab2tab_search_table2table is None:
+        import sys
+        print(f"   [DEBUG] Importing search_table2table from tab2tab...")
+        sys.stdout.flush()
         from src.search.tab2tab import search_table2table
+        print(f"   [DEBUG] Import successful")
+        sys.stdout.flush()
         _tab2tab_search_table2table = search_table2table
     return _tab2tab_search_table2table
 
@@ -236,11 +241,14 @@ def search_card2tab2card(
         List of model IDs that have similar tables
     """
     # Print pipeline overview
+    import sys
+    sys.stdout.flush()  # Ensure output is flushed
     print(f"\n{'='*60}")
     print(f"🔍 Card2Tab2Card Search Pipeline")
     print(f"{'='*60}")
     print(f"Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards")
     print(f"{'='*60}\n")
+    sys.stdout.flush()
     # Get tables for the query model
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
         query_tables = get_tables_for_model(
@@ -397,10 +405,17 @@ def search_card2tab2card(
     print(f"✅ Database: {db_path}")
     
     try:
+        print(f"🔎 Getting search_table2table function...")
+        sys.stdout.flush()
         search_table2table = _get_search_table2table()
+        print(f"✅ Got search_table2table function")
+        sys.stdout.flush()
         print(f"🔎 Searching for similar tables...")
+        print(f"   Query type: {type(query)}, Search type: {search_type}, k: {k}, db_path: {db_path}")
+        sys.stdout.flush()
         similar_table_ids = search_table2table(query, search_type, k, db_path=db_path)
         print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
+        sys.stdout.flush()
         
         if not similar_table_ids:
             print(f"⚠️  No tables retrieved, cannot proceed to Step 3")
@@ -568,16 +583,44 @@ def search_card2tab2card(
         # Use filenames (basenames) to match with relationship_df
         table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
         print(f"📝 Matching {len(table_basenames)} table basenames against relationship data...")
+        print(f"   Sample basenames: {table_basenames[:3]}{'...' if len(table_basenames) > 3 else ''}")
         
-        for filename in retrieved_filenames:
-            basename = os.path.basename(filename)
-            matched_models = relationship_df.loc[
-                relationship_df["csv_basename"] == basename,
-                "modelId"
-            ].dropna().unique().tolist()
-            if matched_models:
-                similar_model_ids.update(matched_models)
-                table_to_models[filename] = matched_models
+        # Check what columns are available in relationship_df
+        print(f"   Relationship DF columns: {list(relationship_df.columns)[:10]}{'...' if len(relationship_df.columns) > 10 else ''}")
+        print(f"   Relationship DF shape: {relationship_df.shape}")
+        
+        # Try multiple column name variations
+        basename_col = None
+        for col in ["csv_basename", "basename", "filename", "table_basename"]:
+            if col in relationship_df.columns:
+                basename_col = col
+                break
+        
+        if basename_col is None:
+            print(f"⚠️  Could not find basename column in relationship_df. Available columns: {list(relationship_df.columns)}")
+            # Try to find a column that might contain basenames
+            for col in relationship_df.columns:
+                if "basename" in col.lower() or "filename" in col.lower() or "csv" in col.lower():
+                    basename_col = col
+                    print(f"   Using column: {col}")
+                    break
+        
+        if basename_col is None:
+            print(f"❌ No suitable column found for matching basenames")
+            similar_model_ids = set()
+        else:
+            for filename in retrieved_filenames:
+                basename = os.path.basename(filename)
+                matched_models = relationship_df.loc[
+                    relationship_df[basename_col] == basename,
+                    "modelId"
+                ].dropna().unique().tolist()
+                if matched_models:
+                    similar_model_ids.update(matched_models)
+                    table_to_models[filename] = matched_models
+                    print(f"   ✅ Matched {basename} -> {len(matched_models)} models")
+                else:
+                    print(f"   ⚠️  No match for {basename}")
         
         print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
