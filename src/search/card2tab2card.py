@@ -449,6 +449,25 @@ def search_card2tab2card(
         print(f"❌ Error in table search: {e}")
         import traceback
         traceback.print_exc()
+        # Still save intermediate results even on error
+        if output_json:
+            result = {
+                "query_model": model_id,
+                "query_tables": query_tables,
+                "model_ids": [],
+                "intermediate": {
+                    "retrieved_table_ids": [],
+                    "retrieved_table_filenames": [],
+                    "table_id_to_filename": {},
+                    "table_to_models": {},
+                    "error": str(e)
+                }
+            }
+            os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+            with open(output_json, 'w', encoding='utf-8') as f:
+                import json
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            print(f"✅ Results saved to {output_json} (with error)")
         return []
     
     # Step 3: Retrieved Tables -> Corresponding ModelCards

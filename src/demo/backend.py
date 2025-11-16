@@ -257,6 +257,14 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
                     tmp_json_path = tmp_file.name
                 
+                # Log query details for debugging
+                if search_type_name == 'single_column':
+                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} values")
+                elif search_type_name == 'keyword':
+                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} keywords")
+                elif search_type_name == 'unionable':
+                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: DataFrame with {len(query_parsed) if query_parsed is not None else 0} rows")
+                
                 results = search_card2tab2card(
                     model_id=model_id,
                     relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
@@ -272,17 +280,26 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 # Read intermediate results from JSON
                 intermediate_data = {}
                 try:
+                    # Wait a bit for file to be written (in case of async issues)
+                    import time
+                    time.sleep(0.1)
+                    
                     # Check if file exists and is not empty
-                    if os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0:
-                        with open(tmp_json_path, 'r', encoding='utf-8') as f:
-                            content = f.read().strip()
-                            if content:  # Check if file has content
-                                full_results = json.loads(content)
-                                intermediate_data = full_results.get('intermediate', {})
-                            else:
-                                logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file is empty")
+                    if os.path.exists(tmp_json_path):
+                        file_size = os.path.getsize(tmp_json_path)
+                        if file_size > 0:
+                            with open(tmp_json_path, 'r', encoding='utf-8') as f:
+                                content = f.read().strip()
+                                if content:  # Check if file has content
+                                    full_results = json.loads(content)
+                                    intermediate_data = full_results.get('intermediate', {})
+                                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Loaded intermediate data from {tmp_json_path} ({file_size} bytes)")
+                                else:
+                                    logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file is empty")
+                        else:
+                            logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file exists but is empty (0 bytes)")
                     else:
-                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file does not exist or is empty")
+                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file does not exist: {tmp_json_path}")
                     
                     # Clean up temp file
                     if os.path.exists(tmp_json_path):
