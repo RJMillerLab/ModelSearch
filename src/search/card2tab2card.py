@@ -296,6 +296,24 @@ def search_card2tab2card(
     
     if not query_tables:
         print(f"⚠️  Warning: No tables found for model {model_id}")
+        # Still save intermediate results even if no query tables
+        if output_json:
+            result = {
+                "query_model": model_id,
+                "query_tables": [],
+                "model_ids": [],
+                "intermediate": {
+                    "retrieved_table_ids": [],
+                    "retrieved_table_filenames": [],
+                    "table_id_to_filename": {},
+                    "table_to_models": {}
+                }
+            }
+            os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+            with open(output_json, 'w', encoding='utf-8') as f:
+                import json
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            print(f"✅ Results saved to {output_json}")
         return []
     
     # Step 1: Query -> ModelCard -> Tables (Part of Pipeline)
@@ -386,6 +404,24 @@ def search_card2tab2card(
         
         if not similar_table_ids:
             print(f"⚠️  No tables retrieved, cannot proceed to Step 3")
+            # Still save intermediate results even if no tables retrieved
+            if output_json:
+                result = {
+                    "query_model": model_id,
+                    "query_tables": query_tables,
+                    "model_ids": [],
+                    "intermediate": {
+                        "retrieved_table_ids": [],
+                        "retrieved_table_filenames": [],
+                        "table_id_to_filename": {},
+                        "table_to_models": {}
+                    }
+                }
+                os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+                with open(output_json, 'w', encoding='utf-8') as f:
+                    import json
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                print(f"✅ Results saved to {output_json}")
             return []
         
         # Get filenames for retrieved tables from database
@@ -428,6 +464,24 @@ def search_card2tab2card(
         # Get distinct filenames for the retrieved table IDs
         if not similar_table_ids:
             print(f"⚠️  No table IDs to map")
+            # Still save intermediate results even if no tables found
+            if output_json:
+                result = {
+                    "query_model": model_id,
+                    "query_tables": query_tables,
+                    "model_ids": [],
+                    "intermediate": {
+                        "retrieved_table_ids": [],
+                        "retrieved_table_filenames": [],
+                        "table_id_to_filename": {},
+                        "table_to_models": {}
+                    }
+                }
+                os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+                with open(output_json, 'w', encoding='utf-8') as f:
+                    import json
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                print(f"✅ Results saved to {output_json}")
             return []
         
         table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
@@ -443,6 +497,29 @@ def search_card2tab2card(
         
         if not retrieved_filenames:
             print(f"⚠️  No filenames found for retrieved table IDs")
+            # Still save intermediate results even if no filenames found
+            if output_json:
+                # Build table_id to filename mapping (even if empty)
+                table_id_to_filename_dict = {}
+                for tid, filename in tableid_to_filename.items():
+                    table_id_to_filename_dict[tid] = filename
+                
+                result = {
+                    "query_model": model_id,
+                    "query_tables": query_tables,
+                    "model_ids": [],
+                    "intermediate": {
+                        "retrieved_table_ids": similar_table_ids if 'similar_table_ids' in locals() else [],
+                        "retrieved_table_filenames": [],
+                        "table_id_to_filename": table_id_to_filename_dict,
+                        "table_to_models": {}
+                    }
+                }
+                os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+                with open(output_json, 'w', encoding='utf-8') as f:
+                    import json
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                print(f"✅ Results saved to {output_json}")
             return []
     finally:
         con.close()

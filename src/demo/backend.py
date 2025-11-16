@@ -272,12 +272,36 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 # Read intermediate results from JSON
                 intermediate_data = {}
                 try:
-                    with open(tmp_json_path, 'r', encoding='utf-8') as f:
-                        full_results = json.load(f)
-                        intermediate_data = full_results.get('intermediate', {})
-                    os.unlink(tmp_json_path)  # Clean up temp file
+                    # Check if file exists and is not empty
+                    if os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0:
+                        with open(tmp_json_path, 'r', encoding='utf-8') as f:
+                            content = f.read().strip()
+                            if content:  # Check if file has content
+                                full_results = json.loads(content)
+                                intermediate_data = full_results.get('intermediate', {})
+                            else:
+                                logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file is empty")
+                    else:
+                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file does not exist or is empty")
+                    
+                    # Clean up temp file
+                    if os.path.exists(tmp_json_path):
+                        os.unlink(tmp_json_path)
+                except json.JSONDecodeError as e:
+                    logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON decode error: {str(e)}")
+                    # Try to read file content for debugging
+                    if os.path.exists(tmp_json_path):
+                        try:
+                            with open(tmp_json_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                                logger.log(f"  ⚠️  File content (first 200 chars): {content[:200]}")
+                        except:
+                            pass
+                        os.unlink(tmp_json_path)
                 except Exception as e:
                     logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Could not read intermediate data: {str(e)}")
+                    if os.path.exists(tmp_json_path):
+                        os.unlink(tmp_json_path)
                 
                 logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Found {len(results)} results")
                 return search_type_name, {
@@ -483,6 +507,69 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
 def health():
     """Health check endpoint"""
     return jsonify({"status": "ok"})
+
+
+@app.route('/api/table-preview', methods=['GET'])
+def get_table_preview():
+    """Get preview of CSV table (first 5 rows, first 5 columns)"""
+    table_path = request.args.get('path')
+    if not table_path:
+        return jsonify({"status": "error", "message": "path parameter is required"}), 400
+    
+    # Try to find the CSV file
+    csv_path = None
+    if os.path.exists(table_path):
+        csv_path = table_path
+    else:
+        # Try common locations
+        basename = os.path.basename(table_path)
+        for base_dir in [
+            "data_citationlake/processed/deduped_hugging_csvs",
+            "data_citationlake/processed/deduped_github_csvs",
+            "data_citationlake/processed/tables_output"
+        ]:
+            full_path = os.path.join(base_dir, basename)
+            if os.path.exists(full_path):
+                csv_path = full_path
+                break
+    
+    if not csv_path or not os.path.exists(csv_path):
+        return jsonify({
+            "status": "error",
+            "message": f"CSV file not found: {table_path}"
+        }), 404
+    
+    try:
+        import pandas as pd
+        # Read first 5 rows and first 5 columns
+        df = pd.read_csv(csv_path, nrows=5)
+        # Limit to first 5 columns
+        df_preview = df.iloc[:, :5]
+        
+        # Convert to markdown table
+        markdown_lines = []
+        # Header
+        headers = df_preview.columns.tolist()
+        markdown_lines.append("| " + " | ".join(str(h) for h in headers) + " |")
+        markdown_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+        # Rows
+        for _, row in df_preview.iterrows():
+            markdown_lines.append("| " + " | ".join(str(val) for val in row.values) + " |")
+        
+        markdown_table = "\n".join(markdown_lines)
+        
+        return jsonify({
+            "status": "success",
+            "table_path": csv_path,
+            "rows": len(df_preview),
+            "columns": len(df_preview.columns),
+            "markdown": markdown_table
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Error reading CSV: {str(e)}"
+        }), 500
 
 
 @app.route('/api/search', methods=['POST'])
