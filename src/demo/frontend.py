@@ -181,21 +181,17 @@ HTML_TEMPLATE = """
             cursor: pointer;
             color: #007bff;
             font-weight: bold;
-            padding: 5px 10px;
-            margin: 5px 0;
+            padding: 2px 5px;
+            margin-right: 5px;
             display: inline-block;
             user-select: none;
+            transition: transform 0.2s;
+            font-size: 12px;
         }
         .expand-toggle:hover {
             color: #0056b3;
-            text-decoration: underline;
         }
-        .expand-toggle::before {
-            content: '▶ ';
-            display: inline-block;
-            transition: transform 0.2s;
-        }
-        .expand-toggle.expanded::before {
+        .expand-toggle.expanded {
             transform: rotate(90deg);
         }
         .collapsible-content {
@@ -486,8 +482,18 @@ HTML_TEMPLATE = """
                             // Handle both old format (array) and new format (object with model_ids and intermediate)
                             const models = Array.isArray(data) ? data : (data.model_ids || []);
                             const intermediate = data.intermediate || {};
-                            const hasMore = models.length > 5;
-                            const hasIntermediate = intermediate && Object.keys(intermediate).length > 0;
+                            const tableToModels = intermediate.table_to_models || {};
+                            
+                            // Build reverse mapping: model_id -> list of tables
+                            const modelToTables = {};
+                            Object.entries(tableToModels).forEach(([table, modelList]) => {
+                                modelList.forEach(modelId => {
+                                    if (!modelToTables[modelId]) {
+                                        modelToTables[modelId] = [];
+                                    }
+                                    modelToTables[modelId].push(table);
+                                });
+                            });
                             
                             return `
                                 <div class="search-type-section">
@@ -495,49 +501,38 @@ HTML_TEMPLATE = """
                                         <h4>${type} (${models.length} models)</h4>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}">
-                                        <h5 style="margin-top: 10px; color: #495057;">Model Results:</h5>
-                                        <ul class="result-list">
-                                            ${models.length > 0 ? models.slice(0, 5).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('') : '<li>No results</li>'}
-                                            ${hasMore ? `
-                                                <li class="collapsible-content" id="${sectionId}-more">
-                                                    ${models.slice(5).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
-                                                </li>
-                                                <li>
-                                                    <span class="expand-toggle" onclick="toggleExpand('${sectionId}-more', this)">
-                                                        Show ${models.length - 5} more
-                                                    </span>
-                                                </li>
-                                            ` : ''}
-                                        </ul>
-                                        ${hasIntermediate ? `
-                                            <h5 style="margin-top: 15px; color: #495057;">Intermediate State:</h5>
-                                            <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                                                <strong>Retrieved Tables:</strong> ${intermediate.retrieved_table_filenames ? intermediate.retrieved_table_filenames.length : 0} tables
-                                                ${intermediate.retrieved_table_filenames && intermediate.retrieved_table_filenames.length > 0 ? `
-                                                    <div style="margin-top: 5px; max-height: 150px; overflow-y: auto; background: #f8f9fa; padding: 8px; border-radius: 4px;">
-                                                        ${intermediate.retrieved_table_filenames.slice(0, 10).map(f => `<div style="padding: 2px 0;">📄 ${f}</div>`).join('')}
-                                                        ${intermediate.retrieved_table_filenames.length > 10 ? `<div style="color: #999;">... and ${intermediate.retrieved_table_filenames.length - 10} more</div>` : ''}
-                                                    </div>
-                                                ` : ''}
-                                            </div>
-                                            ${intermediate.table_to_models && Object.keys(intermediate.table_to_models).length > 0 ? `
-                                                <div style="margin-top: 10px; font-size: 12px; color: #666;">
-                                                    <strong>Table → Model Mapping:</strong>
-                                                    <div style="margin-top: 5px; max-height: 200px; overflow-y: auto; background: #f8f9fa; padding: 8px; border-radius: 4px;">
-                                                        ${Object.entries(intermediate.table_to_models).slice(0, 5).map(([table, modelList]) => `
-                                                            <div style="padding: 4px 0; border-bottom: 1px solid #dee2e6;">
-                                                                <div style="font-weight: bold; color: #495057;">📄 ${table.split('/').pop()}</div>
-                                                                <div style="margin-left: 15px; margin-top: 2px;">
-                                                                    → ${modelList.slice(0, 3).map(m => `<a href="https://huggingface.co/${m}" target="_blank" style="color: #007bff;">${m}</a>`).join(', ')}
-                                                                    ${modelList.length > 3 ? ` (+${modelList.length - 3} more)` : ''}
+                                        <ul class="result-list" style="list-style: none; padding: 0;">
+                                            ${models.length > 0 ? models.map((m, idx) => {
+                                                const modelId = typeof m === 'string' ? m : (m.model_id || m);
+                                                const modelUrl = typeof m === 'string' ? `https://huggingface.co/${modelId}` : (m.url || `https://huggingface.co/${modelId}`);
+                                                const modelTables = modelToTables[modelId] || [];
+                                                const modelExpandId = `${sectionId}-model-${idx}`;
+                                                const hasTables = modelTables.length > 0;
+                                                
+                                                return `
+                                                    <li class="result-item" style="margin-bottom: 8px;">
+                                                        <div style="display: flex; align-items: center;">
+                                                            <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 8px; ${hasTables ? '' : 'display: none;'}">
+                                                                ▶
+                                                            </span>
+                                                            <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500;">
+                                                                ${modelId}
+                                                            </a>
+                                                        </div>
+                                                        ${hasTables ? `
+                                                            <div class="collapsible-content" id="${modelExpandId}" style="margin-left: 20px; margin-top: 5px;">
+                                                                <div style="font-size: 12px; color: #666;">
+                                                                    <strong>From Tables (${modelTables.length}):</strong>
+                                                                    <div style="margin-top: 5px; padding: 8px; background: #f8f9fa; border-radius: 4px; max-height: 150px; overflow-y: auto;">
+                                                                        ${modelTables.map(table => `<div style="padding: 2px 0;">📄 ${table.split('/').pop()}</div>`).join('')}
+                                                                    </div>
                                                                 </div>
                                                             </div>
-                                                        `).join('')}
-                                                        ${Object.keys(intermediate.table_to_models).length > 5 ? `<div style="color: #999; margin-top: 5px;">... and ${Object.keys(intermediate.table_to_models).length - 5} more table mappings</div>` : ''}
-                                                    </div>
-                                                </div>
-                                            ` : ''}
-                                        ` : ''}
+                                                        ` : ''}
+                                                    </li>
+                                                `;
+                                            }).join('') : '<li>No results</li>'}
+                                        </ul>
                                     </div>
                                 </div>
                             `;
