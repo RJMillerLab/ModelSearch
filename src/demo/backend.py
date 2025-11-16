@@ -528,32 +528,79 @@ def health():
 
 @app.route('/api/table-preview', methods=['GET'])
 def get_table_preview():
-    """Get preview of CSV table (first 5 rows, first 5 columns)"""
+    """Get preview of CSV table (first 5 rows, first 5 columns) from modellake.db"""
     table_path = request.args.get('path')
     if not table_path:
         return jsonify({"status": "error", "message": "path parameter is required"}), 400
     
-    # Try to find the CSV file
+    # Extract basename from path
+    basename = os.path.basename(table_path)
+    
+    # Try to find CSV path from modellake.db first
     csv_path = None
-    if os.path.exists(table_path):
-        csv_path = table_path
-    else:
-        # Try common locations
-        basename = os.path.basename(table_path)
-        for base_dir in [
-            "data_citationlake/processed/deduped_hugging_csvs",
-            "data_citationlake/processed/deduped_github_csvs",
-            "data_citationlake/processed/tables_output"
-        ]:
-            full_path = os.path.join(base_dir, basename)
-            if os.path.exists(full_path):
-                csv_path = full_path
-                break
+    try:
+        import duckdb
+        con = duckdb.connect(DEFAULT_DB_PATH, read_only=True)
+        try:
+            # Query modellake.db to get table_group and table_type for this filename
+            query = """
+                SELECT DISTINCT filename, table_group, table_type 
+                FROM modellake_index 
+                WHERE filename = ? AND rowid = -1
+                LIMIT 1
+            """
+            result = con.execute(query, [basename]).fetchone()
+            
+            if result:
+                filename, table_group, table_type = result
+                # Map table_group/table_type to directory
+                # Based on create_index_duckdb.py, table_group is the basename without extension
+                # table_type can be 'ori', 't', etc.
+                
+                # Try to construct path based on table_type and common patterns
+                # table_type 'ori' might be in deduped directories, 't' might be in tables_output
+                if table_type == 'ori' or table_type is None:
+                    # Try deduped directories first
+                    for base_dir in [
+                        "data_citationlake/processed/deduped_hugging_csvs",
+                        "data_citationlake/processed/deduped_github_csvs"
+                    ]:
+                        full_path = os.path.join(base_dir, basename)
+                        if os.path.exists(full_path):
+                            csv_path = full_path
+                            break
+                
+                # If not found, try tables_output
+                if not csv_path:
+                    full_path = os.path.join("data_citationlake/processed/tables_output", basename)
+                    if os.path.exists(full_path):
+                        csv_path = full_path
+        finally:
+            con.close()
+    except Exception as e:
+        # If DB query fails, fall back to file system search
+        pass
+    
+    # Fallback: Try common locations if not found from DB
+    if not csv_path:
+        if os.path.exists(table_path):
+            csv_path = table_path
+        else:
+            # Try common locations
+            for base_dir in [
+                "data_citationlake/processed/deduped_hugging_csvs",
+                "data_citationlake/processed/deduped_github_csvs",
+                "data_citationlake/processed/tables_output"
+            ]:
+                full_path = os.path.join(base_dir, basename)
+                if os.path.exists(full_path):
+                    csv_path = full_path
+                    break
     
     if not csv_path or not os.path.exists(csv_path):
         return jsonify({
             "status": "error",
-            "message": f"CSV file not found: {table_path}"
+            "message": f"CSV file not found: {basename}. Searched in modellake.db and common directories."
         }), 404
     
     try:
@@ -563,19 +610,24 @@ def get_table_preview():
         # Limit to first 5 columns
         df_preview = df.iloc[:, :5]
         
-        # Convert to simple HTML table (no markdown)
+        # Convert to simple HTML table
         html_table = "<table style='width: 100%; border-collapse: collapse; font-size: 11px;'>"
         # Header
         headers = df_preview.columns.tolist()
         html_table += "<tr>"
         for h in headers:
-            html_table += f"<th style='border: 1px solid #dee2e6; padding: 4px; background: #f8f9fa; text-align: left;'>{h}</th>"
+            # Escape HTML special characters
+            h_escaped = str(h).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            html_table += f"<th style='border: 1px solid #dee2e6; padding: 4px; background: #f8f9fa; text-align: left;'>{h_escaped}</th>"
         html_table += "</tr>"
         # Rows
         for _, row in df_preview.iterrows():
             html_table += "<tr>"
             for val in row.values:
-                html_table += f"<td style='border: 1px solid #dee2e6; padding: 4px;'>{val}</td>"
+                # Escape HTML special characters and handle NaN
+                val_str = str(val) if pd.notna(val) else ''
+                val_escaped = val_str.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                html_table += f"<td style='border: 1px solid #dee2e6; padding: 4px;'>{val_escaped}</td>"
             html_table += "</tr>"
         html_table += "</table>"
         

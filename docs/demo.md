@@ -21,12 +21,10 @@ python -m src.demo.frontend
 ```bash
 # 1. Submit backend
 sbatch scripts/run_backend.sh
-
 # 2. Check hostname from output (look for "Hostname: xxx")
 tail -f logs/backend_*.out
-
 # 3. Submit frontend (use the hostname from step 2)
-BACKEND_HOSTNAME=watgpu308 sbatch scripts/run_frontend.sh
+BACKEND_HOSTNAME=watgpu108 sbatch scripts/run_frontend.sh
 ```
 
 ### On Local Machine
