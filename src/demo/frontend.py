@@ -288,8 +288,8 @@ HTML_TEMPLATE = """
     </div>
     
     <script>
-               let currentJobId = null;
-               let eventSource = null;
+        let currentJobId = null;
+        let eventSource = null;
         
         async function startSearch() {
             const mode = document.querySelector('input[name="search_mode"]:checked').value;
@@ -527,10 +527,12 @@ HTML_TEMPLATE = """
                                                                         ${modelTables.map((table, tableIdx) => {
                                                                             const tableBasename = table.split('/').pop();
                                                                             const tableExpandId = `${modelExpandId}-table-${tableIdx}`;
+                                                                            // Escape single quotes in table path for onclick
+                                                                            const tablePathEscaped = table.replace(/'/g, "\\'");
                                                                             return `
                                                                                 <div style="padding: 4px 0; border-bottom: 1px solid #dee2e6;">
                                                                                     <div style="display: flex; align-items: center;">
-                                                                                        <span class="expand-toggle" onclick="toggleTablePreview('${tableExpandId}', '${table}', this)" style="margin-right: 5px; font-size: 10px;">
+                                                                                        <span class="expand-toggle" onclick="toggleTablePreview('${tableExpandId}', '${tablePathEscaped}', this)" style="margin-right: 5px; font-size: 10px;">
                                                                                             ▶
                                                                                         </span>
                                                                                         <span style="font-weight: 500; color: #495057;">📄 ${tableBasename}</span>
