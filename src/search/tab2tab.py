@@ -10,6 +10,7 @@ import os
 import sys
 from typing import List, Dict, Optional, Iterable, Any
 import pandas as pd
+import numpy as np
 import argparse
 import duckdb
 
@@ -41,6 +42,7 @@ _SingleColumnJoinSearch = None
 _MultiColumnJoinSearch = None
 _KeywordSearch = None
 _UnionSearch = None
+_ComplexSearch = None
 
 # Thread lock for thread-safe lazy import and config update
 import threading
@@ -86,7 +88,7 @@ def _update_blend_config(db_path: str):
 
 def _lazy_import_blend():
     """Lazy import Blend_internal functions after config is set."""
-    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch
+    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch, _ComplexSearch
     # Use double-checked locking pattern for thread safety
     if _SingleColumnJoinSearch is None:
         with _import_lock:
@@ -118,11 +120,13 @@ def _lazy_import_blend():
                         'src.Tasks.MultiColumnJoinSearch', 
                         'src.Tasks.KeywordSearch',
                         'src.Tasks.UnionSearch',
+                        'src.Tasks.ComplexSearch',
                         'src.Plan',
                         'src.Operators',
                         'src.Operators.OperatorBase',
                         'src.Operators.Seekers',
                         'src.Operators.Seekers.MultiColumnOverlap',
+                        'src.Operators.Seekers.Correlation',
                         'src.DBHandler',
                         'src.utils',  # CRITICAL: Clear this to use Blend_internal's src/utils.py
                     ]
@@ -137,10 +141,12 @@ def _lazy_import_blend():
                     from src.Tasks.MultiColumnJoinSearch import MultiColumnJoinSearch
                     from src.Tasks.KeywordSearch import KeywordSearch
                     from src.Tasks.UnionSearch import UnionSearch
+                    from src.Tasks.ComplexSearch import ComplexSearch
                     _SingleColumnJoinSearch = SingleColumnJoinSearch
                     _MultiColumnJoinSearch = MultiColumnJoinSearch
                     _KeywordSearch = KeywordSearch
                     _UnionSearch = UnionSearch
+                    _ComplexSearch = ComplexSearch
                 finally:
                     # Restore ModelSearchDemo root to sys.path if we removed it
                     if modelsearch_removed and modelsearch_root not in sys.path:
@@ -311,11 +317,66 @@ def search_unionable(
     return plan.run()
 
 
+def search_complex(
+    examples: pd.DataFrame,
+    queries: Optional[Iterable[str]] = None,
+    target: Optional[Iterable[float]] = None,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Complex search combining union, join, and correlation sub-pipelines.
+    
+    Args:
+        examples: DataFrame with example data (used for union and join sub-pipelines)
+        queries: Optional iterable of query strings (currently not used in ComplexSearch implementation)
+        target: Optional iterable of target numeric values for correlation search
+               If None, will try to auto-detect numeric column from examples
+        k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    # Always update config before importing
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # Auto-detect target if not provided
+    if target is None:
+        # Try to find a numeric column in examples
+        numeric_cols = examples.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            # Use first numeric column as target
+            target = examples[numeric_cols[0]].tolist()
+            print(f"ℹ️  Auto-detected target column: {numeric_cols[0]}")
+        else:
+            # If no numeric column, create dummy target (all zeros)
+            # This will make correlation search less effective but won't fail
+            target = [0.0] * len(examples)
+            print(f"⚠️  No numeric column found, using dummy target values")
+    
+    # Use first column as queries if not provided
+    if queries is None:
+        queries = examples[examples.columns[0]].astype(str).tolist()
+    
+    plan = _ComplexSearch(examples, queries, target, k)
+    return plan.run()
+
+
 def search_table2table(
     query: Any,
     search_type: str = "single_column",
     k: int = 10,
-    db_path: Optional[str] = None
+    db_path: Optional[str] = None,
+    target: Optional[Iterable[float]] = None
 ) -> List[int]:
     """
     Unified interface for table-to-table search.
@@ -323,10 +384,12 @@ def search_table2table(
     Args:
         query: Query data - can be:
             - Iterable of values (for single_column)
-            - pd.DataFrame (for multi_column)
+            - pd.DataFrame (for multi_column or complex)
             - List[str] (for keyword)
-        search_type: Type of search - "single_column", "multi_column", "keyword", or "unionable"
+        search_type: Type of search - "single_column", "multi_column", "keyword", "unionable", or "complex"
         k: Number of results to return
+        db_path: Path to modellake.db (optional)
+        target: Optional target values for complex search (iterable of floats)
     
     Returns:
         List of table IDs (integers)
@@ -347,8 +410,12 @@ def search_table2table(
         if not isinstance(query, pd.DataFrame):
             raise ValueError("For unionable search, query must be a pandas DataFrame")
         return search_unionable(query, k, db_path=db_path)
+    elif search_type == "complex":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For complex search, query must be a pandas DataFrame")
+        return search_complex(query, target=target, k=k, db_path=db_path)
     else:
-        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', or 'unionable'")
+        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', 'unionable', or 'complex'")
 
 
 def main():

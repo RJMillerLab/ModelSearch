@@ -346,11 +346,12 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 logger.log(f"  ❌ [Card2Tab2Card-{search_type_name}] Error: {str(e)}")
                 return search_type_name, {"error": str(e)}
         
-        # Prepare queries for all three search types
+        # Prepare queries for all search types
         # Follow Blend_internal logic from README examples:
         # - keyword: use headers (column names) - rowid=-1 in index
         # - single_column: use values from first column (Seekers.SC(dataset[clm_name], k) uses single column)
         # - unionable: use entire DataFrame
+        # - complex: use entire DataFrame as examples, auto-detect target column
         queries_parsed = {}
         if query_df is not None:
             # For single_column: use values from first column
@@ -370,10 +371,20 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             
             # For unionable: use entire DataFrame (same as Blend_internal)
             queries_parsed['unionable'] = query_df
+            
+            # For complex: use entire DataFrame as examples
+            # ComplexSearch will auto-detect numeric column as target
+            queries_parsed['complex'] = query_df
+            logger.log(f"ℹ️  Complex search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            # Try to identify potential target column
+            numeric_cols = query_df.select_dtypes(include=['number']).columns.tolist()
+            if numeric_cols:
+                logger.log(f"   Potential target columns (numeric): {numeric_cols[:3]}{'...' if len(numeric_cols) > 3 else ''}")
         else:
             queries_parsed['single_column'] = None
             queries_parsed['keyword'] = None
             queries_parsed['unionable'] = None
+            queries_parsed['complex'] = None
         
         # Run all searches in parallel using ThreadPoolExecutor
         card2card_results = None
@@ -388,7 +399,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             card2tab2card_all = {
                 'single_column': [],
                 'keyword': [],
-                'unionable': []
+                'unionable': [],
+                'complex': []
             }
         else:
             with ThreadPoolExecutor(max_workers=4) as executor:
@@ -398,9 +410,13 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 # Submit Card2Card
                 futures['card2card'] = executor.submit(run_card2card)
                 
-                # Submit all three Card2Tab2Card search types
-                for search_type_name in ['single_column', 'keyword', 'unionable']:
+                # Submit all Card2Tab2Card search types (including complex)
+                for search_type_name in ['single_column', 'keyword', 'unionable', 'complex']:
                     query_parsed = queries_parsed[search_type_name]
+                    # Skip if query is None (e.g., no CSV loaded)
+                    if query_parsed is None:
+                        logger.log(f"  ⚠️  Skipping {search_type_name} - no query data available")
+                        continue
                     futures[search_type_name] = executor.submit(
                         run_card2tab2card_search, 
                         search_type_name, 

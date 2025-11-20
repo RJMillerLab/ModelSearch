@@ -777,6 +777,7 @@ HTML_TEMPLATE = """
                                 <option value="single_column">Single Column</option>
                                 <option value="keyword">Keyword</option>
                                 <option value="unionable">Unionable</option>
+                                <option value="complex">Complex (Union+Join+Correlation)</option>
                             </select>
                         </label>
                         <label>
