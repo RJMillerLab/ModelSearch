@@ -380,11 +380,20 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             numeric_cols = query_df.select_dtypes(include=['number']).columns.tolist()
             if numeric_cols:
                 logger.log(f"   Potential target columns (numeric): {numeric_cols[:3]}{'...' if len(numeric_cols) > 3 else ''}")
+            
+            # For correlation: use entire DataFrame, will extract source and target columns
+            queries_parsed['correlation'] = query_df
+            logger.log(f"ℹ️  Correlation search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            if numeric_cols:
+                logger.log(f"   Will use first column as source, first numeric column '{numeric_cols[0]}' as target")
+            else:
+                logger.log(f"   ⚠️  No numeric column found - correlation search may not work well")
         else:
             queries_parsed['single_column'] = None
             queries_parsed['keyword'] = None
             queries_parsed['unionable'] = None
             queries_parsed['complex'] = None
+            queries_parsed['correlation'] = None
         
         # Run all searches in parallel using ThreadPoolExecutor
         card2card_results = None
@@ -400,7 +409,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 'single_column': [],
                 'keyword': [],
                 'unionable': [],
-                'complex': []
+                'complex': [],
+                'correlation': []
             }
         else:
             with ThreadPoolExecutor(max_workers=4) as executor:
@@ -410,8 +420,10 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 # Submit Card2Card
                 futures['card2card'] = executor.submit(run_card2card)
                 
-                # Submit all Card2Tab2Card search types (including complex)
-                for search_type_name in ['single_column', 'keyword', 'unionable', 'complex']:
+                # Submit all Card2Tab2Card search types (run all: single_column, keyword, unionable, complex, correlation)
+                all_search_types = ['single_column', 'keyword', 'unionable', 'complex', 'correlation']
+                logger.log(f"  ℹ️  Running {len(all_search_types)} search types: {', '.join(all_search_types)}")
+                for search_type_name in all_search_types:
                     query_parsed = queries_parsed[search_type_name]
                     # Skip if query is None (e.g., no CSV loaded)
                     if query_parsed is None:

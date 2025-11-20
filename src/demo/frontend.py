@@ -778,6 +778,7 @@ HTML_TEMPLATE = """
                                 <option value="keyword">Keyword</option>
                                 <option value="unionable">Unionable</option>
                                 <option value="complex">Complex (Union+Join+Correlation)</option>
+                                <option value="correlation">Correlation</option>
                             </select>
                         </label>
                         <label>

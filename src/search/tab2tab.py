@@ -43,6 +43,7 @@ _MultiColumnJoinSearch = None
 _KeywordSearch = None
 _UnionSearch = None
 _ComplexSearch = None
+_CorrelationSearch = None
 
 # Thread lock for thread-safe lazy import and config update
 import threading
@@ -88,7 +89,7 @@ def _update_blend_config(db_path: str):
 
 def _lazy_import_blend():
     """Lazy import Blend_internal functions after config is set."""
-    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch, _ComplexSearch
+    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch, _ComplexSearch, _CorrelationSearch
     # Use double-checked locking pattern for thread safety
     if _SingleColumnJoinSearch is None:
         with _import_lock:
@@ -121,6 +122,7 @@ def _lazy_import_blend():
                         'src.Tasks.KeywordSearch',
                         'src.Tasks.UnionSearch',
                         'src.Tasks.ComplexSearch',
+                        'src.Tasks.CorrelationSearch',
                         'src.Plan',
                         'src.Operators',
                         'src.Operators.OperatorBase',
@@ -142,11 +144,13 @@ def _lazy_import_blend():
                     from src.Tasks.KeywordSearch import KeywordSearch
                     from src.Tasks.UnionSearch import UnionSearch
                     from src.Tasks.ComplexSearch import ComplexSearch
+                    from src.Tasks.CorrelationSearch import CorrelationSearch
                     _SingleColumnJoinSearch = SingleColumnJoinSearch
                     _MultiColumnJoinSearch = MultiColumnJoinSearch
                     _KeywordSearch = KeywordSearch
                     _UnionSearch = UnionSearch
                     _ComplexSearch = ComplexSearch
+                    _CorrelationSearch = CorrelationSearch
                 finally:
                     # Restore ModelSearchDemo root to sys.path if we removed it
                     if modelsearch_removed and modelsearch_root not in sys.path:
@@ -371,12 +375,55 @@ def search_complex(
     return plan.run()
 
 
+def search_correlation(
+    source_column: Iterable[str],
+    target_column: Iterable[float],
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Correlation search - finds tables with correlated categorical and numerical columns.
+    
+    Args:
+        source_column: List of categorical/string values (source column)
+        target_column: List of numeric values (target column) - must match source_column length
+        k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    # Always update config before importing
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # Convert to lists if needed
+    source_list = list(source_column)
+    target_list = list(target_column)
+    
+    # Validate lengths match
+    if len(source_list) != len(target_list):
+        raise ValueError(f"Source and target columns must have same length. Got {len(source_list)} and {len(target_list)}")
+    
+    plan = _CorrelationSearch(source_list, target_list, k)
+    return plan.run()
+
+
 def search_table2table(
     query: Any,
     search_type: str = "single_column",
     k: int = 10,
     db_path: Optional[str] = None,
-    target: Optional[Iterable[float]] = None
+    target: Optional[Iterable[float]] = None,
+    source_column: Optional[Iterable[str]] = None,
+    target_column: Optional[Iterable[float]] = None
 ) -> List[int]:
     """
     Unified interface for table-to-table search.
@@ -384,12 +431,14 @@ def search_table2table(
     Args:
         query: Query data - can be:
             - Iterable of values (for single_column)
-            - pd.DataFrame (for multi_column or complex)
+            - pd.DataFrame (for multi_column, complex, or correlation)
             - List[str] (for keyword)
-        search_type: Type of search - "single_column", "multi_column", "keyword", "unionable", or "complex"
+        search_type: Type of search - "single_column", "multi_column", "keyword", "unionable", "complex", or "correlation"
         k: Number of results to return
         db_path: Path to modellake.db (optional)
         target: Optional target values for complex search (iterable of floats)
+        source_column: Optional source column for correlation search (iterable of strings)
+        target_column: Optional target column for correlation search (iterable of floats)
     
     Returns:
         List of table IDs (integers)
@@ -414,8 +463,22 @@ def search_table2table(
         if not isinstance(query, pd.DataFrame):
             raise ValueError("For complex search, query must be a pandas DataFrame")
         return search_complex(query, target=target, k=k, db_path=db_path)
+    elif search_type == "correlation":
+        if source_column is None or target_column is None:
+            # Try to extract from DataFrame if query is DataFrame
+            if isinstance(query, pd.DataFrame):
+                # Use first column as source, first numeric column as target
+                source_column = query[query.columns[0]].astype(str).tolist()
+                numeric_cols = query.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) > 0:
+                    target_column = query[numeric_cols[0]].tolist()
+                else:
+                    raise ValueError("For correlation search with DataFrame, at least one numeric column is required")
+            else:
+                raise ValueError("For correlation search, either provide source_column and target_column, or a DataFrame with numeric columns")
+        return search_correlation(source_column, target_column, k, db_path=db_path)
     else:
-        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', 'unionable', or 'complex'")
+        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', 'unionable', 'complex', or 'correlation'")
 
 
 def main():

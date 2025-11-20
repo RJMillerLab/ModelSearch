@@ -403,10 +403,12 @@ def search_card2tab2card(
     elif search_type == "single_column":
         print(f"✅ Query values: {query[:5]}{'...' if len(query) > 5 else ''}")
         print(f"   (Total {len(query)} values)")
-    elif search_type in ["multi_column", "unionable", "complex"]:
+    elif search_type in ["multi_column", "unionable", "complex", "correlation"]:
         print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
         if search_type == "complex":
             print(f"   Complex search combines: Union + Join + Correlation sub-pipelines")
+        elif search_type == "correlation":
+            print(f"   Correlation search: finds tables with correlated categorical and numerical columns")
     print(f"✅ Table Search Top K: {table_search_k}")
     print(f"✅ ModelCard Top K: {modelcard_k}")
     
@@ -425,7 +427,24 @@ def search_card2tab2card(
         print(f"🔎 Searching for similar tables...")
         print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}, db_path: {db_path}")
         sys.stdout.flush()
-        similar_table_ids = search_table2table(query, search_type, table_search_k, db_path=db_path)
+        
+        # Handle correlation search specially - need to extract source and target columns
+        if search_type == "correlation" and isinstance(query, pd.DataFrame):
+            # Use first column as source, first numeric column as target
+            source_col = query[query.columns[0]].astype(str).tolist()
+            numeric_cols = query.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0:
+                target_col = query[numeric_cols[0]].tolist()
+                print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
+                similar_table_ids = search_table2table(
+                    query, search_type, table_search_k, db_path=db_path,
+                    source_column=source_col, target_column=target_col
+                )
+            else:
+                print(f"⚠️  No numeric column found for correlation search, skipping...")
+                similar_table_ids = []
+        else:
+            similar_table_ids = search_table2table(query, search_type, table_search_k, db_path=db_path)
         print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
         sys.stdout.flush()
         
