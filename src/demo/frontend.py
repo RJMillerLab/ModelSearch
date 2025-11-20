@@ -614,8 +614,125 @@ HTML_TEMPLATE = """
                 html += '</div>';
             }
             
+            // Add Integration Section
+            html += `
+                <div class="integration-section" style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
+                    <h3>Table Integration</h3>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
+                        Integrate tables from Card2Tab2Card search results using Union or Intersection.
+                    </p>
+                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                        <label>
+                            Search Type:
+                            <select id="integration_search_type" style="margin-left: 5px; padding: 5px;">
+                                <option value="single_column">Single Column</option>
+                                <option value="keyword">Keyword</option>
+                                <option value="unionable">Unionable</option>
+                            </select>
+                        </label>
+                        <label>
+                            Integration Type:
+                            <select id="integration_type" style="margin-left: 5px; padding: 5px;">
+                                <option value="union">Union</option>
+                                <option value="intersection">Intersection</option>
+                            </select>
+                        </label>
+                        <label>
+                            Top K Tables:
+                            <input type="number" id="integration_k" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 60px;">
+                        </label>
+                        <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" 
+                                style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                            🔗 Integrate Tables
+                        </button>
+                    </div>
+                    <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
+                </div>
+            `;
+            
             container.innerHTML = html;
             document.getElementById('resultsSection').classList.add('active');
+        }
+        
+        async function runIntegration(jobId) {
+            const searchType = document.getElementById('integration_search_type').value;
+            const integrationType = document.getElementById('integration_type').value;
+            const k = parseInt(document.getElementById('integration_k').value);
+            
+            const integrationBtn = document.getElementById('integrationBtn');
+            const resultsDiv = document.getElementById('integrationResults');
+            
+            // Disable button and show loading
+            integrationBtn.disabled = true;
+            integrationBtn.textContent = '⏳ Integrating...';
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running integration...</div>';
+            
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/integrate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        job_id: jobId,
+                        search_type: searchType,
+                        integration_type: integrationType,
+                        k: k
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    // Display integration results
+                    const stats = data.stats;
+                    const table = data.integrated_table;
+                    
+                    let html = `
+                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
+                            <h4 style="margin-top: 0; color: #28a745;">✅ Integration Successful</h4>
+                            <div style="margin-bottom: 15px;">
+                                <strong>Statistics:</strong><br>
+                                Input: ${stats.input_tables} tables, ${stats.input_rows} total rows<br>
+                                Output: ${stats.output_rows} rows, ${stats.output_columns} columns<br>
+                                Type: ${stats.integration_type}
+                            </div>
+                            <div style="max-height: 400px; overflow: auto;">
+                                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                                    <thead>
+                                        <tr style="background: #f8f9fa; position: sticky; top: 0;">
+                                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left;">${col}</th>`).join('')}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${table.data.slice(0, 100).map(row => `
+                                            <tr>
+                                                ${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell || ''}</td>`).join('')}
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = `
+                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                            <strong>❌ Integration Failed:</strong> ${data.message || 'Unknown error'}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                        <strong>❌ Error:</strong> ${error.message}
+                    </div>
+                `;
+            } finally {
+                integrationBtn.disabled = false;
+                integrationBtn.textContent = '🔗 Integrate Tables';
+            }
         }
         
         function showError(message) {

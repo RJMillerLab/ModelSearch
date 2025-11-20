@@ -27,6 +27,7 @@ from src.search import (
     get_tables_for_model,
     load_relationship_parquet
 )
+from src.integration.table_integration import integrate_tables_from_search_results
 
 
 app = Flask(__name__)
@@ -769,6 +770,84 @@ def stream_logs(job_id: str):
         yield f"data: {json.dumps({'status': 'completed'})}\n\n"
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+@app.route('/api/integrate', methods=['POST'])
+def integrate():
+    """Table integration endpoint - integrates tables from search results"""
+    try:
+        data = request.json or {}
+        job_id = data.get('job_id')
+        search_type = data.get('search_type', 'single_column')  # Which search type to use
+        integration_type = data.get('integration_type', 'union')  # union or intersection
+        k = data.get('k', 10)  # Number of tables to integrate, and max rows in result
+        
+        if not job_id:
+            return jsonify({"status": "error", "message": "job_id is required"}), 400
+        
+        # Find the search results file
+        search_results_path = os.path.join('data', f'compare_search_{job_id}.json')
+        
+        if not os.path.exists(search_results_path):
+            return jsonify({
+                "status": "error",
+                "message": f"Search results not found for job_id: {job_id}. Please run a search first."
+            }), 404
+        
+        # Run integration
+        result = integrate_tables_from_search_results(
+            search_results_path,
+            search_type=search_type,
+            integration_type=integration_type,
+            k=k
+        )
+        
+        if not result["success"]:
+            return jsonify({
+                "status": "error",
+                "message": result.get("error", "Integration failed")
+            }), 500
+        
+        # Convert DataFrame to JSON-serializable format
+        integrated_df = result["integrated_table"]
+        integrated_data = {
+            "columns": list(integrated_df.columns),
+            "data": integrated_df.fillna("").astype(str).values.tolist(),
+            "shape": list(integrated_df.shape)
+        }
+        
+        # Save integration results
+        integration_output_path = os.path.join('data', f'integration_{job_id}_{search_type}.json')
+        os.makedirs('data', exist_ok=True)
+        integration_result = {
+            "job_id": job_id,
+            "search_type": search_type,
+            "integration_type": integration_type,
+            "k": k,
+            "stats": result["stats"],
+            "integrated_table": integrated_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        with open(integration_output_path, 'w', encoding='utf-8') as f:
+            json.dump(integration_result, f, ensure_ascii=False, indent=2)
+        
+        return jsonify({
+            "status": "success",
+            "job_id": job_id,
+            "integration_type": integration_type,
+            "stats": result["stats"],
+            "integrated_table": integrated_data,
+            "output_path": integration_output_path
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
 
 
 if __name__ == '__main__':
