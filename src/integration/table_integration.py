@@ -35,21 +35,70 @@ def load_table_from_file(table_path: str) -> Optional[pd.DataFrame]:
     """
     Load a table from CSV file.
     
+    Supports multiple path locations including data_citationlake and CitationLake paths.
+    
     Args:
-        table_path: Path to CSV file
+        table_path: Path to CSV file (can be basename or full path)
         
     Returns:
         DataFrame or None if file not found
     """
-    # Try multiple possible locations
-    possible_paths = [
-        table_path,
-        os.path.join("data_citationlake/processed/deduped_hugging_csvs", os.path.basename(table_path)),
-        os.path.join("data_citationlake/processed/deduped_github_csvs", os.path.basename(table_path)),
-        os.path.join("data_citationlake/processed/tables_output", os.path.basename(table_path)),
+    basename = os.path.basename(table_path)
+    
+    # Build comprehensive list of possible base directories
+    possible_base_dirs = [
+        # data_citationlake paths (current structure)
+        "data_citationlake/processed/deduped_hugging_csvs",
+        "data_citationlake/processed/deduped_github_csvs",
+        "data_citationlake/processed/tables_output",
+        # CitationLake paths (if CitationLake is in parent directory)
+        "../CitationLake/data/processed/deduped_hugging_csvs",
+        "../CitationLake/data/processed/deduped_github_csvs",
+        "../CitationLake/data/processed/tables_output",
+        # Alternative CitationLake paths
+        "../../CitationLake/data/processed/deduped_hugging_csvs",
+        "../../CitationLake/data/processed/deduped_github_csvs",
+        "../../CitationLake/data/processed/tables_output",
     ]
     
+    # Strategy 1: Try the provided path first (if it's already a full path)
+    possible_paths = [table_path]
+    
+    # Strategy 2: Try to infer directory from table_path if it contains path hints
+    path_lower = table_path.lower()
+    if "hugging" in path_lower:
+        for base_dir in [d for d in possible_base_dirs if "hugging" in d.lower()]:
+            if base_dir.startswith('../'):
+                abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+            else:
+                abs_base_dir = os.path.abspath(base_dir)
+            possible_paths.append(os.path.join(abs_base_dir, basename))
+    elif "github" in path_lower:
+        for base_dir in [d for d in possible_base_dirs if "github" in d.lower()]:
+            if base_dir.startswith('../'):
+                abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+            else:
+                abs_base_dir = os.path.abspath(base_dir)
+            possible_paths.append(os.path.join(abs_base_dir, basename))
+    
+    # Strategy 3: Add all possible base directories
+    for base_dir in possible_base_dirs:
+        if base_dir.startswith('../'):
+            abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+        else:
+            abs_base_dir = os.path.abspath(base_dir)
+        possible_paths.append(os.path.join(abs_base_dir, basename))
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_paths = []
     for path in possible_paths:
+        if path not in seen:
+            seen.add(path)
+            unique_paths.append(path)
+    
+    # Try each path
+    for path in unique_paths:
         if os.path.exists(path):
             try:
                 df = pd.read_csv(path)
@@ -58,7 +107,8 @@ def load_table_from_file(table_path: str) -> Optional[pd.DataFrame]:
                 print(f"⚠️  Error loading {path}: {e}")
                 continue
     
-    print(f"⚠️  Table not found: {table_path}")
+    print(f"⚠️  Table not found: {table_path} (basename: {basename})")
+    print(f"   Searched in {len(unique_paths)} possible locations")
     return None
 
 

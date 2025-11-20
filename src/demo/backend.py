@@ -546,7 +546,7 @@ def health():
 
 @app.route('/api/table-preview', methods=['GET'])
 def get_table_preview():
-    """Get preview of CSV table (first 5 rows, first 5 columns) from modellake.db"""
+    """Get preview of CSV table (first 5 rows, first 5 columns) from modellake.db or file path"""
     table_path = request.args.get('path')
     if not table_path:
         return jsonify({"status": "error", "message": "path parameter is required"}), 400
@@ -554,79 +554,190 @@ def get_table_preview():
     # Extract basename from path
     basename = os.path.basename(table_path)
     
-    # Try to find CSV path from modellake.db first
+    # Log the request
+    print(f"\n{'='*60}")
+    print(f"🔍 Table Preview Request")
+    print(f"{'='*60}")
+    print(f"Input path: {table_path}")
+    print(f"Basename: {basename}")
+    
+    # Build comprehensive list of possible base directories
+    # Include both data_citationlake and CitationLake paths
+    possible_base_dirs = [
+        # data_citationlake paths (current structure)
+        "data_citationlake/processed/deduped_hugging_csvs",
+        "data_citationlake/processed/deduped_github_csvs",
+        "data_citationlake/processed/tables_output",
+        # CitationLake paths (if CitationLake is in parent directory)
+        "../CitationLake/data/processed/deduped_hugging_csvs",
+        "../CitationLake/data/processed/deduped_github_csvs",
+        "../CitationLake/data/processed/tables_output",
+        # Alternative CitationLake paths
+        "../../CitationLake/data/processed/deduped_hugging_csvs",
+        "../../CitationLake/data/processed/deduped_github_csvs",
+        "../../CitationLake/data/processed/tables_output",
+    ]
+    
+    # Try to find CSV path from modellake.db first to get hints
     csv_path = None
+    table_type_hint = None
+    db_info = None
+    
+    # Method 1: Try to get path hint from DB
+    print(f"\n📊 Method 1: Querying modellake.db...")
     try:
         import duckdb
-        con = duckdb.connect(DEFAULT_DB_PATH, read_only=True)
-        try:
-            # Query modellake.db to get table_group and table_type for this filename
-            query = """
-                SELECT DISTINCT filename, table_group, table_type 
-                FROM modellake_index 
-                WHERE filename = ? AND rowid = -1
-                LIMIT 1
-            """
-            result = con.execute(query, [basename]).fetchone()
-            
-            if result:
-                filename, table_group, table_type = result
-                # Map table_group/table_type to directory
-                # Based on create_index_duckdb.py, table_group is the basename without extension
-                # table_type can be 'ori', 't', etc.
+        if os.path.exists(DEFAULT_DB_PATH):
+            print(f"   DB path: {DEFAULT_DB_PATH}")
+            con = duckdb.connect(DEFAULT_DB_PATH, read_only=True)
+            try:
+                # Query modellake.db to get table_group and table_type for this filename
+                query = """
+                    SELECT DISTINCT filename, table_group, table_type 
+                    FROM modellake_index 
+                    WHERE filename = ? AND rowid = -1
+                    LIMIT 1
+                """
+                result = con.execute(query, [basename]).fetchone()
                 
-                # Try to construct path based on table_type and common patterns
-                # table_type 'ori' might be in deduped directories, 't' might be in tables_output
-                if table_type == 'ori' or table_type is None:
-                    # Try deduped directories first
-                    for base_dir in [
-                        "data_citationlake/processed/deduped_hugging_csvs",
-                        "data_citationlake/processed/deduped_github_csvs"
-                    ]:
-                        full_path = os.path.join(base_dir, basename)
-                        if os.path.exists(full_path):
-                            csv_path = full_path
-                            break
-                
-                # If not found, try tables_output
-                if not csv_path:
-                    full_path = os.path.join("data_citationlake/processed/tables_output", basename)
-                    if os.path.exists(full_path):
-                        csv_path = full_path
-        finally:
-            con.close()
+                if result:
+                    filename, table_group, table_type = result
+                    table_type_hint = table_type
+                    db_info = {
+                        "filename": filename,
+                        "table_group": table_group,
+                        "table_type": table_type
+                    }
+                    print(f"   ✅ Found in DB: filename={filename}, table_group={table_group}, table_type={table_type}")
+                    # table_type can be 'ori', 'str', 'tr', etc.
+                    # 'ori' usually means original files in deduped directories
+                else:
+                    print(f"   ⚠️  Not found in DB for basename: {basename}")
+            finally:
+                con.close()
+        else:
+            print(f"   ⚠️  DB file not found: {DEFAULT_DB_PATH}")
     except Exception as e:
         # If DB query fails, fall back to file system search
+        print(f"   ⚠️  DB query error (non-fatal): {str(e)}")
         pass
     
-    # Fallback: Try common locations if not found from DB
-    if not csv_path:
-        if os.path.exists(table_path):
-            csv_path = table_path
-        else:
-            # Try common locations
-            for base_dir in [
-                "data_citationlake/processed/deduped_hugging_csvs",
-                "data_citationlake/processed/deduped_github_csvs",
-                "data_citationlake/processed/tables_output"
-            ]:
-                full_path = os.path.join(base_dir, basename)
+    # Method 2: Try to find file using path-based strategies
+    print(f"\n📁 Method 2: Searching file system...")
+    
+    # Strategy 1: If table_path is already a valid absolute or relative path, try it first
+    if os.path.exists(table_path):
+        csv_path = table_path
+        print(f"   ✅ Found at provided path: {table_path}")
+    else:
+        print(f"   ⚠️  Provided path does not exist, searching alternatives...")
+        
+        # Strategy 2: Try to infer directory from table_path if it contains path hints
+        # Check if table_path contains hints like "hugging", "github", etc.
+        path_lower = table_path.lower()
+        if "hugging" in path_lower:
+            print(f"   🔍 Path contains 'hugging', searching hugging directories...")
+            # Try hugging directories first
+            for base_dir in [d for d in possible_base_dirs if "hugging" in d.lower()]:
+                if base_dir.startswith('../'):
+                    abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+                else:
+                    abs_base_dir = os.path.abspath(base_dir)
+                full_path = os.path.join(abs_base_dir, basename)
+                print(f"      Trying: {full_path}")
                 if os.path.exists(full_path):
                     csv_path = full_path
+                    print(f"      ✅ Found: {full_path}")
                     break
+        elif "github" in path_lower:
+            print(f"   🔍 Path contains 'github', searching github directories...")
+            # Try github directories first
+            for base_dir in [d for d in possible_base_dirs if "github" in d.lower()]:
+                if base_dir.startswith('../'):
+                    abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+                else:
+                    abs_base_dir = os.path.abspath(base_dir)
+                full_path = os.path.join(abs_base_dir, basename)
+                print(f"      Trying: {full_path}")
+                if os.path.exists(full_path):
+                    csv_path = full_path
+                    print(f"      ✅ Found: {full_path}")
+                    break
+        
+        # Strategy 3: If table_type hint is available from DB, prioritize accordingly
+        if not csv_path and table_type_hint:
+            print(f"   🔍 Using DB hint (table_type={table_type_hint})...")
+            if table_type_hint == 'ori':
+                # Original files are usually in deduped directories
+                for base_dir in [d for d in possible_base_dirs if "deduped" in d.lower()]:
+                    if base_dir.startswith('../'):
+                        abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+                    else:
+                        abs_base_dir = os.path.abspath(base_dir)
+                    full_path = os.path.join(abs_base_dir, basename)
+                    print(f"      Trying: {full_path}")
+                    if os.path.exists(full_path):
+                        csv_path = full_path
+                        print(f"      ✅ Found: {full_path}")
+                        break
+            elif table_type_hint in ['str', 'tr']:
+                # Transformed files might be in tables_output
+                for base_dir in [d for d in possible_base_dirs if "tables_output" in d.lower()]:
+                    if base_dir.startswith('../'):
+                        abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+                    else:
+                        abs_base_dir = os.path.abspath(base_dir)
+                    full_path = os.path.join(abs_base_dir, basename)
+                    print(f"      Trying: {full_path}")
+                    if os.path.exists(full_path):
+                        csv_path = full_path
+                        print(f"      ✅ Found: {full_path}")
+                        break
+        
+        # Strategy 4: Exhaustive search through all possible directories
+        if not csv_path:
+            print(f"   🔍 Exhaustive search through all directories...")
+            for base_dir in possible_base_dirs:
+                # Convert relative paths to absolute
+                if base_dir.startswith('../'):
+                    # Try to resolve relative to current working directory
+                    abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
+                else:
+                    abs_base_dir = os.path.abspath(base_dir)
+                
+                full_path = os.path.join(abs_base_dir, basename)
+                if os.path.exists(full_path):
+                    csv_path = full_path
+                    print(f"      ✅ Found: {full_path}")
+                    break
+                # Don't print every failed attempt to avoid too much output
     
     if not csv_path or not os.path.exists(csv_path):
+        # Provide detailed error message with searched paths
+        print(f"\n❌ File not found after all search attempts")
+        searched_paths = [os.path.abspath(d) if not d.startswith('../') else os.path.abspath(os.path.join(os.getcwd(), d)) for d in possible_base_dirs[:6]]
+        print(f"   Searched in {len(searched_paths)} directories")
         return jsonify({
             "status": "error",
-            "message": f"CSV file not found: {basename}. Searched in modellake.db and common directories."
+            "message": f"CSV file not found: {basename}",
+            "searched_directories": searched_paths[:3],  # Show first 3 for brevity
+            "db_info": db_info,
+            "hint": "Make sure the file exists in one of the processed directories"
         }), 404
+    
+    print(f"\n✅ File found: {csv_path}")
+    print(f"{'='*60}\n")
     
     try:
         import pandas as pd
+        print(f"📖 Reading CSV file...")
         # Read first 5 rows and first 5 columns
         df = pd.read_csv(csv_path, nrows=5)
+        print(f"   ✅ Loaded: {len(df)} rows, {len(df.columns)} columns")
+        
         # Limit to first 5 columns
         df_preview = df.iloc[:, :5]
+        print(f"   ✅ Preview: {len(df_preview)} rows, {len(df_preview.columns)} columns")
         
         # Convert to simple HTML table
         html_table = "<table style='width: 100%; border-collapse: collapse; font-size: 11px;'>"
@@ -649,17 +760,26 @@ def get_table_preview():
             html_table += "</tr>"
         html_table += "</table>"
         
+        print(f"✅ Successfully generated preview HTML")
+        
         return jsonify({
             "status": "success",
             "table_path": csv_path,
             "rows": len(df_preview),
             "columns": len(df_preview.columns),
-            "html": html_table
+            "html": html_table,
+            "db_info": db_info  # Include DB info if available
         })
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Error reading CSV: {str(e)}")
+        print(f"   Traceback: {error_trace}")
         return jsonify({
             "status": "error",
-            "message": f"Error reading CSV: {str(e)}"
+            "message": f"Error reading CSV: {str(e)}",
+            "table_path": csv_path,
+            "db_info": db_info
         }), 500
 
 
