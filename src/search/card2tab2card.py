@@ -405,7 +405,9 @@ def search_card2tab2card(
         print(f"   (Total {len(query)} values)")
     elif search_type in ["multi_column", "unionable", "complex", "correlation"]:
         print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
-        if search_type == "complex":
+        if search_type == "multi_column":
+            print(f"   Multi-column search: finds tables with overlapping values across multiple columns")
+        elif search_type == "complex":
             print(f"   Complex search combines: Union + Join + Correlation sub-pipelines")
         elif search_type == "correlation":
             print(f"   Correlation search: finds tables with correlated categorical and numerical columns")

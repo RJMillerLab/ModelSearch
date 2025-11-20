@@ -776,6 +776,7 @@ HTML_TEMPLATE = """
                             <select id="integration_search_type" style="margin-left: 5px; padding: 5px;">
                                 <option value="single_column">Single Column</option>
                                 <option value="keyword">Keyword</option>
+                                <option value="multi_column">Multi Column</option>
                                 <option value="unionable">Unionable</option>
                                 <option value="complex">Complex (Union+Join+Correlation)</option>
                                 <option value="correlation">Correlation</option>
