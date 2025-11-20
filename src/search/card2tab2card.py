@@ -403,7 +403,7 @@ def search_card2tab2card(
     elif search_type == "single_column":
         print(f"✅ Query values: {query[:5]}{'...' if len(query) > 5 else ''}")
         print(f"   (Total {len(query)} values)")
-    elif search_type in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation"]:
+    elif search_type in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation", "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example"]:
         print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
         if search_type == "multi_column":
             print(f"   Multi-column search: finds tables with overlapping values across multiple columns")
@@ -415,6 +415,14 @@ def search_card2tab2card(
             print(f"   Imputation search: finds tables that can fill missing values based on examples")
         elif search_type == "augmentation":
             print(f"   Augmentation search: finds tables that can augment data based on examples")
+        elif search_type == "dependent_data":
+            print(f"   Dependent data search: finds tables with dependent column pairs")
+        elif search_type == "feature_for_ml":
+            print(f"   Feature for ML search: finds columns correlated with target but not with feature")
+        elif search_type == "multi_column_collinearity":
+            print(f"   Multi-column collinearity search: finds tables with correlated columns and multi-column overlap")
+        elif search_type == "negative_example":
+            print(f"   Negative example search: finds tables with exclusive but not inclusive examples")
     print(f"✅ Table Search Top K: {table_search_k}")
     print(f"✅ ModelCard Top K: {modelcard_k}")
     

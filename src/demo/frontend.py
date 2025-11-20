@@ -782,6 +782,10 @@ HTML_TEMPLATE = """
                                 <option value="correlation">Correlation</option>
                                 <option value="imputation">Imputation</option>
                                 <option value="augmentation">Augmentation</option>
+                                <option value="dependent_data">Dependent Data</option>
+                                <option value="feature_for_ml">Feature for ML</option>
+                                <option value="multi_column_collinearity">Multi-Column Collinearity</option>
+                                <option value="negative_example">Negative Example</option>
                             </select>
                         </label>
                         <label>

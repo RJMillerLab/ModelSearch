@@ -46,6 +46,10 @@ _ComplexSearch = None
 _CorrelationSearch = None
 _DataImputation = None
 _AugmentationByExample = None
+_DependentDataSearch = None
+_FeatureForMLSearch = None
+_MultiColumnCollinearitySearch = None
+_NegativeExampleSearch = None
 
 # Thread lock for thread-safe lazy import and config update
 import threading
@@ -91,7 +95,7 @@ def _update_blend_config(db_path: str):
 
 def _lazy_import_blend():
     """Lazy import Blend_internal functions after config is set."""
-    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch, _ComplexSearch, _CorrelationSearch, _DataImputation, _AugmentationByExample
+    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch, _ComplexSearch, _CorrelationSearch, _DataImputation, _AugmentationByExample, _DependentDataSearch, _FeatureForMLSearch, _MultiColumnCollinearitySearch, _NegativeExampleSearch
     # Use double-checked locking pattern for thread safety
     if _SingleColumnJoinSearch is None:
         with _import_lock:
@@ -127,6 +131,10 @@ def _lazy_import_blend():
                         'src.Tasks.CorrelationSearch',
                         'src.Tasks.DataImputation',
                         'src.Tasks.AugmentationByExample',
+                        'src.Tasks.DependentDataSearch',
+                        'src.Tasks.FeatureForMLSearch',
+                        'src.Tasks.MultiColumnCollinearitySearch',
+                        'src.Tasks.NegativeExampleSearch',
                         'src.Plan',
                         'src.Operators',
                         'src.Operators.OperatorBase',
@@ -151,6 +159,10 @@ def _lazy_import_blend():
                     from src.Tasks.CorrelationSearch import CorrelationSearch
                     from src.Tasks.DataImputation import DataImputation
                     from src.Tasks.AugmentationByExample import AugmentationByExample
+                    from src.Tasks.DependentDataSearch import DependentDataSearch
+                    from src.Tasks.FeatureForMLSearch import FeatureForMLSearch
+                    from src.Tasks.MultiColumnCollinearitySearch import MultiColumnCollinearitySearch
+                    from src.Tasks.NegativeExampleSearch import NegativeExampleSearch
                     _SingleColumnJoinSearch = SingleColumnJoinSearch
                     _MultiColumnJoinSearch = MultiColumnJoinSearch
                     _KeywordSearch = KeywordSearch
@@ -159,6 +171,10 @@ def _lazy_import_blend():
                     _CorrelationSearch = CorrelationSearch
                     _DataImputation = DataImputation
                     _AugmentationByExample = AugmentationByExample
+                    _DependentDataSearch = DependentDataSearch
+                    _FeatureForMLSearch = FeatureForMLSearch
+                    _MultiColumnCollinearitySearch = MultiColumnCollinearitySearch
+                    _NegativeExampleSearch = NegativeExampleSearch
                 finally:
                     # Restore ModelSearchDemo root to sys.path if we removed it
                     if modelsearch_removed and modelsearch_root not in sys.path:
@@ -534,6 +550,226 @@ def search_augmentation(
     return plan.run()
 
 
+def search_dependent_data(
+    query_dataset: pd.DataFrame,
+    dependent_column_names_1: Optional[List[str]] = None,
+    dependent_column_names_2: Optional[List[str]] = None,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Dependent Data Search: find tables with dependent column pairs.
+    
+    Args:
+        query_dataset: DataFrame with query data
+        dependent_column_names_1: First pair of dependent column names (default: first 2 columns)
+        dependent_column_names_2: Second pair of dependent column names (default: columns 2-3)
+        k: Number of results to return
+        db_path: Path to modellake.db (optional)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # Auto-extract column names if not provided
+    if dependent_column_names_1 is None:
+        if len(query_dataset.columns) < 2:
+            raise ValueError("For dependent_data search, DataFrame must have at least 2 columns")
+        dependent_column_names_1 = [query_dataset.columns[0], query_dataset.columns[1]]
+    
+    if dependent_column_names_2 is None:
+        if len(query_dataset.columns) < 4:
+            # Use columns 0-1 and 2-3 if available, otherwise use columns 0-1 twice
+            if len(query_dataset.columns) >= 3:
+                dependent_column_names_2 = [query_dataset.columns[1], query_dataset.columns[2]]
+            else:
+                dependent_column_names_2 = dependent_column_names_1.copy()
+        else:
+            dependent_column_names_2 = [query_dataset.columns[2], query_dataset.columns[3]]
+    
+    plan = _DependentDataSearch(query_dataset, dependent_column_names_1, dependent_column_names_2, k)
+    return plan.run()
+
+
+def search_feature_for_ml(
+    query_dataset: pd.DataFrame,
+    source_column_name: Optional[str] = None,
+    target_column_name: Optional[str] = None,
+    numerical_feature_column_name: Optional[str] = None,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Feature for ML Search: find columns correlated with target but not with numerical feature.
+    
+    Args:
+        query_dataset: DataFrame with query data
+        source_column_name: Source column name (default: first column)
+        target_column_name: Target column name (default: first numeric column)
+        numerical_feature_column_name: Numerical feature column name (default: second numeric column)
+        k: Number of results to return
+        db_path: Path to modellake.db (optional)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # Auto-extract column names if not provided
+    if source_column_name is None:
+        source_column_name = query_dataset.columns[0]
+    
+    numeric_cols = query_dataset.select_dtypes(include=[np.number]).columns.tolist()
+    if len(numeric_cols) < 2:
+        raise ValueError("For feature_for_ml search, DataFrame must have at least 2 numeric columns")
+    
+    if target_column_name is None:
+        target_column_name = numeric_cols[0]
+    
+    if numerical_feature_column_name is None:
+        numerical_feature_column_name = numeric_cols[1]
+    
+    plan = _FeatureForMLSearch(query_dataset, source_column_name, target_column_name, numerical_feature_column_name, k)
+    return plan.run()
+
+
+def search_multi_column_collinearity(
+    query_dataset: pd.DataFrame,
+    source_column_name: Optional[str] = None,
+    target_column_name: Optional[str] = None,
+    numerical_feature_column_name: Optional[str] = None,
+    multi_column_column_names: Optional[List[str]] = None,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Multi-Column Collinearity Search: find tables with correlated columns and multi-column overlap.
+    
+    Args:
+        query_dataset: DataFrame with query data
+        source_column_name: Source column name (default: first column)
+        target_column_name: Target column name (default: first numeric column)
+        numerical_feature_column_name: Numerical feature column name (default: second numeric column)
+        multi_column_column_names: Multi-column names for overlap (default: first 2 columns)
+        k: Number of results to return
+        db_path: Path to modellake.db (optional)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # Auto-extract column names if not provided
+    if source_column_name is None:
+        source_column_name = query_dataset.columns[0]
+    
+    numeric_cols = query_dataset.select_dtypes(include=[np.number]).columns.tolist()
+    if len(numeric_cols) < 2:
+        raise ValueError("For multi_column_collinearity search, DataFrame must have at least 2 numeric columns")
+    
+    if target_column_name is None:
+        target_column_name = numeric_cols[0]
+    
+    if numerical_feature_column_name is None:
+        numerical_feature_column_name = numeric_cols[1]
+    
+    if multi_column_column_names is None:
+        if len(query_dataset.columns) < 2:
+            raise ValueError("For multi_column_collinearity search, DataFrame must have at least 2 columns")
+        multi_column_column_names = [query_dataset.columns[0], query_dataset.columns[1]]
+    
+    plan = _MultiColumnCollinearitySearch(query_dataset, source_column_name, target_column_name, numerical_feature_column_name, multi_column_column_names, k)
+    return plan.run()
+
+
+def search_negative_example(
+    inclusive_df: pd.DataFrame,
+    exclusive_df: Optional[pd.DataFrame] = None,
+    inclusive_column_name_1: Optional[str] = None,
+    inclusive_column_name_2: Optional[str] = None,
+    exclusive_column_name_1: Optional[str] = None,
+    exclusive_column_name_2: Optional[str] = None,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Negative Example Search: find tables with exclusive but not inclusive examples.
+    
+    Args:
+        inclusive_df: DataFrame with inclusive examples
+        exclusive_df: DataFrame with exclusive examples (if None, will split inclusive_df)
+        inclusive_column_name_1: First inclusive column name (default: first column)
+        inclusive_column_name_2: Second inclusive column name (default: second column)
+        exclusive_column_name_1: First exclusive column name (default: first column)
+        exclusive_column_name_2: Second exclusive column name (default: second column)
+        k: Number of results to return
+        db_path: Path to modellake.db (optional)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # If exclusive_df not provided, split inclusive_df (use first half as inclusive, second half as exclusive)
+    if exclusive_df is None:
+        if len(inclusive_df) < 2:
+            raise ValueError("For negative_example search, DataFrame must have at least 2 rows to split")
+        mid = len(inclusive_df) // 2
+        exclusive_df = inclusive_df.iloc[mid:].copy()
+        inclusive_df = inclusive_df.iloc[:mid].copy()
+    
+    # Auto-extract column names if not provided
+    if inclusive_column_name_1 is None:
+        inclusive_column_name_1 = inclusive_df.columns[0]
+    if inclusive_column_name_2 is None:
+        if len(inclusive_df.columns) < 2:
+            raise ValueError("For negative_example search, inclusive DataFrame must have at least 2 columns")
+        inclusive_column_name_2 = inclusive_df.columns[1]
+    
+    if exclusive_column_name_1 is None:
+        exclusive_column_name_1 = exclusive_df.columns[0]
+    if exclusive_column_name_2 is None:
+        if len(exclusive_df.columns) < 2:
+            raise ValueError("For negative_example search, exclusive DataFrame must have at least 2 columns")
+        exclusive_column_name_2 = exclusive_df.columns[1]
+    
+    plan = _NegativeExampleSearch(inclusive_df, inclusive_column_name_1, inclusive_column_name_2, exclusive_df, exclusive_column_name_1, exclusive_column_name_2, k)
+    return plan.run()
+
+
 def search_table2table(
     query: Any,
     search_type: str = "single_column",
@@ -551,7 +787,7 @@ def search_table2table(
             - Iterable of values (for single_column)
             - pd.DataFrame (for multi_column, complex, or correlation)
             - List[str] (for keyword)
-        search_type: Type of search - "single_column", "multi_column", "keyword", "unionable", "complex", "correlation", "imputation", or "augmentation"
+        search_type: Type of search - "single_column", "multi_column", "keyword", "unionable", "complex", "correlation", "imputation", "augmentation", "dependent_data", "feature_for_ml", "multi_column_collinearity", or "negative_example"
         k: Number of results to return
         db_path: Path to modellake.db (optional)
         target: Optional target values for complex search (iterable of floats)
@@ -603,8 +839,24 @@ def search_table2table(
         if not isinstance(query, pd.DataFrame):
             raise ValueError("For augmentation search, query must be a pandas DataFrame")
         return search_augmentation(query, k=k, db_path=db_path)
+    elif search_type == "dependent_data":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For dependent_data search, query must be a pandas DataFrame")
+        return search_dependent_data(query, k=k, db_path=db_path)
+    elif search_type == "feature_for_ml":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For feature_for_ml search, query must be a pandas DataFrame")
+        return search_feature_for_ml(query, k=k, db_path=db_path)
+    elif search_type == "multi_column_collinearity":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For multi_column_collinearity search, query must be a pandas DataFrame")
+        return search_multi_column_collinearity(query, k=k, db_path=db_path)
+    elif search_type == "negative_example":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For negative_example search, query must be a pandas DataFrame")
+        return search_negative_example(query, k=k, db_path=db_path)
     else:
-        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', 'unionable', 'complex', 'correlation', 'imputation', or 'augmentation'")
+        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', or 'negative_example'")
 
 
 def main():

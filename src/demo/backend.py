@@ -270,7 +270,7 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} values")
                 elif search_type_name == 'keyword':
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} keywords")
-                elif search_type_name in ['multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation']:
+                elif search_type_name in ['multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', 'negative_example']:
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: DataFrame with {len(query_parsed) if query_parsed is not None else 0} rows")
                 
                 # Use provided table_search_k or default to top_k * 2 for table search
@@ -412,6 +412,38 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 logger.log(f"   Examples (complete rows): {complete_rows}, Queries (missing rows): {missing_rows}")
             else:
                 logger.log(f"   ⚠️  DataFrame needs at least 2 columns for augmentation")
+            
+            # For dependent_data: use entire DataFrame, will extract two pairs of dependent columns
+            queries_parsed['dependent_data'] = query_df
+            logger.log(f"ℹ️  Dependent data search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            if len(query_df.columns) >= 2:
+                logger.log(f"   Will use first 2 columns as first pair, columns 2-3 (or 1-2) as second pair")
+            else:
+                logger.log(f"   ⚠️  DataFrame needs at least 2 columns for dependent_data")
+            
+            # For feature_for_ml: use entire DataFrame, will extract source, target, and feature columns
+            queries_parsed['feature_for_ml'] = query_df
+            logger.log(f"ℹ️  Feature for ML search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            if numeric_cols and len(numeric_cols) >= 2:
+                logger.log(f"   Will use first column as source, '{numeric_cols[0]}' as target, '{numeric_cols[1]}' as feature")
+            else:
+                logger.log(f"   ⚠️  DataFrame needs at least 2 numeric columns for feature_for_ml")
+            
+            # For multi_column_collinearity: use entire DataFrame, will extract columns
+            queries_parsed['multi_column_collinearity'] = query_df
+            logger.log(f"ℹ️  Multi-column collinearity search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            if numeric_cols and len(numeric_cols) >= 2:
+                logger.log(f"   Will use first column as source, '{numeric_cols[0]}' as target, '{numeric_cols[1]}' as feature, first 2 columns for multi-column")
+            else:
+                logger.log(f"   ⚠️  DataFrame needs at least 2 numeric columns for multi_column_collinearity")
+            
+            # For negative_example: use entire DataFrame, will split into inclusive and exclusive
+            queries_parsed['negative_example'] = query_df
+            logger.log(f"ℹ️  Negative example search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            if len(query_df) >= 2:
+                logger.log(f"   Will split DataFrame: first half as inclusive, second half as exclusive")
+            else:
+                logger.log(f"   ⚠️  DataFrame needs at least 2 rows for negative_example")
         else:
             queries_parsed['single_column'] = None
             queries_parsed['keyword'] = None
@@ -421,6 +453,10 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             queries_parsed['correlation'] = None
             queries_parsed['imputation'] = None
             queries_parsed['augmentation'] = None
+            queries_parsed['dependent_data'] = None
+            queries_parsed['feature_for_ml'] = None
+            queries_parsed['multi_column_collinearity'] = None
+            queries_parsed['negative_example'] = None
         
         # Run all searches in parallel using ThreadPoolExecutor
         card2card_results = None
@@ -440,7 +476,11 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 'complex': [],
                 'correlation': [],
                 'imputation': [],
-                'augmentation': []
+                'augmentation': [],
+                'dependent_data': [],
+                'feature_for_ml': [],
+                'multi_column_collinearity': [],
+                'negative_example': []
             }
         else:
             with ThreadPoolExecutor(max_workers=4) as executor:
@@ -450,8 +490,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 # Submit Card2Card
                 futures['card2card'] = executor.submit(run_card2card)
                 
-                # Submit all Card2Tab2Card search types (run all: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation)
-                all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation']
+                # Submit all Card2Tab2Card search types (run all: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation, dependent_data, feature_for_ml, multi_column_collinearity, negative_example)
+                all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', 'negative_example']
                 logger.log(f"  ℹ️  Running {len(all_search_types)} search types: {', '.join(all_search_types)}")
                 for search_type_name in all_search_types:
                     query_parsed = queries_parsed[search_type_name]
