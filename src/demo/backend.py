@@ -480,25 +480,52 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             else:
                 card2tab2card_all_with_links[search_type] = results
         
-        # Save results
-        output_json = os.path.join('data', f'compare_search_{job_id}.json')
+        # Save results with timestamp-based filename
+        # Use query time (start_time) for timestamp to ensure consistency
+        timestamp_str = datetime.fromtimestamp(start_time).strftime('%Y%m%d_%H%M%S')
+        
+        # Create descriptive filename based on mode
+        if query:
+            # Query mode: use first 30 chars of query (sanitized)
+            query_safe = "".join(c for c in query[:30] if c.isalnum() or c in (' ', '-', '_')).strip()
+            query_safe = query_safe.replace(' ', '_')
+            filename = f'search_{timestamp_str}_{query_safe}.json'
+        else:
+            # ModelID mode: use model_id (sanitized)
+            model_id_safe = model_id.replace('/', '_').replace('\\', '_')
+            filename = f'search_{timestamp_str}_{model_id_safe}.json'
+        
+        # Limit filename length
+        if len(filename) > 150:
+            filename = filename[:150] + '.json'
+        
+        output_json = os.path.join('data', filename)
         os.makedirs('data', exist_ok=True)
+        
         results_data = {
             "job_id": job_id,
             "query": query,
             "model_id": model_id,
             "model_url": f"https://huggingface.co/{model_id}",
             "top_k": top_k,
+            "table_search_k": table_search_k,
             "card2card_results": card2card_results_with_links,
             "card2tab2card_results": card2tab2card_all_with_links,
             "comparison": comparison,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.fromtimestamp(start_time).isoformat(),
+            "timestamp_str": timestamp_str,
+            "filename": filename
         }
         
         with open(output_json, 'w', encoding='utf-8') as f:
             json.dump(results_data, f, ensure_ascii=False, indent=2)
         
         logger.log(f"✅ Results saved to {output_json}")
+        
+        # Also save with job_id for backward compatibility
+        job_id_json = os.path.join('data', f'compare_search_{job_id}.json')
+        with open(job_id_json, 'w', encoding='utf-8') as f:
+            json.dump(results_data, f, ensure_ascii=False, indent=2)
         
         # Calculate and log running time
         end_time = time.time()
@@ -785,9 +812,47 @@ def get_table_preview():
 
 @app.route('/api/search', methods=['POST'])
 def search():
-    """Main search endpoint - starts pipeline"""
+    """Main search endpoint - starts pipeline or loads from saved results (mimic mode)"""
     try:
         data = request.json or {}
+        search_mode = data.get('search_mode', 'new')  # 'new' or 'mimic'
+        
+        # Mimic mode: load from saved results
+        if search_mode == 'mimic':
+            filename = data.get('filename')
+            if not filename:
+                return jsonify({"status": "error", "message": "filename is required for mimic mode"}), 400
+            
+            # Try to find the file
+            file_path = os.path.join('data', filename)
+            if not os.path.exists(file_path):
+                return jsonify({
+                    "status": "error",
+                    "message": f"Saved results file not found: {filename}"
+                }), 404
+            
+            # Load the saved results
+            with open(file_path, 'r', encoding='utf-8') as f:
+                saved_results = json.load(f)
+            
+            # Create a new job_id for this mimic session
+            job_id = str(uuid.uuid4())
+            jobs[job_id] = JobLogger(job_id)
+            jobs[job_id].set_results(saved_results)
+            jobs[job_id].set_status("completed")
+            jobs[job_id].log(f"✅ Loaded saved results from {filename}")
+            jobs[job_id].log(f"   Original query: {saved_results.get('query', 'N/A')}")
+            jobs[job_id].log(f"   Original model_id: {saved_results.get('model_id', 'N/A')}")
+            jobs[job_id].log(f"   Original timestamp: {saved_results.get('timestamp', 'N/A')}")
+            
+            return jsonify({
+                "status": "completed",
+                "job_id": job_id,
+                "message": "Loaded saved results (mimic mode)",
+                "results": saved_results
+            })
+        
+        # New search mode: run actual search
         mode = data.get('mode', 'query')  # 'query' or 'modelid'
         top_k = data.get('top_k', 20)
         table_search_k = data.get('table_search_k', None)  # Optional: defaults to top_k * 2 in pipeline
@@ -824,6 +889,59 @@ def search():
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/saved-searches', methods=['GET'])
+def list_saved_searches():
+    """List all saved search results"""
+    try:
+        data_dir = 'data'
+        if not os.path.exists(data_dir):
+            return jsonify({
+                "status": "success",
+                "searches": []
+            })
+        
+        # Find all search result files
+        search_files = []
+        for filename in os.listdir(data_dir):
+            if filename.startswith('search_') and filename.endswith('.json'):
+                file_path = os.path.join(data_dir, filename)
+                try:
+                    # Read metadata without loading full file
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Get file stats
+                    stat = os.stat(file_path)
+                    
+                    search_files.append({
+                        "filename": filename,
+                        "query": data.get('query', ''),
+                        "model_id": data.get('model_id', ''),
+                        "timestamp": data.get('timestamp', ''),
+                        "timestamp_str": data.get('timestamp_str', ''),
+                        "top_k": data.get('top_k', 0),
+                        "file_size": stat.st_size,
+                        "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    })
+                except Exception as e:
+                    # Skip files that can't be read
+                    continue
+        
+        # Sort by timestamp (newest first)
+        search_files.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        return jsonify({
+            "status": "success",
+            "searches": search_files,
+            "count": len(search_files)
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 
 @app.route('/api/status/<job_id>', methods=['GET'])
@@ -906,7 +1024,25 @@ def integrate():
             return jsonify({"status": "error", "message": "job_id is required"}), 400
         
         # Find the search results file
+        # Try job_id-based filename first (for backward compatibility)
         search_results_path = os.path.join('data', f'compare_search_{job_id}.json')
+        
+        # If not found, try to find by job_id in saved results
+        if not os.path.exists(search_results_path):
+            # Look for files containing this job_id
+            data_dir = 'data'
+            if os.path.exists(data_dir):
+                for filename in os.listdir(data_dir):
+                    if filename.startswith('search_') and filename.endswith('.json'):
+                        file_path = os.path.join(data_dir, filename)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            if data.get('job_id') == job_id:
+                                search_results_path = file_path
+                                break
+                        except:
+                            continue
         
         if not os.path.exists(search_results_path):
             return jsonify({

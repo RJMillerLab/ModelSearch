@@ -244,6 +244,30 @@ HTML_TEMPLATE = """
         
         <div class="input-section">
             <div class="mode-selector">
+                <label style="margin-bottom: 10px;">Search Type:</label>
+                <div class="mode-option">
+                    <input type="radio" id="search_type_new" name="search_type" value="new" checked onchange="toggleSearchType()">
+                    <label for="search_type_new">New Search</label>
+                </div>
+                <div class="mode-option">
+                    <input type="radio" id="search_type_mimic" name="search_type" value="mimic" onchange="toggleSearchType()">
+                    <label for="search_type_mimic">Mimic Search (Load Saved)</label>
+                </div>
+            </div>
+            
+            <div id="mimic-input" class="mode-input" style="display: none; margin-top: 15px;">
+                <label for="saved_search_select">Select Saved Search:</label>
+                <select id="saved_search_select" style="width: 100%; padding: 8px; margin-top: 5px;" onchange="loadSavedSearchInfo()">
+                    <option value="">Loading saved searches...</option>
+                </select>
+                <button id="loadMimicBtn" onclick="loadMimicSearch()" style="margin-top: 10px; padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%;">
+                    🔄 Load Saved Results
+                </button>
+                <p id="mimic_info" style="font-size: 11px; color: #666; margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; display: none;"></p>
+            </div>
+            
+            <div id="new-search-inputs">
+            <div class="mode-selector" style="margin-top: 15px;">
                 <label style="margin-bottom: 10px;">Search Mode:</label>
                 <div class="mode-option">
                     <input type="radio" id="mode_query" name="search_mode" value="query" checked onchange="toggleMode()">
@@ -287,6 +311,7 @@ HTML_TEMPLATE = """
             </p>
             
             <button id="searchBtn" onclick="startSearch()">Start Search</button>
+            </div>
         </div>
         
         <div id="progressSection" class="progress-section">
@@ -333,7 +358,130 @@ HTML_TEMPLATE = """
             }
         }
         
+        function toggleSearchType() {
+            const searchType = document.querySelector('input[name="search_type"]:checked').value;
+            const mimicInput = document.getElementById('mimic-input');
+            const newSearchInputs = document.getElementById('new-search-inputs');
+            
+            if (searchType === 'mimic') {
+                mimicInput.style.display = 'block';
+                newSearchInputs.style.display = 'none';
+                loadSavedSearches();
+            } else {
+                mimicInput.style.display = 'none';
+                newSearchInputs.style.display = 'block';
+            }
+        }
+        
+        async function loadSavedSearches() {
+            const select = document.getElementById('saved_search_select');
+            select.innerHTML = '<option value="">Loading...</option>';
+            
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/saved-searches');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    select.innerHTML = '<option value="">Select a saved search...</option>';
+                    
+                    if (data.searches.length === 0) {
+                        select.innerHTML = '<option value="">No saved searches found</option>';
+                        return;
+                    }
+                    
+                    data.searches.forEach(search => {
+                        const label = search.query 
+                            ? `${search.timestamp_str} - ${search.query.substring(0, 40)}...`
+                            : `${search.timestamp_str} - ${search.model_id}`;
+                        const option = document.createElement('option');
+                        option.value = search.filename;
+                        option.textContent = label;
+                        option.dataset.search = JSON.stringify(search);
+                        select.appendChild(option);
+                    });
+                } else {
+                    select.innerHTML = '<option value="">Error loading saved searches</option>';
+                }
+            } catch (error) {
+                select.innerHTML = '<option value="">Error: ' + error.message + '</option>';
+            }
+        }
+        
+        function loadSavedSearchInfo() {
+            const select = document.getElementById('saved_search_select');
+            const infoDiv = document.getElementById('mimic_info');
+            const selectedOption = select.options[select.selectedIndex];
+            
+            if (selectedOption.value && selectedOption.dataset.search) {
+                const search = JSON.parse(selectedOption.dataset.search);
+                infoDiv.innerHTML = `
+                    <strong>Query:</strong> ${search.query || 'N/A'}<br>
+                    <strong>Model ID:</strong> ${search.model_id || 'N/A'}<br>
+                    <strong>Top K:</strong> ${search.top_k}<br>
+                    <strong>Timestamp:</strong> ${search.timestamp || search.timestamp_str}
+                `;
+                infoDiv.style.display = 'block';
+            } else {
+                infoDiv.style.display = 'none';
+            }
+        }
+        
+        async function loadMimicSearch() {
+            const select = document.getElementById('saved_search_select');
+            const filename = select.value;
+            
+            if (!filename) {
+                showError('Please select a saved search');
+                return;
+            }
+            
+            const loadBtn = document.getElementById('loadMimicBtn');
+            loadBtn.disabled = true;
+            loadBtn.textContent = '⏳ Loading...';
+            
+            // Reset UI
+            document.getElementById('progressSection').classList.add('active');
+            document.getElementById('resultsSection').classList.remove('active');
+            document.getElementById('errorMsg').style.display = 'none';
+            document.getElementById('logContainer').innerHTML = '';
+            
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        search_mode: 'mimic',
+                        filename: filename
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'completed' || data.status === 'success') {
+                    currentJobId = data.job_id;
+                    // Display results directly
+                    displayResults(data.results || data);
+                    document.getElementById('progressSection').classList.remove('active');
+                } else {
+                    showError(data.message || 'Failed to load saved search');
+                }
+            } catch (error) {
+                showError('Error: ' + error.message);
+            } finally {
+                loadBtn.disabled = false;
+                loadBtn.textContent = '🔄 Load Saved Results';
+            }
+        }
+        
         async function startSearch() {
+            const searchType = document.querySelector('input[name="search_type"]:checked').value;
+            
+            // If mimic mode, use loadMimicSearch instead
+            if (searchType === 'mimic') {
+                await loadMimicSearch();
+                return;
+            }
+            
             const mode = document.querySelector('input[name="search_mode"]:checked').value;
             const query = document.getElementById('query').value.trim();
             const modelId = document.getElementById('model_id').value.trim();
@@ -360,6 +508,7 @@ HTML_TEMPLATE = """
             try {
                 // Start search
                 const requestBody = {
+                    search_mode: 'new',  // Explicitly set to new search
                     mode: mode,
                     top_k: topK,
                     table_search_k: tableSearchK
