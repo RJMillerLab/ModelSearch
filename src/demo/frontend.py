@@ -268,8 +268,23 @@ HTML_TEMPLATE = """
                 </p>
             </div>
             
-            <label for="top_k" style="margin-top: 15px;">Top K Results:</label>
-            <input type="number" id="top_k" value="20" min="1" max="100">
+            <label for="top_k" style="margin-top: 15px;">Top K Results (Final ModelCard Count):</label>
+            <input type="number" id="top_k" value="20" min="1" max="100" oninput="updateTableSearchKDefault()">
+            <p style="font-size: 11px; color: #666; margin-top: 3px;">
+                Both pipelines will return this many model cards (Card2Card and Card2Tab2Card)
+            </p>
+            
+            <label for="table_search_k" style="margin-top: 15px;">Table Search Top K (Card2Tab2Card Intermediate Step):</label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="table_search_k_slider" min="10" max="200" value="40" step="5" 
+                       style="flex: 1;" oninput="updateTableSearchKValue(this.value)">
+                <input type="number" id="table_search_k" value="40" min="10" max="200" 
+                       style="width: 80px;" oninput="updateTableSearchKSlider(this.value)">
+            </div>
+            <p style="font-size: 11px; color: #666; margin-top: 3px;">
+                Controls how many tables to retrieve in Card2Tab2Card search (intermediate step). 
+                Final modelcard count is still controlled by "Top K Results" above.
+            </p>
             
             <button id="searchBtn" onclick="startSearch()">Start Search</button>
         </div>
@@ -291,11 +306,39 @@ HTML_TEMPLATE = """
         let currentJobId = null;
         let eventSource = null;
         
+        function updateTableSearchKValue(value) {
+            document.getElementById('table_search_k').value = value;
+        }
+        
+        function updateTableSearchKSlider(value) {
+            const slider = document.getElementById('table_search_k_slider');
+            const numValue = parseInt(value);
+            if (numValue >= parseInt(slider.min) && numValue <= parseInt(slider.max)) {
+                slider.value = numValue;
+            }
+        }
+        
+        function updateTableSearchKDefault() {
+            // When top_k changes, suggest a default table_search_k (2x top_k)
+            const topK = parseInt(document.getElementById('top_k').value) || 20;
+            const suggestedTableSearchK = topK * 2;
+            // Only update if current value is close to old default (within 5)
+            const currentTableSearchK = parseInt(document.getElementById('table_search_k').value) || 40;
+            const oldTopK = Math.floor(currentTableSearchK / 2);
+            if (Math.abs(currentTableSearchK - oldTopK * 2) <= 5) {
+                // User hasn't manually adjusted much, update to new default
+                const newValue = Math.min(Math.max(suggestedTableSearchK, 10), 200);
+                document.getElementById('table_search_k').value = newValue;
+                document.getElementById('table_search_k_slider').value = newValue;
+            }
+        }
+        
         async function startSearch() {
             const mode = document.querySelector('input[name="search_mode"]:checked').value;
             const query = document.getElementById('query').value.trim();
             const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt(document.getElementById('top_k').value);
+            const tableSearchK = parseInt(document.getElementById('table_search_k').value);
             
             // Validate input based on mode
             if (mode === 'query' && !query) {
@@ -318,7 +361,8 @@ HTML_TEMPLATE = """
                 // Start search
                 const requestBody = {
                     mode: mode,
-                    top_k: topK
+                    top_k: topK,
+                    table_search_k: tableSearchK
                 };
                 if (mode === 'query') {
                     requestBody.query = query;

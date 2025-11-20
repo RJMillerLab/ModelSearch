@@ -211,6 +211,8 @@ def search_card2tab2card(
     query: Optional[Any] = None,
     search_type: str = "single_column",
     k: int = 10,
+    table_search_k: Optional[int] = None,
+    modelcard_k: Optional[int] = None,
     schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
     use_citationlake: bool = True,
     output_json: str = "data/card2tab2card_results.json",
@@ -231,7 +233,9 @@ def search_card2tab2card(
         relationship_parquet: Optional path to relationship parquet file (fallback if CitationLake not available)
         query: Optional query data for table search. If None, uses tables from the model
         search_type: Type of table search - "single_column", "multi_column", "keyword", or "unionable"
-        k: Number of table results to retrieve
+        k: Legacy parameter for backward compatibility. If table_search_k or modelcard_k are None, uses k for both.
+        table_search_k: Number of table results to retrieve (defaults to k if not provided)
+        modelcard_k: Number of final model card results to return (defaults to k if not provided)
         schema_log_path: Path to parquet_schema.log (for CitationLake approach)
         use_citationlake: Whether to use CitationLake get_from (default: True)
         output_json: Optional path to save results as JSON
@@ -240,6 +244,11 @@ def search_card2tab2card(
     Returns:
         List of model IDs that have similar tables
     """
+    # Handle backward compatibility: if table_search_k or modelcard_k are None, use k
+    if table_search_k is None:
+        table_search_k = k
+    if modelcard_k is None:
+        modelcard_k = k
     # Print pipeline overview
     import sys
     sys.stdout.flush()  # Ensure output is flushed
@@ -396,7 +405,8 @@ def search_card2tab2card(
         print(f"   (Total {len(query)} values)")
     elif search_type in ["multi_column", "unionable"]:
         print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
-    print(f"✅ Top K: {k}")
+    print(f"✅ Table Search Top K: {table_search_k}")
+    print(f"✅ ModelCard Top K: {modelcard_k}")
     
     # Search for similar tables using tab2tab (lazy import)
     # Default db_path to data_citationlake/modellake.db if not provided
@@ -411,9 +421,9 @@ def search_card2tab2card(
         print(f"✅ Got search_table2table function")
         sys.stdout.flush()
         print(f"🔎 Searching for similar tables...")
-        print(f"   Query type: {type(query)}, Search type: {search_type}, k: {k}, db_path: {db_path}")
+        print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}, db_path: {db_path}")
         sys.stdout.flush()
-        similar_table_ids = search_table2table(query, search_type, k, db_path=db_path)
+        similar_table_ids = search_table2table(query, search_type, table_search_k, db_path=db_path)
         print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
         sys.stdout.flush()
         
@@ -633,15 +643,15 @@ def search_card2tab2card(
     
     print(f"✅ Found {len(similar_model_ids)} unique model cards (excluding query model)")
     
-    # Limit to top k
-    final_results = list(similar_model_ids)[:k]
+    # Limit to top modelcard_k
+    final_results = list(similar_model_ids)[:modelcard_k]
     
     # Final summary
     print(f"\n{'='*60}")
     print(f"📊 Final Results Summary")
     print(f"{'='*60}")
     print(f"✅ Query Model: {model_id}")
-    print(f"✅ Found {len(final_results)} similar model cards (top {k})")
+    print(f"✅ Found {len(final_results)} similar model cards (top {modelcard_k})")
     if final_results:
         print(f"📝 Sample results (showing first 2):")
         for i, model_id_result in enumerate(final_results[:2], 1):
@@ -683,7 +693,8 @@ def search_card2tab2card_from_tables(
     relationship_parquet: Optional[str] = None,
     schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
     use_citationlake: bool = True,
-    k: int = 10
+    k: int = 10,
+    modelcard_k: Optional[int] = None
 ) -> List[str]:
     """
     Search for model cards using pre-computed table search results.
@@ -696,11 +707,15 @@ def search_card2tab2card_from_tables(
         relationship_parquet: Optional path to relationship parquet file (fallback)
         schema_log_path: Path to parquet_schema.log (for CitationLake approach)
         use_citationlake: Whether to use CitationLake get_from (default: True)
-        k: Maximum number of results to return
+        k: Legacy parameter for backward compatibility. If modelcard_k is None, uses k.
+        modelcard_k: Maximum number of model card results to return (defaults to k if not provided)
     
     Returns:
         List of model IDs that have similar tables
     """
+    # Handle backward compatibility
+    if modelcard_k is None:
+        modelcard_k = k
     # Get tables for the query model
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
         query_tables = get_tables_for_model(
@@ -767,15 +782,15 @@ def search_card2tab2card_from_tables(
     # Remove the query model itself
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
     
-    # Limit to top k
-    final_results = list(similar_model_ids)[:k]
+    # Limit to top modelcard_k
+    final_results = list(similar_model_ids)[:modelcard_k]
     
     # Final summary
     print(f"\n{'='*60}")
     print(f"📊 Final Results Summary")
     print(f"{'='*60}")
     print(f"✅ Query Model: {model_id}")
-    print(f"✅ Found {len(final_results)} similar model cards (top {k})")
+    print(f"✅ Found {len(final_results)} similar model cards (top {modelcard_k})")
     if final_results:
         print(f"📝 Sample results (showing first 2):")
         for i, model_id_result in enumerate(final_results[:2], 1):

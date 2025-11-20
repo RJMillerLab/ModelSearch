@@ -79,7 +79,7 @@ class JobLogger:
             self.status = "completed"
 
 
-def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None):
+def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None):
     """Run the complete search pipeline in background
     
     Args:
@@ -87,6 +87,7 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         query: Text query (for query mode)
         top_k: Number of results to return
         model_id: Model ID (for modelid mode)
+        table_search_k: Number of tables to retrieve in Card2Tab2Card search (defaults to top_k * 2)
     """
     logger = jobs[job_id]
     
@@ -234,20 +235,26 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             """Run Card2Card pipeline"""
             logger.log("  [Card2Card] Starting dense semantic search...")
             try:
+                # Increase topk slightly to get more results (e.g., topk=3 -> 5-10 results)
+                # Use max(top_k * 2, top_k + 5) to ensure we get more results
+                expanded_topk = max(top_k * 2, top_k + 5)
+                logger.log(f"  ℹ️  [Card2Card] Using expanded top_k: {expanded_topk} (requested: {top_k})")
                 results = search_card2card(
                     model_id=model_id,
                     emb_npz=DEFAULT_EMB_NPZ,
                     faiss_index=DEFAULT_FAISS_INDEX,
-                    top_k=top_k,
+                    top_k=expanded_topk,
                     output_json=None
                 )
-                logger.log(f"  ✅ [Card2Card] Found {len(results)} results")
-                return results
+                # Limit to requested top_k for final results
+                final_results = results[:top_k]
+                logger.log(f"  ✅ [Card2Card] Found {len(results)} results (returning top {len(final_results)})")
+                return final_results
             except Exception as e:
                 logger.log(f"  ❌ [Card2Card] Error: {str(e)}")
                 return {"error": str(e)}
         
-        def run_card2tab2card_search(search_type_name, query_parsed):
+        def run_card2tab2card_search(search_type_name, query_parsed, table_search_k=None):
             """Run one Card2Tab2Card search type"""
             logger.log(f"  [Card2Tab2Card-{search_type_name}] Starting...")
             try:
@@ -265,12 +272,21 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 elif search_type_name == 'unionable':
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: DataFrame with {len(query_parsed) if query_parsed is not None else 0} rows")
                 
+                # Use provided table_search_k or default to top_k * 2 for table search
+                # This allows more tables to be retrieved, then we limit modelcards to top_k
+                if table_search_k is None:
+                    table_search_k = top_k * 2  # Get more tables, then filter to top_k modelcards
+                
+                logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Table search k: {table_search_k}, ModelCard k: {top_k}")
+                
                 results = search_card2tab2card(
                     model_id=model_id,
                     relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
                     query=query_parsed,
                     search_type=search_type_name,
-                    k=top_k,
+                    k=top_k,  # Legacy parameter for backward compatibility
+                    table_search_k=table_search_k,  # Control table search topk
+                    modelcard_k=top_k,  # Control final modelcard topk
                     schema_log_path=DEFAULT_SCHEMA_LOG,
                     use_citationlake=True,
                     output_json=tmp_json_path,
@@ -387,7 +403,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                     futures[search_type_name] = executor.submit(
                         run_card2tab2card_search, 
                         search_type_name, 
-                        query_parsed
+                        query_parsed,
+                        table_search_k  # Pass table_search_k parameter
                     )
             
             # Collect results as they complete
@@ -652,6 +669,7 @@ def search():
         data = request.json or {}
         mode = data.get('mode', 'query')  # 'query' or 'modelid'
         top_k = data.get('top_k', 20)
+        table_search_k = data.get('table_search_k', None)  # Optional: defaults to top_k * 2 in pipeline
         
         if mode == 'query':
             query = data.get('query')
@@ -673,7 +691,7 @@ def search():
         # Start pipeline in background thread
         thread = threading.Thread(
             target=run_search_pipeline,
-            args=(job_id, query, top_k, model_id)
+            args=(job_id, query, top_k, model_id, table_search_k)
         )
         thread.daemon = True
         thread.start()
