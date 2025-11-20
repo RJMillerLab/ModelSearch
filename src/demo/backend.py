@@ -270,7 +270,7 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} values")
                 elif search_type_name == 'keyword':
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} keywords")
-                elif search_type_name in ['multi_column', 'unionable', 'complex', 'correlation']:
+                elif search_type_name in ['multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation']:
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: DataFrame with {len(query_parsed) if query_parsed is not None else 0} rows")
                 
                 # Use provided table_search_k or default to top_k * 2 for table search
@@ -392,6 +392,26 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 logger.log(f"   Will use first column as source, first numeric column '{numeric_cols[0]}' as target")
             else:
                 logger.log(f"   ⚠️  No numeric column found - correlation search may not work well")
+            
+            # For imputation: use entire DataFrame, will extract examples (complete rows) and queries (missing values)
+            queries_parsed['imputation'] = query_df
+            logger.log(f"ℹ️  Imputation search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            if len(query_df.columns) >= 2:
+                complete_rows = query_df[query_df.iloc[:, 1].notna()].shape[0]
+                missing_rows = query_df[query_df.iloc[:, 1].isna()].shape[0]
+                logger.log(f"   Examples (complete rows): {complete_rows}, Queries (missing rows): {missing_rows}")
+            else:
+                logger.log(f"   ⚠️  DataFrame needs at least 2 columns for imputation")
+            
+            # For augmentation: use entire DataFrame, will extract examples (complete rows) and queries (missing values)
+            queries_parsed['augmentation'] = query_df
+            logger.log(f"ℹ️  Augmentation search using DataFrame with {len(query_df)} rows and {len(query_df.columns)} columns")
+            if len(query_df.columns) >= 2:
+                complete_rows = query_df[query_df.iloc[:, 1].notna()].shape[0]
+                missing_rows = query_df[query_df.iloc[:, 1].isna()].shape[0]
+                logger.log(f"   Examples (complete rows): {complete_rows}, Queries (missing rows): {missing_rows}")
+            else:
+                logger.log(f"   ⚠️  DataFrame needs at least 2 columns for augmentation")
         else:
             queries_parsed['single_column'] = None
             queries_parsed['keyword'] = None
@@ -399,6 +419,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             queries_parsed['unionable'] = None
             queries_parsed['complex'] = None
             queries_parsed['correlation'] = None
+            queries_parsed['imputation'] = None
+            queries_parsed['augmentation'] = None
         
         # Run all searches in parallel using ThreadPoolExecutor
         card2card_results = None
@@ -416,7 +438,9 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 'multi_column': [],
                 'unionable': [],
                 'complex': [],
-                'correlation': []
+                'correlation': [],
+                'imputation': [],
+                'augmentation': []
             }
         else:
             with ThreadPoolExecutor(max_workers=4) as executor:
@@ -426,8 +450,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 # Submit Card2Card
                 futures['card2card'] = executor.submit(run_card2card)
                 
-                # Submit all Card2Tab2Card search types (run all: single_column, keyword, multi_column, unionable, complex, correlation)
-                all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation']
+                # Submit all Card2Tab2Card search types (run all: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation)
+                all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation']
                 logger.log(f"  ℹ️  Running {len(all_search_types)} search types: {', '.join(all_search_types)}")
                 for search_type_name in all_search_types:
                     query_parsed = queries_parsed[search_type_name]

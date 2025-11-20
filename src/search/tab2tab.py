@@ -44,6 +44,8 @@ _KeywordSearch = None
 _UnionSearch = None
 _ComplexSearch = None
 _CorrelationSearch = None
+_DataImputation = None
+_AugmentationByExample = None
 
 # Thread lock for thread-safe lazy import and config update
 import threading
@@ -89,7 +91,7 @@ def _update_blend_config(db_path: str):
 
 def _lazy_import_blend():
     """Lazy import Blend_internal functions after config is set."""
-    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch, _ComplexSearch, _CorrelationSearch
+    global _SingleColumnJoinSearch, _MultiColumnJoinSearch, _KeywordSearch, _UnionSearch, _ComplexSearch, _CorrelationSearch, _DataImputation, _AugmentationByExample
     # Use double-checked locking pattern for thread safety
     if _SingleColumnJoinSearch is None:
         with _import_lock:
@@ -123,6 +125,8 @@ def _lazy_import_blend():
                         'src.Tasks.UnionSearch',
                         'src.Tasks.ComplexSearch',
                         'src.Tasks.CorrelationSearch',
+                        'src.Tasks.DataImputation',
+                        'src.Tasks.AugmentationByExample',
                         'src.Plan',
                         'src.Operators',
                         'src.Operators.OperatorBase',
@@ -145,12 +149,16 @@ def _lazy_import_blend():
                     from src.Tasks.UnionSearch import UnionSearch
                     from src.Tasks.ComplexSearch import ComplexSearch
                     from src.Tasks.CorrelationSearch import CorrelationSearch
+                    from src.Tasks.DataImputation import DataImputation
+                    from src.Tasks.AugmentationByExample import AugmentationByExample
                     _SingleColumnJoinSearch = SingleColumnJoinSearch
                     _MultiColumnJoinSearch = MultiColumnJoinSearch
                     _KeywordSearch = KeywordSearch
                     _UnionSearch = UnionSearch
                     _ComplexSearch = ComplexSearch
                     _CorrelationSearch = CorrelationSearch
+                    _DataImputation = DataImputation
+                    _AugmentationByExample = AugmentationByExample
                 finally:
                     # Restore ModelSearchDemo root to sys.path if we removed it
                     if modelsearch_removed and modelsearch_root not in sys.path:
@@ -416,6 +424,116 @@ def search_correlation(
     return plan.run()
 
 
+def search_imputation(
+    examples: pd.DataFrame,
+    queries: Optional[Iterable[str]] = None,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Data Imputation search: find tables that can fill missing values based on examples.
+    
+    Args:
+        examples: DataFrame with example data (rows with complete data)
+        queries: Optional iterable of query strings (values to fill)
+                 If None, will extract from examples DataFrame (first column values where second column is null)
+        k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    # Always update config before importing
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # If queries not provided, extract from examples DataFrame
+    if queries is None:
+        if len(examples.columns) < 2:
+            raise ValueError("For imputation, examples DataFrame must have at least 2 columns")
+        # Extract examples (rows with complete data) and queries (first column where second is null)
+        # Examples: rows where second column is not null
+        examples_df = examples[examples.iloc[:, 1].notna()].iloc[:, :2].copy()
+        # Queries: first column values where second column is null
+        queries_list = examples[examples.iloc[:, 1].isna()].iloc[:, 0].astype(str).tolist()
+        
+        if len(examples_df) == 0:
+            raise ValueError("No examples found in DataFrame (no rows with complete data)")
+        if len(queries_list) == 0:
+            raise ValueError("No queries found in DataFrame (no rows with missing data)")
+        
+        examples = examples_df
+        queries = queries_list
+    
+    # Convert queries to list if needed
+    queries_list = list(queries) if not isinstance(queries, list) else queries
+    
+    plan = _DataImputation(examples, queries_list, k)
+    return plan.run()
+
+
+def search_augmentation(
+    examples: pd.DataFrame,
+    queries: Optional[Iterable[str]] = None,
+    k: int = 10,
+    db_path: Optional[str] = None
+) -> List[int]:
+    """
+    Augmentation by Example search: find tables that can augment data based on examples.
+    
+    Args:
+        examples: DataFrame with example data (rows with complete data)
+        queries: Optional iterable of query strings (values to augment)
+                 If None, will extract from examples DataFrame (first column values where second column is null)
+        k: Number of results to return
+        db_path: Path to modellake.db (optional, will use config default if not provided)
+    
+    Returns:
+        List of table IDs (integers)
+    """
+    # Always update config before importing
+    if db_path:
+        _update_blend_config(db_path)
+    else:
+        default_path = "data/modellake.db"
+        modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
+        _update_blend_config(default_path_abs)
+    
+    _lazy_import_blend()
+    
+    # If queries not provided, extract from examples DataFrame
+    if queries is None:
+        if len(examples.columns) < 2:
+            raise ValueError("For augmentation, examples DataFrame must have at least 2 columns")
+        # Extract examples (rows with complete data) and queries (first column where second is null)
+        # Examples: rows where second column is not null
+        examples_df = examples[examples.iloc[:, 1].notna()].iloc[:, :2].copy()
+        # Queries: first column values where second column is null
+        queries_list = examples[examples.iloc[:, 1].isna()].iloc[:, 0].astype(str).tolist()
+        
+        if len(examples_df) == 0:
+            raise ValueError("No examples found in DataFrame (no rows with complete data)")
+        if len(queries_list) == 0:
+            raise ValueError("No queries found in DataFrame (no rows with missing data)")
+        
+        examples = examples_df
+        queries = queries_list
+    
+    # Convert queries to list if needed
+    queries_list = list(queries) if not isinstance(queries, list) else queries
+    
+    plan = _AugmentationByExample(examples, queries_list, k)
+    return plan.run()
+
+
 def search_table2table(
     query: Any,
     search_type: str = "single_column",
@@ -433,7 +551,7 @@ def search_table2table(
             - Iterable of values (for single_column)
             - pd.DataFrame (for multi_column, complex, or correlation)
             - List[str] (for keyword)
-        search_type: Type of search - "single_column", "multi_column", "keyword", "unionable", "complex", or "correlation"
+        search_type: Type of search - "single_column", "multi_column", "keyword", "unionable", "complex", "correlation", "imputation", or "augmentation"
         k: Number of results to return
         db_path: Path to modellake.db (optional)
         target: Optional target values for complex search (iterable of floats)
@@ -477,8 +595,16 @@ def search_table2table(
             else:
                 raise ValueError("For correlation search, either provide source_column and target_column, or a DataFrame with numeric columns")
         return search_correlation(source_column, target_column, k, db_path=db_path)
+    elif search_type == "imputation":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For imputation search, query must be a pandas DataFrame")
+        return search_imputation(query, k=k, db_path=db_path)
+    elif search_type == "augmentation":
+        if not isinstance(query, pd.DataFrame):
+            raise ValueError("For augmentation search, query must be a pandas DataFrame")
+        return search_augmentation(query, k=k, db_path=db_path)
     else:
-        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', 'unionable', 'complex', or 'correlation'")
+        raise ValueError(f"Unknown search_type: {search_type}. Must be 'single_column', 'multi_column', 'keyword', 'unionable', 'complex', 'correlation', 'imputation', or 'augmentation'")
 
 
 def main():

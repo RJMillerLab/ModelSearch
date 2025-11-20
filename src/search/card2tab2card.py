@@ -403,7 +403,7 @@ def search_card2tab2card(
     elif search_type == "single_column":
         print(f"✅ Query values: {query[:5]}{'...' if len(query) > 5 else ''}")
         print(f"   (Total {len(query)} values)")
-    elif search_type in ["multi_column", "unionable", "complex", "correlation"]:
+    elif search_type in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation"]:
         print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
         if search_type == "multi_column":
             print(f"   Multi-column search: finds tables with overlapping values across multiple columns")
@@ -411,6 +411,10 @@ def search_card2tab2card(
             print(f"   Complex search combines: Union + Join + Correlation sub-pipelines")
         elif search_type == "correlation":
             print(f"   Correlation search: finds tables with correlated categorical and numerical columns")
+        elif search_type == "imputation":
+            print(f"   Imputation search: finds tables that can fill missing values based on examples")
+        elif search_type == "augmentation":
+            print(f"   Augmentation search: finds tables that can augment data based on examples")
     print(f"✅ Table Search Top K: {table_search_k}")
     print(f"✅ ModelCard Top K: {modelcard_k}")
     

@@ -780,6 +780,8 @@ HTML_TEMPLATE = """
                                 <option value="unionable">Unionable</option>
                                 <option value="complex">Complex (Union+Join+Correlation)</option>
                                 <option value="correlation">Correlation</option>
+                                <option value="imputation">Imputation</option>
+                                <option value="augmentation">Augmentation</option>
                             </select>
                         </label>
                         <label>
