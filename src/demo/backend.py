@@ -1198,27 +1198,41 @@ def integrate():
             return jsonify({"status": "error", "message": "job_id is required"}), 400
         
         # Find the search results file
-        # Try job_id-based filename first (for backward compatibility)
-        search_results_path = os.path.join('data', f'compare_search_{job_id}.json')
+        # Try multiple strategies to find the search results
+        search_results_path = None
         
-        # If not found, try to find by job_id in saved results
+        # Strategy 1: Try job_id-based filename (for backward compatibility)
+        search_results_path = os.path.join('data', f'compare_search_{job_id}.json')
         if not os.path.exists(search_results_path):
-            # Look for files containing this job_id
+            # Strategy 2: Look in saved search folders
             data_dir = 'data'
             if os.path.exists(data_dir):
-                for filename in os.listdir(data_dir):
-                    if filename.startswith('search_') and filename.endswith('.json'):
-                        file_path = os.path.join(data_dir, filename)
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                data = json.load(f)
-                            if data.get('job_id') == job_id:
-                                search_results_path = file_path
-                                break
-                        except:
-                            continue
+                # Check all subdirectories for search_results.json
+                for folder_name in os.listdir(data_dir):
+                    folder_path = os.path.join(data_dir, folder_name)
+                    if os.path.isdir(folder_path):
+                        # Check for search_results.json in this folder
+                        potential_path = os.path.join(folder_path, 'search_results.json')
+                        if os.path.exists(potential_path):
+                            try:
+                                with open(potential_path, 'r', encoding='utf-8') as f:
+                                    data = json.load(f)
+                                if data.get('job_id') == job_id:
+                                    search_results_path = potential_path
+                                    print(f"✅ Found search results in folder: {folder_path}")
+                                    break
+                            except Exception as e:
+                                print(f"⚠️  Error reading {potential_path}: {e}")
+                                continue
+                        
+                        # Also check for compare_search_{job_id}.json in folder
+                        potential_path = os.path.join(folder_path, f'compare_search_{job_id}.json')
+                        if os.path.exists(potential_path):
+                            search_results_path = potential_path
+                            print(f"✅ Found search results (legacy format) in folder: {folder_path}")
+                            break
         
-        if not os.path.exists(search_results_path):
+        if not search_results_path or not os.path.exists(search_results_path):
             return jsonify({
                 "status": "error",
                 "message": f"Search results not found for job_id: {job_id}. Please run a search first."

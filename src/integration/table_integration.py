@@ -190,7 +190,9 @@ def integrate_tables_intersection(
         
         if not common_columns:
             print("⚠️  No common columns found for intersection")
-            return None
+            # Return empty DataFrame with no columns instead of None
+            # This allows the caller to handle it gracefully
+            return pd.DataFrame()
         
         # Convert to string for comparison
         common_columns = list(common_columns)
@@ -278,12 +280,54 @@ def integrate_tables(
             "stats": {}
         }
     
-    if integrated_df is None:
+    # Handle None or empty DataFrame results
+    if integrated_df is None or (isinstance(integrated_df, pd.DataFrame) and len(integrated_df) == 0 and len(integrated_df.columns) == 0):
+        # Check if it's intersection with no common rows/columns (this is valid, return empty result)
+        if integration_type == "intersection":
+            # Create empty DataFrame
+            if tables:
+                # Try to get common columns
+                common_cols = set(tables[0].columns)
+                for df in tables[1:]:
+                    common_cols = common_cols.intersection(set(df.columns))
+                
+                # Return empty DataFrame (with or without common columns)
+                empty_df = pd.DataFrame(columns=list(common_cols) if common_cols else [])
+                return {
+                    "success": True,
+                    "integrated_table": empty_df,
+                    "stats": {
+                        "input_tables": len(tables),
+                        "input_rows": sum(len(df) for df in tables),
+                        "output_rows": 0,
+                        "output_columns": len(common_cols) if common_cols else 0,
+                        "integration_type": integration_type
+                    },
+                    "table_paths": loaded_paths
+                }
+        
         return {
             "success": False,
             "error": "Integration failed",
             "integrated_table": None,
             "stats": {}
+        }
+    
+    # Handle empty DataFrame with columns (valid result for intersection with no common rows)
+    if isinstance(integrated_df, pd.DataFrame) and len(integrated_df) == 0 and len(integrated_df.columns) > 0:
+        # This is a valid empty result (e.g., intersection with common columns but no common rows)
+        stats = {
+            "input_tables": len(tables),
+            "input_rows": sum(len(df) for df in tables),
+            "output_rows": 0,
+            "output_columns": len(integrated_df.columns),
+            "integration_type": integration_type
+        }
+        return {
+            "success": True,
+            "integrated_table": integrated_df,
+            "stats": stats,
+            "table_paths": loaded_paths
         }
     
     # Calculate statistics
@@ -355,13 +399,21 @@ def integrate_tables_from_search_results(
         elif "card2tab2card_results" in search_results:
             # Results from backend API
             card2tab2card_results = search_results["card2tab2card_results"]
-            if isinstance(card2tab2card_results, dict) and search_type in card2tab2card_results:
-                if isinstance(card2tab2card_results[search_type], dict) and "intermediate" in card2tab2card_results[search_type]:
-                    intermediate = card2tab2card_results[search_type]["intermediate"]
+            if isinstance(card2tab2card_results, dict):
+                if search_type in card2tab2card_results:
+                    if isinstance(card2tab2card_results[search_type], dict) and "intermediate" in card2tab2card_results[search_type]:
+                        intermediate = card2tab2card_results[search_type]["intermediate"]
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Search type '{search_type}' found but no intermediate data available",
+                            "integrated_table": None
+                        }
                 else:
+                    available_types = list(card2tab2card_results.keys())
                     return {
                         "success": False,
-                        "error": f"Search type '{search_type}' not found in results",
+                        "error": f"Search type '{search_type}' not found in results. Available types: {', '.join(available_types)}",
                         "integrated_table": None
                     }
             else:
@@ -384,7 +436,21 @@ def integrate_tables_from_search_results(
         }
     
     # Get retrieved table filenames
+    # Try retrieved_table_filenames first, then fall back to table_to_models keys
     retrieved_filenames = intermediate.get("retrieved_table_filenames", [])
+    
+    # If no retrieved_table_filenames, try to extract from table_to_models
+    if not retrieved_filenames:
+        table_to_models = intermediate.get("table_to_models", {})
+        if table_to_models:
+            retrieved_filenames = list(table_to_models.keys())
+            print(f"ℹ️  Using table paths from table_to_models: {len(retrieved_filenames)} tables")
+        else:
+            return {
+                "success": False,
+                "error": "No retrieved tables found in search results (no retrieved_table_filenames or table_to_models)",
+                "integrated_table": None
+            }
     
     if not retrieved_filenames:
         return {

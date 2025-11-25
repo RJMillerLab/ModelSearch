@@ -9,7 +9,5 @@ WARNING: This is a development server. Do not use it in a production deployment.
  * Running on http://127.0.0.1:5001
  * Running on http://10.36.244.84:5001
 Press CTRL+C to quit
-127.0.0.1 - - [25/Nov/2025 15:23:20] "GET / HTTP/1.1" 200 -
-127.0.0.1 - - [25/Nov/2025 15:23:20] "GET /static/fig/modelsearch_wquery.png HTTP/1.1" 304 -
-127.0.0.1 - - [25/Nov/2025 15:23:21] "GET /static/fig/modelsearch.png HTTP/1.1" 304 -
-127.0.0.1 - - [25/Nov/2025 15:23:23] "GET /static/fig/modelsearch_wquery.png HTTP/1.1" 304 -
+127.0.0.1 - - [25/Nov/2025 15:42:40] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [25/Nov/2025 15:42:40] "GET /static/fig/modelsearch_wquery.png HTTP/1.1" 304 -

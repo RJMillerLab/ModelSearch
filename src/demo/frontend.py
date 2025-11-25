@@ -243,6 +243,20 @@ HTML_TEMPLATE = """
             border-radius: 4px;
             margin-top: 10px;
         }
+        .number-badge {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            background: black;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
         .pdf-section {
             margin-bottom: 20px;
             padding: 15px;
@@ -269,7 +283,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <h1>🔍 ModelSearch Demo</h1>
-        <p>Compare Card2Card (dense semantic) vs Card2Tab2Card (table-based) search</p>
+        <p>Compare <span class="number-badge">1</span> Card2Card (dense semantic) vs <span class="number-badge">2</span> Card2Tab2Card (table-based) search</p>
         
         <div class="input-section">
             <div style="margin-bottom: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
@@ -334,7 +348,7 @@ HTML_TEMPLATE = """
             
             <label for="top_k" style="margin-top: 15px;">Top K Results (Final ModelCard Count):</label>
             <input type="number" id="top_k" value="20" min="1" max="100" oninput="updateTableSearchKDefault()">
-            <p style="font-size: 11px; color: #666; margin-top: 3px;">
+                <p style="font-size: 11px; color: #666; margin-top: 3px;">
                 Both pipelines will return this many model cards (Card2Card and Card2Tab2Card)
             </p>
             
@@ -783,7 +797,7 @@ HTML_TEMPLATE = """
             let html = `
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
-                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;">Card2Card Results (${results.card2card_results.length})</h3>
+                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;"><span class="number-badge">1</span> Card2Card Results (${results.card2card_results.length})</h3>
                         <ul class="result-list">
                             ${results.card2card_results.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
                             ${results.card2card_results.length > 10 ? `
@@ -799,7 +813,7 @@ HTML_TEMPLATE = """
                         </ul>
                     </div>
                     <div class="result-card" style="min-width: 0;">
-                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;">Card2Tab2Card Results</h3>
+                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
                         ${Object.entries(results.card2tab2card_results).map(([type, data]) => {
                             const sectionId = card2tab2cardIds[type];
                             // Handle both old format (array) and new format (object with model_ids and intermediate)
@@ -935,7 +949,7 @@ HTML_TEMPLATE = """
                 <div class="integration-section" style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
                     <h3>Table Integration</h3>
                     <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                        Integrate tables from Card2Tab2Card search results using Union or Intersection.
+                        Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
                     </p>
                     <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
                         <label>
@@ -1021,6 +1035,22 @@ HTML_TEMPLATE = """
                                 Output: ${stats.output_rows} rows, ${stats.output_columns} columns<br>
                                 Type: ${stats.integration_type}
                             </div>
+                    `;
+                    
+                    if (stats.output_rows === 0) {
+                        // Empty result (e.g., intersection with no common rows/columns)
+                        html += `
+                            <div style="padding: 20px; text-align: center; color: #666; background: #f8f9fa; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 14px;">
+                                    ${stats.output_columns === 0 
+                                        ? '⚠️ No common columns found between tables. Intersection result is empty.' 
+                                        : '⚠️ No common rows found between tables. Intersection result is empty.'}
+                                </p>
+                            </div>
+                        `;
+                    } else {
+                        // Show table
+                        html += `
                             <div style="max-height: 400px; overflow: auto;">
                                 <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
                                     <thead>
@@ -1038,8 +1068,10 @@ HTML_TEMPLATE = """
                                 </table>
                                 ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
                             </div>
-                        </div>
-                    `;
+                        `;
+                    }
+                    
+                    html += `</div>`;
                     resultsDiv.innerHTML = html;
                 } else {
                     resultsDiv.innerHTML = `
