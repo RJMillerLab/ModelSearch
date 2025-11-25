@@ -1030,7 +1030,14 @@ def list_saved_searches():
     """List all saved search results (organized by timestamp folders)"""
     try:
         data_dir = 'data'
+        print(f"\n{'='*60}")
+        print(f"🔍 Saved Searches API Request")
+        print(f"{'='*60}")
+        print(f"Data directory: {os.path.abspath(data_dir)}")
+        print(f"Directory exists: {os.path.exists(data_dir)}")
+        
         if not os.path.exists(data_dir):
+            print("⚠️  Data directory does not exist")
             return jsonify({
                 "status": "success",
                 "searches": [],
@@ -1043,17 +1050,27 @@ def list_saved_searches():
         # Check for template folder
         template_path = os.path.join(data_dir, 'template', 'search_results.json')
         template_available = os.path.exists(template_path)
+        print(f"Template available: {template_available}")
         
         # Scan data directory for timestamp folders
-        for item in os.listdir(data_dir):
+        print(f"\nScanning data directory...")
+        items = os.listdir(data_dir)
+        print(f"Found {len(items)} items in data directory")
+        
+        for item in items:
             item_path = os.path.join(data_dir, item)
             
             # Skip if not a directory or if it's special folders
             if not os.path.isdir(item_path) or item in ['template', 'benchmarks']:
+                if os.path.isdir(item_path):
+                    print(f"  ⏭️  Skipping special folder: {item}")
                 continue
             
             # Check if folder contains search_results.json
             search_file = os.path.join(item_path, 'search_results.json')
+            print(f"  📁 Checking: {item}")
+            print(f"     File exists: {os.path.exists(search_file)}")
+            
             if os.path.exists(search_file):
                 try:
                     # Read metadata without loading full file
@@ -1063,7 +1080,7 @@ def list_saved_searches():
                     # Get folder stats
                     stat = os.stat(search_file)
                     
-                    search_folders.append({
+                    folder_info = {
                         "folder_name": item,
                         "query": data.get('query', ''),
                         "model_id": data.get('model_id', ''),
@@ -1072,13 +1089,21 @@ def list_saved_searches():
                         "top_k": data.get('top_k', 0),
                         "file_size": stat.st_size,
                         "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                    })
+                    }
+                    search_folders.append(folder_info)
+                    print(f"     ✅ Added: {item} (query={data.get('query')}, model_id={data.get('model_id')})")
                 except Exception as e:
                     # Skip folders that can't be read
+                    print(f"     ❌ Error reading {item}: {str(e)}")
                     continue
+            else:
+                print(f"     ⚠️  No search_results.json found")
         
         # Sort by timestamp (newest first)
         search_folders.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        print(f"\n✅ Found {len(search_folders)} saved searches")
+        print(f"{'='*60}\n")
         
         return jsonify({
             "status": "success",

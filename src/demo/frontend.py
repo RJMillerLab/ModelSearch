@@ -223,11 +223,13 @@ HTML_TEMPLATE = """
         .search-type-header:hover {
             background: #e9ecef;
         }
-        .search-type-header::after {
+        .search-type-header::before {
             content: '▶';
+            margin-right: 5px;
             transition: transform 0.2s;
+            display: inline-block;
         }
-        .search-type-header.expanded::after {
+        .search-type-header.expanded::before {
             transform: rotate(90deg);
         }
         .error {
@@ -801,7 +803,7 @@ HTML_TEMPLATE = """
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
                                         <h4>${type} (${models.length} models)</h4>
                                     </div>
-                                    <div class="collapsible-content expanded" id="${sectionId}">
+                                    <div class="collapsible-content" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
                                             ${models.length > 0 ? models.map((m, idx) => {
                                                 let modelId = typeof m === 'string' ? m : (m.model_id || m);
@@ -831,7 +833,7 @@ HTML_TEMPLATE = """
                                                             </a>
                                                         </div>
                                                         ${hasTables ? `
-                                                            <div class="collapsible-content expanded" id="${modelExpandId}" style="margin-left: 15px; margin-top: 2px;">
+                                                            <div class="collapsible-content" id="${modelExpandId}" style="margin-left: 15px; margin-top: 2px; display: none;">
                                                                 <div style="font-size: 10px; color: #666;">
                                                                     <strong>From Tables (${modelTables.length}):</strong>
                                                                     <div style="margin-top: 2px; padding: 4px; background: #f8f9fa; border-radius: 4px; max-height: 200px; overflow-y: auto;">
@@ -1026,13 +1028,28 @@ HTML_TEMPLATE = """
         function toggleExpand(elementId, toggleElement) {
             const element = document.getElementById(elementId);
             if (element) {
-                element.classList.toggle('expanded');
-                const isExpanded = element.classList.contains('expanded');
+                const isCurrentlyExpanded = element.classList.contains('expanded') || element.style.display === 'block';
+                
+                if (isCurrentlyExpanded) {
+                    // Collapse: hide content, show ▶ (right)
+                    element.classList.remove('expanded');
+                    element.style.display = 'none';
+                    toggleElement.textContent = '▶';
+                    toggleElement.classList.remove('expanded');
+                } else {
+                    // Expand: show content, show ▼ (down)
+                    element.classList.add('expanded');
+                    element.style.display = 'block';
+                    toggleElement.textContent = '▼';
+                    toggleElement.classList.add('expanded');
+                }
+                
+                // Handle "Show more" / "Hide more" text if present
                 const currentText = toggleElement.textContent;
                 if (currentText.includes('Show')) {
                     const count = currentText.match(/Show (\d+)/)[1];
                     toggleElement.textContent = `Hide ${count} more`;
-                } else {
+                } else if (currentText.includes('Hide')) {
                     const count = currentText.match(/Hide (\d+)/)[1];
                     toggleElement.textContent = `Show ${count} more`;
                 }
@@ -1042,8 +1059,17 @@ HTML_TEMPLATE = """
         function toggleSearchType(sectionId, headerElement) {
             const element = document.getElementById(sectionId);
             if (element) {
-                element.classList.toggle('expanded');
-                headerElement.classList.toggle('expanded');
+                const isCurrentlyExpanded = element.classList.contains('expanded');
+                
+                if (isCurrentlyExpanded) {
+                    // Collapse: hide content, triangle points right (▶)
+                    element.classList.remove('expanded');
+                    headerElement.classList.remove('expanded');
+                } else {
+                    // Expand: show content, triangle points down (▼)
+                    element.classList.add('expanded');
+                    headerElement.classList.add('expanded');
+                }
             }
         }
         
@@ -1145,12 +1171,14 @@ HTML_TEMPLATE = """
                 element.style.display = 'none';
                 toggleElement.textContent = '▶';
                 toggleElement.classList.remove('expanded');
+                toggleElement.style.transform = 'none';  // Reset any CSS rotation
             } else {
                 // Expand and load
                 console.log('   ➕ Expanding and loading...');
                 element.style.display = 'block';
                 toggleElement.textContent = '▼';
                 toggleElement.classList.add('expanded');
+                toggleElement.style.transform = 'none';  // Reset any CSS rotation (we use text, not rotation)
                 
                 // Get or create content div
                 let div = element.querySelector('div');
