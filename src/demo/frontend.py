@@ -250,15 +250,19 @@ HTML_TEMPLATE = """
             border-radius: 8px;
             border: 1px solid #dee2e6;
             text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .pdf-section img {
-            width: 50%;
-            height: auto;
+            height: 240px;
+            width: auto;
+            max-width: 100%;
+            object-fit: contain;
             border: 1px solid #dee2e6;
             border-radius: 4px;
             background: white;
             display: block;
-            margin: 0 auto;
         }
     </style>
 </head>
@@ -266,10 +270,6 @@ HTML_TEMPLATE = """
     <div class="container">
         <h1>🔍 ModelSearch Demo</h1>
         <p>Compare Card2Card (dense semantic) vs Card2Tab2Card (table-based) search</p>
-        
-        <div class="pdf-section">
-            <img src="/static/fig/modelsearch.png" alt="ModelSearch Overview" />
-        </div>
         
         <div class="input-section">
             <div style="margin-bottom: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
@@ -303,6 +303,10 @@ HTML_TEMPLATE = """
             </div>
             
             <div id="new-search-inputs">
+            <div id="diagram-section" class="pdf-section" style="margin-bottom: 20px;">
+                <img id="search-diagram" src="/static/fig/modelsearch.png" alt="ModelSearch Overview" />
+            </div>
+            
             <div class="mode-selector" style="margin-top: 15px;">
                 <label style="margin-bottom: 10px;">Search Mode:</label>
                 <div class="mode-option">
@@ -375,6 +379,9 @@ HTML_TEMPLATE = """
                 loadPreviousCheckbox.checked = false;
             }
             toggleLoadPrevious();
+            
+            // Initialize diagram based on default selected mode (query is default)
+            toggleMode();
         });
         
         function updateTableSearchKValue(value) {
@@ -683,13 +690,22 @@ HTML_TEMPLATE = """
             const mode = document.querySelector('input[name="search_mode"]:checked').value;
             const queryInput = document.getElementById('query-input');
             const modelIdInput = document.getElementById('modelid-input');
+            const diagramImg = document.getElementById('search-diagram');
             
             if (mode === 'query') {
                 queryInput.classList.add('active');
                 modelIdInput.classList.remove('active');
+                // Show query diagram
+                if (diagramImg) {
+                    diagramImg.src = '/static/fig/modelsearch_wquery.png';
+                }
             } else {
                 queryInput.classList.remove('active');
                 modelIdInput.classList.add('active');
+                // Show modelId diagram
+                if (diagramImg) {
+                    diagramImg.src = '/static/fig/modelsearch.png';
+                }
             }
         }
         
