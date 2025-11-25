@@ -1,4 +1,4 @@
-/Users/doradong/Repo/ModelSearchDemo/src/demo/frontend.py:20: SyntaxWarning: invalid escape sequence '\d'
+/Users/doradong/.cursor/worktrees/ModelSearchDemo/gl4Cp/src/demo/frontend.py:20: SyntaxWarning: invalid escape sequence '\d'
   HTML_TEMPLATE = """
 Starting ModelSearch Frontend...
 Open http://localhost:5001 in your browser
@@ -7,8 +7,6 @@ Open http://localhost:5001 in your browser
 WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
  * Running on all addresses (0.0.0.0)
  * Running on http://127.0.0.1:5001
- * Running on http://10.39.31.235:5001
+ * Running on http://10.36.244.84:5001
 Press CTRL+C to quit
-127.0.0.1 - - [25/Nov/2025 00:01:17] "GET / HTTP/1.1" 200 -
-127.0.0.1 - - [25/Nov/2025 00:02:03] "GET / HTTP/1.1" 200 -
-127.0.0.1 - - [25/Nov/2025 00:11:42] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [25/Nov/2025 13:54:10] "GET / HTTP/1.1" 200 -

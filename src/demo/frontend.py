@@ -142,11 +142,12 @@ HTML_TEMPLATE = """
         .results-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 20px;
+            gap: 15px;
+            align-items: start;
         }
         .result-card {
             background: #f8f9fa;
-            padding: 20px;
+            padding: 12px;
             border-radius: 4px;
             border: 1px solid #dee2e6;
         }
@@ -159,11 +160,12 @@ HTML_TEMPLATE = """
             padding: 0;
         }
         .result-item {
-            padding: 8px;
-            margin: 5px 0;
+            padding: 4px 6px;
+            margin: 3px 0;
             background: white;
             border-radius: 3px;
             border-left: 3px solid #007bff;
+            font-size: 13px;
         }
         .comparison-section {
             margin-top: 20px;
@@ -203,8 +205,8 @@ HTML_TEMPLATE = """
             max-height: 5000px;
         }
         .search-type-section {
-            margin: 15px 0;
-            padding: 10px;
+            margin: 6px 0;
+            padding: 6px;
             background: #f8f9fa;
             border-radius: 4px;
         }
@@ -213,10 +215,10 @@ HTML_TEMPLATE = """
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px;
+            padding: 5px 8px;
             background: white;
             border-radius: 4px;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
         .search-type-header:hover {
             background: #e9ecef;
@@ -737,8 +739,8 @@ HTML_TEMPLATE = """
             
             let html = `
                 <div class="results-grid">
-                    <div class="result-card">
-                        <h3>Card2Card Results (${results.card2card_results.length})</h3>
+                    <div class="result-card" style="min-width: 0;">
+                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;">Card2Card Results (${results.card2card_results.length})</h3>
                         <ul class="result-list">
                             ${results.card2card_results.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
                             ${results.card2card_results.length > 10 ? `
@@ -753,8 +755,8 @@ HTML_TEMPLATE = """
                             ` : ''}
                         </ul>
                     </div>
-                    <div class="result-card">
-                        <h3>Card2Tab2Card Results</h3>
+                    <div class="result-card" style="min-width: 0;">
+                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;">Card2Tab2Card Results</h3>
                         ${Object.entries(results.card2tab2card_results).map(([type, data]) => {
                             const sectionId = card2tab2cardIds[type];
                             // Handle both old format (array) and new format (object with model_ids and intermediate)
@@ -765,13 +767,34 @@ HTML_TEMPLATE = """
                             // Build reverse mapping: model_id -> list of tables
                             const modelToTables = {};
                             Object.entries(tableToModels).forEach(([table, modelList]) => {
-                                modelList.forEach(modelId => {
-                                    if (!modelToTables[modelId]) {
-                                        modelToTables[modelId] = [];
+                                // Handle both string arrays and object arrays
+                                const normalizedModelList = Array.isArray(modelList) ? modelList : [];
+                                normalizedModelList.forEach(modelIdOrObj => {
+                                    // Extract model_id: handle both string and object formats
+                                    let modelId = typeof modelIdOrObj === 'string' 
+                                        ? modelIdOrObj 
+                                        : (modelIdOrObj?.model_id || modelIdOrObj);
+                                    
+                                    // Normalize: trim whitespace and ensure it's a string
+                                    if (modelId) {
+                                        modelId = String(modelId).trim();
+                                        if (modelId) {
+                                            if (!modelToTables[modelId]) {
+                                                modelToTables[modelId] = [];
+                                            }
+                                            modelToTables[modelId].push(table);
+                                        }
                                     }
-                                    modelToTables[modelId].push(table);
                                 });
                             });
+                            
+                            // Debug: log the mapping
+                            console.log(`[${type}] Built modelToTables mapping:`, Object.keys(modelToTables).length, 'models with tables');
+                            console.log(`[${type}] Sample modelToTables:`, Object.entries(modelToTables).slice(0, 2));
+                            console.log(`[${type}] tableToModels keys:`, Object.keys(tableToModels));
+                            console.log(`[${type}] tableToModels sample:`, Object.entries(tableToModels).slice(0, 1));
+                            console.log(`[${type}] models count:`, models.length);
+                            console.log(`[${type}] models sample:`, models.slice(0, 2));
                             
                             return `
                                 <div class="search-type-section">
@@ -781,43 +804,59 @@ HTML_TEMPLATE = """
                                     <div class="collapsible-content expanded" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
                                             ${models.length > 0 ? models.map((m, idx) => {
-                                                const modelId = typeof m === 'string' ? m : (m.model_id || m);
+                                                let modelId = typeof m === 'string' ? m : (m.model_id || m);
+                                                // Normalize modelId: trim whitespace and ensure it's a string
+                                                modelId = String(modelId).trim();
                                                 const modelUrl = typeof m === 'string' ? `https://huggingface.co/${modelId}` : (m.url || `https://huggingface.co/${modelId}`);
                                                 const modelTables = modelToTables[modelId] || [];
                                                 const modelExpandId = `${sectionId}-model-${idx}`;
                                                 const hasTables = modelTables.length > 0;
                                                 
+                                                // Debug: log if model has tables
+                                                if (hasTables) {
+                                                    console.log(`[${type}] Model ${modelId} has ${modelTables.length} tables:`, modelTables.slice(0, 2));
+                                                } else {
+                                                    console.log(`[${type}] Model ${modelId} has NO tables. modelToTables keys:`, Object.keys(modelToTables));
+                                                    console.log(`[${type}] Looking for modelId: "${modelId}" in modelToTables`);
+                                                }
+                                                
                                                 return `
-                                                    <li class="result-item" style="margin-bottom: 8px;">
+                                                    <li class="result-item" style="margin-bottom: 4px;">
                                                         <div style="display: flex; align-items: center;">
-                                                            <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 8px; ${hasTables ? '' : 'display: none;'}">
+                                                            <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 6px; ${hasTables ? '' : 'display: none;'}">
                                                                 ▶
                                                             </span>
-                                                            <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500;">
+                                                            <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">
                                                                 ${modelId}
                                                             </a>
                                                         </div>
                                                         ${hasTables ? `
-                                                            <div class="collapsible-content" id="${modelExpandId}" style="margin-left: 20px; margin-top: 5px;">
-                                                                <div style="font-size: 12px; color: #666;">
+                                                            <div class="collapsible-content expanded" id="${modelExpandId}" style="margin-left: 15px; margin-top: 2px;">
+                                                                <div style="font-size: 10px; color: #666;">
                                                                     <strong>From Tables (${modelTables.length}):</strong>
-                                                                    <div style="margin-top: 5px; padding: 8px; background: #f8f9fa; border-radius: 4px; max-height: 300px; overflow-y: auto;">
+                                                                    <div style="margin-top: 2px; padding: 4px; background: #f8f9fa; border-radius: 4px; max-height: 200px; overflow-y: auto;">
                                                                         ${modelTables.map((table, tableIdx) => {
                                                                             const tableBasename = table.split('/').pop();
                                                                             const tableExpandId = `${modelExpandId}-table-${tableIdx}`;
-                                                                            // Use data attribute to store table path safely
+                                                                            // Escape the table path for HTML attribute (handle quotes and other special chars)
+                                                                            // First escape HTML entities, then escape quotes for attribute
+                                                                            const escapedTablePath = String(table)
+                                                                                .replace(/&/g, '&amp;')
+                                                                                .replace(/"/g, '&quot;')
+                                                                                .replace(/'/g, '&#39;')
+                                                                                .replace(/</g, '&lt;')
+                                                                                .replace(/>/g, '&gt;');
                                                                             return `
-                                                                                <div style="padding: 4px 0; border-bottom: 1px solid #dee2e6;">
-                                                                                    <div style="display: flex; align-items: center;">
-                                                                                        <span class="expand-toggle" data-table-path="${table.replace(/"/g, '&quot;')}" onclick="toggleTablePreview('${tableExpandId}', this)" style="margin-right: 5px; font-size: 10px; cursor: pointer;">
-                                                                                            ▶
+                                                                                <div style="padding: 1px 0; border-bottom: 1px solid #dee2e6;">
+                                                                                    <div style="display: flex; align-items: center; gap: 5px;">
+                                                                                        <span style="font-size: 8px; color: #999; font-family: monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2;" title="${table}">
+                                                                                            ${table}
                                                                                         </span>
-                                                                                        <span style="font-weight: 500; color: #495057;">📄 ${tableBasename}</span>
-                                                                                    </div>
-                                                                                    <div class="collapsible-content" id="${tableExpandId}" style="margin-left: 20px; margin-top: 5px; display: none;">
-                                                                                        <div style="padding: 8px; background: white; border-radius: 4px; border: 1px solid #dee2e6;">
-                                                                                            <div style="font-size: 11px; color: #999;">Loading preview...</div>
-                                                                                        </div>
+                                                                                        <button onclick="copyTablePath('${escapedTablePath}', this)" 
+                                                                                                style="padding: 2px 4px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer; min-width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
+                                                                                                title="Copy full path to clipboard">
+                                                                                            📋
+                                                                                        </button>
                                                                                     </div>
                                                                                 </div>
                                                                             `;
@@ -1008,6 +1047,57 @@ HTML_TEMPLATE = """
             }
         }
         
+        async function copyTablePath(escapedTablePath, buttonElement) {
+            // Decode HTML entities to get the actual path
+            const decodedPath = escapedTablePath
+                .replace(/&gt;/g, '>')
+                .replace(/&lt;/g, '<')
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, '&');
+            
+            try {
+                // Use Clipboard API if available
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(decodedPath);
+                    const originalHTML = buttonElement.innerHTML;
+                    buttonElement.innerHTML = '✓';
+                    buttonElement.style.background = '#28a745';
+                    setTimeout(() => {
+                        buttonElement.innerHTML = originalHTML;
+                        buttonElement.style.background = '#6c757d';
+                    }, 1500);
+                    console.log('✅ Copied to clipboard:', decodedPath);
+                } else {
+                    // Fallback for older browsers
+                    const textArea = document.createElement('textarea');
+                    textArea.value = decodedPath;
+                    textArea.style.position = 'fixed';
+                    textArea.style.opacity = '0';
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    try {
+                        document.execCommand('copy');
+                        const originalHTML = buttonElement.innerHTML;
+                        buttonElement.innerHTML = '✓';
+                        buttonElement.style.background = '#28a745';
+                        setTimeout(() => {
+                            buttonElement.innerHTML = originalHTML;
+                            buttonElement.style.background = '#6c757d';
+                        }, 1500);
+                        console.log('✅ Copied to clipboard (fallback):', decodedPath);
+                    } catch (err) {
+                        console.error('❌ Failed to copy:', err);
+                        alert('Failed to copy. Path: ' + decodedPath);
+                    }
+                    document.body.removeChild(textArea);
+                }
+            } catch (error) {
+                console.error('❌ Error copying to clipboard:', error);
+                alert('Failed to copy. Path: ' + decodedPath);
+            }
+        }
+        
         async function toggleTablePreview(tableExpandId, toggleElement) {
             const element = document.getElementById(tableExpandId);
             if (!element) {
@@ -1019,10 +1109,23 @@ HTML_TEMPLATE = """
             const tablePath = toggleElement.getAttribute('data-table-path');
             if (!tablePath) {
                 console.error('❌ No table path found in data-table-path attribute');
+                console.error('   Toggle element:', toggleElement);
+                console.error('   Available attributes:', Array.from(toggleElement.attributes).map(a => `${a.name}="${a.value}"`));
                 return;
             }
             
-            console.log('🔄 Toggle table preview:', tableExpandId, 'Path:', tablePath);
+            // Decode HTML entities if any (from &quot; etc.)
+            // Decode &amp; last since other entities contain &
+            const decodedPath = tablePath
+                .replace(/&gt;/g, '>')
+                .replace(/&lt;/g, '<')
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, '&');  // Must be last
+            
+            console.log('🔄 Toggle table preview:', tableExpandId);
+            console.log('   Raw path from attribute:', tablePath);
+            console.log('   Decoded path:', decodedPath);
             console.log('   Current display:', element.style.display);
             
             // Check current state - simpler logic
@@ -1070,8 +1173,10 @@ HTML_TEMPLATE = """
                     
                     // Load preview
                     try {
-                        console.log('📊 Loading table preview for:', tablePath);
-                        const url = `{{BACKEND_URL}}/api/table-preview?path=${encodeURIComponent(tablePath)}`;
+                        // Use decoded path for the API call
+                        const pathToSend = decodedPath || tablePath;
+                        console.log('📊 Loading table preview for:', pathToSend);
+                        const url = `{{BACKEND_URL}}/api/table-preview?path=${encodeURIComponent(pathToSend)}`;
                         console.log('📡 Request URL:', url);
                         
                         const response = await fetch(url);

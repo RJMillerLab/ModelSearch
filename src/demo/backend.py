@@ -695,15 +695,23 @@ def get_table_preview():
     if not table_path:
         return jsonify({"status": "error", "message": "path parameter is required"}), 400
     
-    # Extract basename from path
+    # URL decode the path in case it was encoded
+    from urllib.parse import unquote
+    table_path = unquote(table_path)
+    
+    # Extract basename from path (handles both full paths and basenames)
+    # If table_path is already just a basename, basename will be the same
     basename = os.path.basename(table_path)
     
     # Log the request
     print(f"\n{'='*60}")
     print(f"🔍 Table Preview Request")
     print(f"{'='*60}")
-    print(f"Input path: {table_path}")
+    print(f"Input path (raw): {request.args.get('path')}")
+    print(f"Input path (decoded): {table_path}")
     print(f"Basename: {basename}")
+    print(f"Is absolute path: {os.path.isabs(table_path)}")
+    print(f"Path exists directly: {os.path.exists(table_path)}")
     
     # Build comprehensive list of possible base directories
     # Include both data_citationlake and CitationLake paths
@@ -768,6 +776,9 @@ def get_table_preview():
     
     # Method 2: Try to find file using path-based strategies
     print(f"\n📁 Method 2: Searching file system...")
+    
+    # Initialize csv_path to None
+    csv_path = None
     
     # Strategy 1: If table_path is already a valid absolute or relative path, try it first
     if os.path.exists(table_path):
