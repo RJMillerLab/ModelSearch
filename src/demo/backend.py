@@ -17,6 +17,17 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
 
+# Auto-detect device: use CUDA if available, otherwise CPU
+def get_device():
+    """Auto-detect device: CUDA if available, otherwise CPU"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except:
+        pass
+    return "cpu"
+
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
@@ -127,7 +138,7 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 emb_npz=DEFAULT_EMB_NPZ,
                 faiss_index=DEFAULT_FAISS_INDEX,
                 top_k=1,  # Get top 1 as the query model
-                device="cuda",
+                device=get_device(),
                 output_json=None
             )
             
@@ -578,27 +589,32 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             else:
                 card2tab2card_all_with_links[search_type] = results
         
-        # Save results with timestamp-based filename
+        # Save results to timestamp-based folder
         # Use query time (start_time) for timestamp to ensure consistency
         timestamp_str = datetime.fromtimestamp(start_time).strftime('%Y%m%d_%H%M%S')
         
-        # Create descriptive filename based on mode
+        # Create folder name based on mode
         if query:
             # Query mode: use first 30 chars of query (sanitized)
             query_safe = "".join(c for c in query[:30] if c.isalnum() or c in (' ', '-', '_')).strip()
             query_safe = query_safe.replace(' ', '_')
-            filename = f'search_{timestamp_str}_{query_safe}.json'
+            folder_name = f'{timestamp_str}_{query_safe}'
         else:
             # ModelID mode: use model_id (sanitized)
             model_id_safe = model_id.replace('/', '_').replace('\\', '_')
-            filename = f'search_{timestamp_str}_{model_id_safe}.json'
+            folder_name = f'{timestamp_str}_{model_id_safe}'
         
-        # Limit filename length
-        if len(filename) > 150:
-            filename = filename[:150] + '.json'
+        # Limit folder name length
+        if len(folder_name) > 150:
+            folder_name = folder_name[:150]
         
-        output_json = os.path.join('data', filename)
-        os.makedirs('data', exist_ok=True)
+        # Create folder and save results
+        search_folder = os.path.join('data', folder_name)
+        os.makedirs(search_folder, exist_ok=True)
+        
+        # Save main results file
+        filename = 'search_results.json'
+        output_json = os.path.join(search_folder, filename)
         
         results_data = {
             "job_id": job_id,
@@ -612,16 +628,19 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             "comparison": comparison,
             "timestamp": datetime.fromtimestamp(start_time).isoformat(),
             "timestamp_str": timestamp_str,
-            "filename": filename
+            "folder_name": folder_name,
+            "filename": filename,
+            "folder_path": search_folder
         }
         
         with open(output_json, 'w', encoding='utf-8') as f:
             json.dump(results_data, f, ensure_ascii=False, indent=2)
         
         logger.log(f"✅ Results saved to {output_json}")
+        logger.log(f"📁 Search folder: {search_folder}")
         
-        # Also save with job_id for backward compatibility
-        job_id_json = os.path.join('data', f'compare_search_{job_id}.json')
+        # Also save with job_id for backward compatibility (in the same folder)
+        job_id_json = os.path.join(search_folder, f'compare_search_{job_id}.json')
         with open(job_id_json, 'w', encoding='utf-8') as f:
             json.dump(results_data, f, ensure_ascii=False, indent=2)
         
@@ -917,16 +936,22 @@ def search():
         
         # Mimic mode: load from saved results
         if search_mode == 'mimic':
-            filename = data.get('filename')
-            if not filename:
-                return jsonify({"status": "error", "message": "filename is required for mimic mode"}), 400
+            folder_name = data.get('folder_name')  # Can be timestamp folder or 'template'
+            if not folder_name:
+                return jsonify({"status": "error", "message": "folder_name is required for mimic mode"}), 400
             
-            # Try to find the file
-            file_path = os.path.join('data', filename)
+            # Determine file path
+            if folder_name == 'template':
+                # Load from template folder
+                file_path = os.path.join('data', 'template', 'search_results.json')
+            else:
+                # Load from timestamp folder
+                file_path = os.path.join('data', folder_name, 'search_results.json')
+            
             if not os.path.exists(file_path):
                 return jsonify({
                     "status": "error",
-                    "message": f"Saved results file not found: {filename}"
+                    "message": f"Saved results not found: {folder_name}"
                 }), 404
             
             # Load the saved results
@@ -938,7 +963,7 @@ def search():
             jobs[job_id] = JobLogger(job_id)
             jobs[job_id].set_results(saved_results)
             jobs[job_id].set_status("completed")
-            jobs[job_id].log(f"✅ Loaded saved results from {filename}")
+            jobs[job_id].log(f"✅ Loaded saved results from {folder_name}")
             jobs[job_id].log(f"   Original query: {saved_results.get('query', 'N/A')}")
             jobs[job_id].log(f"   Original model_id: {saved_results.get('model_id', 'N/A')}")
             jobs[job_id].log(f"   Original timestamp: {saved_results.get('timestamp', 'N/A')}")
@@ -991,30 +1016,44 @@ def search():
 
 @app.route('/api/saved-searches', methods=['GET'])
 def list_saved_searches():
-    """List all saved search results"""
+    """List all saved search results (organized by timestamp folders)"""
     try:
         data_dir = 'data'
         if not os.path.exists(data_dir):
             return jsonify({
                 "status": "success",
-                "searches": []
+                "searches": [],
+                "template_available": False
             })
         
-        # Find all search result files
-        search_files = []
-        for filename in os.listdir(data_dir):
-            if filename.startswith('search_') and filename.endswith('.json'):
-                file_path = os.path.join(data_dir, filename)
+        # Find all search folders (timestamp-based folders)
+        search_folders = []
+        
+        # Check for template folder
+        template_path = os.path.join(data_dir, 'template', 'search_results.json')
+        template_available = os.path.exists(template_path)
+        
+        # Scan data directory for timestamp folders
+        for item in os.listdir(data_dir):
+            item_path = os.path.join(data_dir, item)
+            
+            # Skip if not a directory or if it's special folders
+            if not os.path.isdir(item_path) or item in ['template', 'benchmarks']:
+                continue
+            
+            # Check if folder contains search_results.json
+            search_file = os.path.join(item_path, 'search_results.json')
+            if os.path.exists(search_file):
                 try:
                     # Read metadata without loading full file
-                    with open(file_path, 'r', encoding='utf-8') as f:
+                    with open(search_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                     
-                    # Get file stats
-                    stat = os.stat(file_path)
+                    # Get folder stats
+                    stat = os.stat(search_file)
                     
-                    search_files.append({
-                        "filename": filename,
+                    search_folders.append({
+                        "folder_name": item,
                         "query": data.get('query', ''),
                         "model_id": data.get('model_id', ''),
                         "timestamp": data.get('timestamp', ''),
@@ -1024,16 +1063,17 @@ def list_saved_searches():
                         "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat()
                     })
                 except Exception as e:
-                    # Skip files that can't be read
+                    # Skip folders that can't be read
                     continue
         
         # Sort by timestamp (newest first)
-        search_files.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        search_folders.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
         
         return jsonify({
             "status": "success",
-            "searches": search_files,
-            "count": len(search_files)
+            "searches": search_folders,
+            "count": len(search_folders),
+            "template_available": template_available
         })
     except Exception as e:
         return jsonify({
@@ -1212,4 +1252,4 @@ if __name__ == '__main__':
     print("  GET /api/results/<job_id> - Get final results")
     print("  GET /api/logs/<job_id> - Stream logs (SSE)")
     print("\nAll results saved to data/ directory")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5002, debug=False, threaded=True)

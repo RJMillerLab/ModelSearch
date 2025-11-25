@@ -15,7 +15,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Backend API URL
-BACKEND_URL = "http://localhost:5000"
+BACKEND_URL = "http://localhost:5002"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -243,27 +243,34 @@ HTML_TEMPLATE = """
         <p>Compare Card2Card (dense semantic) vs Card2Tab2Card (table-based) search</p>
         
         <div class="input-section">
-            <div class="mode-selector">
-                <label style="margin-bottom: 10px;">Search Type:</label>
-                <div class="mode-option">
-                    <input type="radio" id="search_type_new" name="search_type" value="new" checked onchange="toggleSearchType()">
-                    <label for="search_type_new">New Search</label>
-                </div>
-                <div class="mode-option">
-                    <input type="radio" id="search_type_mimic" name="search_type" value="mimic" onchange="toggleSearchType()">
-                    <label for="search_type_mimic">Mimic Search (Load Saved)</label>
-                </div>
+            <div style="margin-bottom: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                    <input type="checkbox" id="load_previous_search" onchange="toggleLoadPrevious()" style="margin-right: 8px; width: 18px; height: 18px;">
+                    <span style="font-weight: 500;">Load Previous Search</span>
+                </label>
+                <p style="font-size: 11px; color: #666; margin-top: 5px; margin-left: 26px;">
+                    Check to load a previously saved search result instead of running a new search
+                </p>
             </div>
             
-            <div id="mimic-input" class="mode-input" style="display: none; margin-top: 15px;">
-                <label for="saved_search_select">Select Saved Search:</label>
-                <select id="saved_search_select" style="width: 100%; padding: 8px; margin-top: 5px;" onchange="loadSavedSearchInfo()">
-                    <option value="">Loading saved searches...</option>
-                </select>
-                <button id="loadMimicBtn" onclick="loadMimicSearch()" style="margin-top: 10px; padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%;">
-                    🔄 Load Saved Results
-                </button>
-                <p id="mimic_info" style="font-size: 11px; color: #666; margin-top: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; display: none;"></p>
+            <div id="previous-search-section" style="display: none; margin-bottom: 20px;">
+                <div style="margin-bottom: 15px; padding: 10px; background: #e7f3ff; border-radius: 4px;">
+                    <button onclick="loadDemoExample()" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%; font-weight: 500; margin-bottom: 10px;">
+                        🎨 Load Demo Example (Template)
+                    </button>
+                    <p style="font-size: 11px; color: #666; margin: 0;">
+                        Or select from saved searches below:
+                    </p>
+                </div>
+                
+                <div style="margin-top: 15px;">
+                    <label style="margin-bottom: 10px; display: block; font-weight: bold;">Saved Searches:</label>
+                    <div id="saved_searches_list" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 10px; background: #f8f9fa;">
+                        <div style="text-align: center; color: #666; padding: 20px;">
+                            Loading saved searches...
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <div id="new-search-inputs">
@@ -331,6 +338,16 @@ HTML_TEMPLATE = """
         let currentJobId = null;
         let eventSource = null;
         
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            // Ensure "Load Previous Search" is unchecked by default
+            const loadPreviousCheckbox = document.getElementById('load_previous_search');
+            if (loadPreviousCheckbox) {
+                loadPreviousCheckbox.checked = false;
+            }
+            toggleLoadPrevious();
+        });
+        
         function updateTableSearchKValue(value) {
             document.getElementById('table_search_k').value = value;
         }
@@ -358,80 +375,146 @@ HTML_TEMPLATE = """
             }
         }
         
-        function toggleSearchType() {
-            const searchType = document.querySelector('input[name="search_type"]:checked').value;
-            const mimicInput = document.getElementById('mimic-input');
+        function toggleLoadPrevious() {
+            const loadPrevious = document.getElementById('load_previous_search').checked;
+            const previousSection = document.getElementById('previous-search-section');
             const newSearchInputs = document.getElementById('new-search-inputs');
             
-            if (searchType === 'mimic') {
-                mimicInput.style.display = 'block';
+            if (loadPrevious) {
+                previousSection.style.display = 'block';
                 newSearchInputs.style.display = 'none';
                 loadSavedSearches();
             } else {
-                mimicInput.style.display = 'none';
+                previousSection.style.display = 'none';
                 newSearchInputs.style.display = 'block';
             }
         }
         
         async function loadSavedSearches() {
-            const select = document.getElementById('saved_search_select');
-            select.innerHTML = '<option value="">Loading...</option>';
+            const listContainer = document.getElementById('saved_searches_list');
+            listContainer.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Loading...</div>';
             
             try {
                 const response = await fetch('{{BACKEND_URL}}/api/saved-searches');
                 const data = await response.json();
                 
                 if (data.status === 'success') {
-                    select.innerHTML = '<option value="">Select a saved search...</option>';
+                    let html = '';
                     
-                    if (data.searches.length === 0) {
-                        select.innerHTML = '<option value="">No saved searches found</option>';
-                        return;
+                    if (data.searches.length === 0 && !data.template_available) {
+                        html = '<div style="text-align: center; color: #666; padding: 20px;">No saved searches found. Run a new search to create one.</div>';
+                    } else {
+                        // Display each saved search as a clickable card
+                        data.searches.forEach(search => {
+                            const label = search.query 
+                                ? `${search.timestamp_str} - ${search.query.substring(0, 50)}${search.query.length > 50 ? '...' : ''}`
+                                : `${search.timestamp_str} - ${search.model_id}`;
+                            
+                            html += `
+                                <div class="saved-search-item" onclick="loadSavedSearchFolder('${search.folder_name}')" 
+                                     style="padding: 12px; margin-bottom: 8px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; transition: background 0.2s;"
+                                     onmouseover="this.style.background='#e7f3ff'" 
+                                     onmouseout="this.style.background='white'">
+                                    <div style="font-weight: 500; color: #333; margin-bottom: 4px;">${label}</div>
+                                    <div style="font-size: 11px; color: #666;">
+                                        ${search.query ? `Query: ${search.query.substring(0, 60)}${search.query.length > 60 ? '...' : ''}` : `Model: ${search.model_id}`}
+                                        ${search.top_k ? ` | Top K: ${search.top_k}` : ''}
+                                    </div>
+                                    <div style="font-size: 10px; color: #999; margin-top: 4px;">
+                                        ${search.timestamp_str || search.timestamp || ''}
+                                    </div>
+                                </div>
+                            `;
+                        });
                     }
                     
-                    data.searches.forEach(search => {
-                        const label = search.query 
-                            ? `${search.timestamp_str} - ${search.query.substring(0, 40)}...`
-                            : `${search.timestamp_str} - ${search.model_id}`;
-                        const option = document.createElement('option');
-                        option.value = search.filename;
-                        option.textContent = label;
-                        option.dataset.search = JSON.stringify(search);
-                        select.appendChild(option);
-                    });
+                    listContainer.innerHTML = html;
                 } else {
-                    select.innerHTML = '<option value="">Error loading saved searches</option>';
+                    listContainer.innerHTML = '<div style="text-align: center; color: #dc3545; padding: 20px;">Error loading saved searches</div>';
                 }
             } catch (error) {
-                select.innerHTML = '<option value="">Error: ' + error.message + '</option>';
+                listContainer.innerHTML = `<div style="text-align: center; color: #dc3545; padding: 20px;">Error: ${error.message}</div>`;
             }
         }
         
-        function loadSavedSearchInfo() {
-            const select = document.getElementById('saved_search_select');
-            const infoDiv = document.getElementById('mimic_info');
-            const selectedOption = select.options[select.selectedIndex];
+        async function loadSavedSearchFolder(folderName) {
+            // Reset UI
+            document.getElementById('progressSection').classList.add('active');
+            document.getElementById('resultsSection').classList.remove('active');
+            document.getElementById('errorMsg').style.display = 'none';
+            document.getElementById('logContainer').innerHTML = '';
             
-            if (selectedOption.value && selectedOption.dataset.search) {
-                const search = JSON.parse(selectedOption.dataset.search);
-                infoDiv.innerHTML = `
-                    <strong>Query:</strong> ${search.query || 'N/A'}<br>
-                    <strong>Model ID:</strong> ${search.model_id || 'N/A'}<br>
-                    <strong>Top K:</strong> ${search.top_k}<br>
-                    <strong>Timestamp:</strong> ${search.timestamp || search.timestamp_str}
-                `;
-                infoDiv.style.display = 'block';
-            } else {
-                infoDiv.style.display = 'none';
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        search_mode: 'mimic',
+                        folder_name: folderName
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'completed' || data.status === 'success') {
+                    currentJobId = data.job_id;
+                    // Display results directly
+                    displayResults(data.results || data);
+                    document.getElementById('progressSection').classList.remove('active');
+                } else {
+                    showError(data.message || 'Failed to load saved search');
+                }
+            } catch (error) {
+                showError('Error: ' + error.message);
+            }
+        }
+        
+        async function loadDemoExample() {
+            // Load the demo example from template folder
+            const loadBtn = event.target;
+            loadBtn.disabled = true;
+            loadBtn.textContent = '⏳ Loading Template...';
+            
+            // Reset UI
+            document.getElementById('progressSection').classList.add('active');
+            document.getElementById('resultsSection').classList.remove('active');
+            document.getElementById('errorMsg').style.display = 'none';
+            document.getElementById('logContainer').innerHTML = '';
+            
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        search_mode: 'mimic',
+                        folder_name: 'template'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'completed' || data.status === 'success') {
+                    currentJobId = data.job_id;
+                    // Display results directly
+                    displayResults(data.results || data);
+                    document.getElementById('progressSection').classList.remove('active');
+                } else {
+                    showError(data.message || 'Failed to load template');
+                }
+            } catch (error) {
+                showError('Error: ' + error.message);
+            } finally {
+                loadBtn.disabled = false;
+                loadBtn.textContent = '🎨 Load Demo Example (Template)';
             }
         }
         
         async function loadMimicSearch() {
             const select = document.getElementById('saved_search_select');
-            const filename = select.value;
+            const folderName = select.value;
             
-            if (!filename) {
-                showError('Please select a saved search');
+            if (!folderName) {
+                showError('Please select a saved search folder');
                 return;
             }
             
@@ -451,7 +534,7 @@ HTML_TEMPLATE = """
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         search_mode: 'mimic',
-                        filename: filename
+                        folder_name: folderName
                     })
                 });
                 
@@ -474,13 +557,15 @@ HTML_TEMPLATE = """
         }
         
         async function startSearch() {
-            const searchType = document.querySelector('input[name="search_type"]:checked').value;
+            // Check if user wants to load previous search
+            const loadPrevious = document.getElementById('load_previous_search').checked;
             
-            // If mimic mode, use loadMimicSearch instead
-            if (searchType === 'mimic') {
-                await loadMimicSearch();
+            if (loadPrevious) {
+                showError('Please select a saved search from the list above, or use "Load Demo Example" button');
                 return;
             }
+            
+            // Continue with new search logic
             
             const mode = document.querySelector('input[name="search_mode"]:checked').value;
             const query = document.getElementById('query').value.trim();
@@ -925,36 +1010,84 @@ HTML_TEMPLATE = """
         
         async function toggleTablePreview(tableExpandId, toggleElement) {
             const element = document.getElementById(tableExpandId);
-            if (!element) return;
+            if (!element) {
+                console.error('❌ Element not found:', tableExpandId);
+                return;
+            }
             
             // Get table path from data attribute
             const tablePath = toggleElement.getAttribute('data-table-path');
-            if (!tablePath) return;
+            if (!tablePath) {
+                console.error('❌ No table path found in data-table-path attribute');
+                return;
+            }
             
-            const isExpanded = element.style.display !== 'none';
+            console.log('🔄 Toggle table preview:', tableExpandId, 'Path:', tablePath);
+            console.log('   Current display:', element.style.display);
             
-            if (isExpanded) {
-                // Collapse
+            // Check current state - simpler logic
+            const isCurrentlyVisible = element.style.display === 'block' || (element.style.display === '' && element.offsetHeight > 0);
+            const contentDiv = element.querySelector('div');
+            const hasLoadedContent = contentDiv && 
+                                   contentDiv.innerHTML && 
+                                   !contentDiv.innerHTML.includes('Loading preview...') &&
+                                   !contentDiv.innerHTML.includes('⏳') &&
+                                   (contentDiv.innerHTML.includes('<table') || contentDiv.innerHTML.includes('Preview:'));
+            
+            console.log('   Is visible:', isCurrentlyVisible, 'Has content:', hasLoadedContent);
+            
+            if (isCurrentlyVisible && hasLoadedContent) {
+                // Collapse if already loaded and visible
+                console.log('   ➖ Collapsing...');
                 element.style.display = 'none';
                 toggleElement.textContent = '▶';
                 toggleElement.classList.remove('expanded');
             } else {
-                // Expand
+                // Expand and load
+                console.log('   ➕ Expanding and loading...');
                 element.style.display = 'block';
                 toggleElement.textContent = '▼';
                 toggleElement.classList.add('expanded');
                 
-                // Check if already loaded
-                const contentDiv = element.querySelector('div');
-                if (contentDiv && contentDiv.textContent.trim() === 'Loading preview...') {
+                // Get or create content div
+                let div = element.querySelector('div');
+                if (!div) {
+                    div = document.createElement('div');
+                    div.style.cssText = 'padding: 8px; background: white; border-radius: 4px; border: 1px solid #dee2e6;';
+                    element.appendChild(div);
+                }
+                
+                // Check if already loaded (has HTML table content, not just loading message)
+                const currentHTML = div.innerHTML || '';
+                const hasRealContent = currentHTML && 
+                                     !currentHTML.includes('Loading preview...') && 
+                                     !currentHTML.includes('⏳') &&
+                                     (currentHTML.includes('<table') || currentHTML.includes('Preview:'));
+                
+                if (!hasRealContent) {
+                    // Show loading state
+                    div.innerHTML = '<div style="font-size: 11px; color: #999;">⏳ Loading preview...</div>';
+                    
                     // Load preview
                     try {
-                        const response = await fetch(`{{BACKEND_URL}}/api/table-preview?path=${encodeURIComponent(tablePath)}`);
+                        console.log('📊 Loading table preview for:', tablePath);
+                        const url = `{{BACKEND_URL}}/api/table-preview?path=${encodeURIComponent(tablePath)}`;
+                        console.log('📡 Request URL:', url);
+                        
+                        const response = await fetch(url);
+                        
+                        if (!response.ok) {
+                            const errorText = await response.text();
+                            console.error('❌ HTTP Error:', response.status, errorText);
+                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                        }
+                        
                         const data = await response.json();
+                        console.log('✅ Table preview response:', data);
                         
                         if (data.status === 'success') {
                             // Use HTML directly from backend
-                            contentDiv.innerHTML = `
+                            div.innerHTML = `
                                 <div style="font-size: 10px; color: #999; margin-bottom: 5px;">
                                     Preview: ${data.rows} rows × ${data.columns} columns (first 5 rows, first 5 columns)
                                 </div>
@@ -962,12 +1095,17 @@ HTML_TEMPLATE = """
                                     ${data.html || ''}
                                 </div>
                             `;
+                            console.log('✅ Table preview loaded successfully');
                         } else {
-                            contentDiv.innerHTML = '<div style="color: #dc3545; font-size: 11px;">Error: ' + (data.message || 'Failed to load preview') + '</div>';
+                            console.error('❌ API Error:', data.message);
+                            div.innerHTML = `<div style="color: #dc3545; font-size: 11px;">❌ Error: ${data.message || 'Failed to load preview'}</div>`;
                         }
                     } catch (error) {
-                        contentDiv.innerHTML = '<div style="color: #dc3545; font-size: 11px;">Error: ' + error.message + '</div>';
+                        console.error('❌ Error loading table preview:', error);
+                        div.innerHTML = `<div style="color: #dc3545; font-size: 11px;">❌ Error: ${error.message}</div>`;
                     }
+                } else {
+                    console.log('✅ Table preview already loaded, skipping fetch');
                 }
             }
         }
@@ -986,4 +1124,4 @@ def index():
 if __name__ == '__main__':
     print("Starting ModelSearch Frontend...")
     print("Open http://localhost:5001 in your browser")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)

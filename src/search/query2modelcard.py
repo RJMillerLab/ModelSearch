@@ -17,13 +17,24 @@ from sentence_transformers import SentenceTransformer
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 
+def get_device():
+    """Auto-detect device: CUDA if available, otherwise CPU"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except:
+        pass
+    return "cpu"
+
+
 def search_query2modelcard(
     query: str,
     emb_npz: str = "data/card2card_embeddings.npz",
     faiss_index: str = "data/card2card.faiss",
     model_name: str = "all-MiniLM-L6-v2",
     top_k: int = 20,
-    device: str = "cuda",
+    device: Optional[str] = None,
     output_json: Optional[str] = None
 ) -> List[str]:
     """
@@ -47,6 +58,10 @@ def search_query2modelcard(
     
     # Load FAISS index
     index = faiss.read_index(faiss_index)
+    
+    # Auto-detect device if not specified
+    if device is None:
+        device = get_device()
     
     # Encode query
     model = SentenceTransformer(model_name, device=device)
@@ -88,21 +103,24 @@ def main():
                        help='Sentence transformer model name')
     parser.add_argument('--top_k', type=int, default=20,
                        help='Number of results to return')
-    parser.add_argument('--device', default='cuda',
-                       help='Device to use (cuda or cpu)')
+    parser.add_argument('--device', default=None,
+                       help='Device to use (cuda or cpu). Auto-detects if not specified.')
     parser.add_argument('--output_json', default=None,
                        help='Optional path to save results as JSON')
     
     args = parser.parse_args()
     
     try:
+        # Auto-detect device if not specified
+        device = args.device if args.device else get_device()
+        
         results = search_query2modelcard(
             query=args.query,
             emb_npz=args.emb_npz,
             faiss_index=args.faiss_index,
             model_name=args.model_name,
             top_k=args.top_k,
-            device=args.device,
+            device=device,
             output_json=args.output_json
         )
         
