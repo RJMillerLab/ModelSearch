@@ -373,9 +373,9 @@ HTML_TEMPLATE = """
             
             <label for="table_search_k" style="margin-top: 15px;">Table Search Top K (only used when mode is "Temporary Dataset Search"):</label>
             <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" id="table_search_k_slider" min="10" max="200" value="20" step="5" 
+                <input type="range" id="table_search_k_slider" min="1" max="20" value="20" step="1" 
                        style="flex: 1;" oninput="updateTableSearchKValue(this.value)">
-                <input type="number" id="table_search_k" value="20" min="10" max="200" 
+                <input type="number" id="table_search_k" value="20" min="1" max="20" 
                        style="width: 80px;" oninput="updateTableSearchKSlider(this.value)">
             </div>
             <p style="font-size: 11px; color: #666; margin-top: 3px;">
@@ -434,15 +434,15 @@ HTML_TEMPLATE = """
         }
         
         function updateTableSearchKDefault() {
-            // When top_k changes, suggest a default table_search_k (1.5x top_k, but at least 20)
+            // When top_k changes, suggest a default table_search_k (1.5x top_k, but at least 20, max 20)
             const topK = parseInt(document.getElementById('top_k').value) || 20;
-            const suggestedTableSearchK = Math.max(Math.round(topK * 1.5), 20);
+            const suggestedTableSearchK = Math.min(Math.max(Math.round(topK * 1.5), 20), 20);
             // Only update if current value is close to old default (within 5)
             const currentTableSearchK = parseInt(document.getElementById('table_search_k').value) || 20;
             const oldTopK = Math.floor(currentTableSearchK / 1.5);
             if (Math.abs(currentTableSearchK - Math.round(oldTopK * 1.5)) <= 5) {
                 // User hasn't manually adjusted much, update to new default
-                const newValue = Math.min(Math.max(suggestedTableSearchK, 10), 200);
+                const newValue = Math.min(Math.max(suggestedTableSearchK, 1), 20);
                 document.getElementById('table_search_k').value = newValue;
                 document.getElementById('table_search_k_slider').value = newValue;
             }

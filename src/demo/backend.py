@@ -737,10 +737,10 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                     else:
                         logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Query: DataFrame is None")
                 
-                # Use provided table_search_k or default to top_k * 1.5 (minimum 20) for table search
+                # Use provided table_search_k or default to top_k * 1.5 (minimum 20, max 20) for table search
                 # This allows more tables to be retrieved, then we limit modelcards to top_k
                 if table_search_k is None:
-                    table_search_k = max(int(top_k * 1.5), 20)  # Get more tables, then filter to top_k modelcards
+                    table_search_k = min(max(int(top_k * 1.5), 20), 20)  # Get more tables, then filter to top_k modelcards (max 20)
                 
                 logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Table search k: {table_search_k}, ModelCard k: {top_k}")
                 logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] DB path: {DEFAULT_DB_PATH}")
