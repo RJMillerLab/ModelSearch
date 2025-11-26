@@ -352,16 +352,36 @@ HTML_TEMPLATE = """
                 Both pipelines will return this many model cards (Card2Card and Card2Tab2Card)
             </p>
             
-            <label for="table_search_k" style="margin-top: 15px;">Table Search Top K (Card2Tab2Card Intermediate Step):</label>
+            <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="margin-bottom: 10px; display: block; font-weight: bold;">Tab2Tab Step Mode (Card2Tab2Card Intermediate Step):</label>
+                <div class="mode-option" style="margin-bottom: 10px;">
+                    <input type="radio" id="tab2tab_mode_search" name="tab2tab_mode" value="search" checked onchange="toggleTab2TabMode()">
+                    <label for="tab2tab_mode_search">Temporary Dataset Search (default)</label>
+                </div>
+                <div class="mode-option" style="margin-bottom: 10px;">
+                    <input type="radio" id="tab2tab_mode_load" name="tab2tab_mode" value="load" onchange="toggleTab2TabMode()">
+                    <label for="tab2tab_mode_load">Load from Saved JSON Results</label>
+                </div>
+                <div id="tab2tab_json_input" style="display: none; margin-top: 10px;">
+                    <label for="tab2tab_json_file" style="font-size: 12px; color: #666;">Select saved tab2tab JSON file:</label>
+                    <input type="file" id="tab2tab_json_file" accept=".json" style="margin-top: 5px; padding: 5px; width: 100%; font-size: 12px;">
+                    <p style="font-size: 10px; color: #999; margin-top: 3px;">
+                        JSON file should contain tab2tab search results (from tab2tab.py --output)
+                    </p>
+                </div>
+            </div>
+            
+            <label for="table_search_k" style="margin-top: 15px;">Table Search Top K (only used when mode is "Temporary Dataset Search"):</label>
             <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" id="table_search_k_slider" min="10" max="200" value="40" step="5" 
+                <input type="range" id="table_search_k_slider" min="10" max="200" value="20" step="5" 
                        style="flex: 1;" oninput="updateTableSearchKValue(this.value)">
-                <input type="number" id="table_search_k" value="40" min="10" max="200" 
+                <input type="number" id="table_search_k" value="20" min="10" max="200" 
                        style="width: 80px;" oninput="updateTableSearchKSlider(this.value)">
             </div>
             <p style="font-size: 11px; color: #666; margin-top: 3px;">
                 Controls how many tables to retrieve in Card2Tab2Card search (intermediate step). 
                 Final modelcard count is still controlled by "Top K Results" above.
+                <span id="table_search_k_note" style="display: none; color: #999;"> (Disabled when loading from JSON)</span>
             </p>
             
             <button id="searchBtn" onclick="startSearch()">Start Search</button>
@@ -396,6 +416,9 @@ HTML_TEMPLATE = """
             
             // Initialize diagram based on default selected mode (query is default)
             toggleMode();
+            
+            // Initialize tab2tab mode
+            toggleTab2TabMode();
         });
         
         function updateTableSearchKValue(value) {
@@ -411,17 +434,37 @@ HTML_TEMPLATE = """
         }
         
         function updateTableSearchKDefault() {
-            // When top_k changes, suggest a default table_search_k (2x top_k)
+            // When top_k changes, suggest a default table_search_k (1.5x top_k, but at least 20)
             const topK = parseInt(document.getElementById('top_k').value) || 20;
-            const suggestedTableSearchK = topK * 2;
+            const suggestedTableSearchK = Math.max(Math.round(topK * 1.5), 20);
             // Only update if current value is close to old default (within 5)
-            const currentTableSearchK = parseInt(document.getElementById('table_search_k').value) || 40;
-            const oldTopK = Math.floor(currentTableSearchK / 2);
-            if (Math.abs(currentTableSearchK - oldTopK * 2) <= 5) {
+            const currentTableSearchK = parseInt(document.getElementById('table_search_k').value) || 20;
+            const oldTopK = Math.floor(currentTableSearchK / 1.5);
+            if (Math.abs(currentTableSearchK - Math.round(oldTopK * 1.5)) <= 5) {
                 // User hasn't manually adjusted much, update to new default
                 const newValue = Math.min(Math.max(suggestedTableSearchK, 10), 200);
                 document.getElementById('table_search_k').value = newValue;
                 document.getElementById('table_search_k_slider').value = newValue;
+            }
+        }
+        
+        function toggleTab2TabMode() {
+            const mode = document.querySelector('input[name="tab2tab_mode"]:checked').value;
+            const jsonInput = document.getElementById('tab2tab_json_input');
+            const tableSearchKInputs = document.getElementById('table_search_k');
+            const tableSearchKSlider = document.getElementById('table_search_k_slider');
+            const note = document.getElementById('table_search_k_note');
+            
+            if (mode === 'load') {
+                jsonInput.style.display = 'block';
+                tableSearchKInputs.disabled = true;
+                tableSearchKSlider.disabled = true;
+                note.style.display = 'inline';
+            } else {
+                jsonInput.style.display = 'none';
+                tableSearchKInputs.disabled = false;
+                tableSearchKSlider.disabled = false;
+                note.style.display = 'none';
             }
         }
         
@@ -622,6 +665,7 @@ HTML_TEMPLATE = """
             const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt(document.getElementById('top_k').value);
             const tableSearchK = parseInt(document.getElementById('table_search_k').value);
+            const tab2tabMode = document.querySelector('input[name="tab2tab_mode"]:checked').value;
             
             // Validate input based on mode
             if (mode === 'query' && !query) {
@@ -631,6 +675,15 @@ HTML_TEMPLATE = """
             if (mode === 'modelid' && !modelId) {
                 showError('Please enter a model ID');
                 return;
+            }
+            
+            // Validate tab2tab mode
+            if (tab2tabMode === 'load') {
+                const jsonFile = document.getElementById('tab2tab_json_file').files[0];
+                if (!jsonFile) {
+                    showError('Please select a JSON file when using "Load from Saved JSON Results" mode');
+                    return;
+                }
             }
             
             // Reset UI
@@ -646,8 +699,56 @@ HTML_TEMPLATE = """
                     search_mode: 'new',  // Explicitly set to new search
                     mode: mode,
                     top_k: topK,
-                    table_search_k: tableSearchK
+                    tab2tab_mode: tab2tabMode
                 };
+                
+                // Add table_search_k only if mode is search
+                if (tab2tabMode === 'search') {
+                    requestBody.table_search_k = tableSearchK;
+                }
+                
+                // Add tab2tab_json if mode is load
+                if (tab2tabMode === 'load') {
+                    const jsonFile = document.getElementById('tab2tab_json_file').files[0];
+                    // Read file as text
+                    const fileReader = new FileReader();
+                    fileReader.onload = async function(e) {
+                        try {
+                            const jsonContent = e.target.result;
+                            // Parse to validate JSON
+                            const jsonData = JSON.parse(jsonContent);
+                            requestBody.tab2tab_json = jsonContent;
+                            
+                            // Continue with the request
+                            const response = await fetch('{{BACKEND_URL}}/api/search', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(requestBody)
+                            });
+                            
+                            const data = await response.json();
+                            
+                            if (data.status === 'started') {
+                                currentJobId = data.job_id;
+                                startLogStreaming(currentJobId);
+                                pollResults(currentJobId);
+                            } else {
+                                showError(data.message || 'Failed to start search');
+                                document.getElementById('searchBtn').disabled = false;
+                            }
+                        } catch (error) {
+                            showError('Error reading JSON file: ' + error.message);
+                            document.getElementById('searchBtn').disabled = false;
+                        }
+                    };
+                    fileReader.onerror = function() {
+                        showError('Error reading JSON file');
+                        document.getElementById('searchBtn').disabled = false;
+                    };
+                    fileReader.readAsText(jsonFile);
+                    return; // Exit early, will continue in fileReader.onload
+                }
+                
                 if (mode === 'query') {
                     requestBody.query = query;
                 } else {

@@ -91,7 +91,7 @@ class JobLogger:
             self.status = "completed"
 
 
-def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None):
+def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None, tab2tab_mode: str = 'search', tab2tab_json: Optional[str] = None):
     """Run the complete search pipeline in background
     
     Args:
@@ -100,6 +100,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         top_k: Number of results to return
         model_id: Model ID (for modelid mode)
         table_search_k: Number of tables to retrieve in Card2Tab2Card search (defaults to top_k * 2)
+        tab2tab_mode: Mode for tab2tab step - 'search' (temporary search) or 'load' (load from JSON)
+        tab2tab_json: JSON string containing saved tab2tab results (required when tab2tab_mode='load')
     """
     logger = jobs[job_id]
     
@@ -270,40 +272,501 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             """Run one Card2Tab2Card search type"""
             logger.log(f"  [Card2Tab2Card-{search_type_name}] Starting...")
             try:
+                # query_csv is available in the outer scope
+                # Define hardcoded JSON file paths to check (in priority order)
+                # These are from starmie, Blend_internal, and CitationLake
+                base_paths = [
+                    ".",  # Current directory
+                    "data",
+                    "data/tab2tab_cache",
+                    "../starmie_internal",
+                    "../starmie_internal/data",
+                    "../starmie_internal/output",
+                    "src/Blend_internal",
+                    "../Blend_internal",
+                    "../CitationLake",
+                    "../CitationLake/data",
+                    "../CitationLake/output",
+                    "data_citationlake",
+                ]
+                
+                # Map search_type to possible JSON filenames
+                json_filename_map = {
+                    'keyword': [
+                        'keyword_ori_tr_str.json',
+                        'keyword_ori_tr_str_proc.json',
+                        'keyword_ori_tr.json',
+                        'keyword_ori_str.json',
+                        'baseline_keyword.json',
+                        'baseline_keyword_simple.json',
+                        'keyword.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'single_column': [
+                        'singcol_joinable_ori_tr_str.json',
+                        'singcol_joinable_ori_tr.json',
+                        'singcol_joinable_ori_str.json',
+                        'baseline_singcol_joinable.json',
+                        'baseline_singcol_joinable_withheader.json',
+                        'singlecol_joinable.json',
+                        'single_column.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'multi_column': [
+                        'multicol_joinable.json',
+                        'multi_column.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'unionable': [
+                        'unionable.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'complex': [
+                        'complex.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'correlation': [
+                        'correlation.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'imputation': [
+                        'imputation.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'augmentation': [
+                        'augmentation.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'dependent_data': [
+                        'dependent_data.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'feature_for_ml': [
+                        'feature_for_ml.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'multi_column_collinearity': [
+                        'multi_column_collinearity.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                    'negative_example': [
+                        'negative_example.json',
+                        f'tab2tab_{search_type_name}.json',
+                    ],
+                }
+                
+                # Get possible filenames for this search_type
+                possible_filenames = json_filename_map.get(search_type_name, [f'tab2tab_{search_type_name}.json'])
+                
+                # Build all possible paths to check
+                # Get project root (assuming backend.py is in src/demo/)
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+                
+                possible_paths = []
+                for base_path in base_paths:
+                    for filename in possible_filenames:
+                        # Resolve relative paths to project root
+                        if os.path.isabs(base_path):
+                            full_path = os.path.join(base_path, filename)
+                        else:
+                            # Relative path - resolve from project root
+                            full_path = os.path.join(project_root, base_path, filename)
+                        # Normalize path (resolve .. and .)
+                        full_path = os.path.normpath(full_path)
+                        possible_paths.append(full_path)
+                
+                # Also add cache file as fallback
+                cache_dir = "data/tab2tab_cache"
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_file = os.path.join(cache_dir, f"tab2tab_{search_type_name}.json")
+                if cache_file not in possible_paths:
+                    possible_paths.append(cache_file)
+                
+                # Print all paths being checked
+                logger.log(f"  📂 [Card2Tab2Card-{search_type_name}] Checking {len(possible_paths)} possible JSON file paths:")
+                for i, path in enumerate(possible_paths, 1):
+                    exists = "✅ EXISTS" if os.path.exists(path) else "❌ not found"
+                    logger.log(f"     {i}. {path} - {exists}")
+                
+                # Try to find and load from cache
+                cached_results = None
+                found_path = None
+                
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        found_path = path
+                        logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Found JSON file: {path}")
+                        break
+                
+                if found_path:
+                    try:
+                        import json
+                        logger.log(f"  📖 [Card2Tab2Card-{search_type_name}] Reading JSON file: {found_path}")
+                        with open(found_path, 'r', encoding='utf-8') as f:
+                            json_data = json.load(f)
+                        
+                        # Check JSON format: could be {basename: [basenames]} or {"results": [table_ids]}
+                        is_basename_format = False
+                        is_table_id_format = False
+                        
+                        if isinstance(json_data, dict):
+                            # Check if it's basename format: {csv_basename: [retrieved_csv_basenames]}
+                            # Keys should be strings (basenames), values should be lists
+                            sample_keys = list(json_data.keys())[:3] if json_data else []
+                            if sample_keys and all(isinstance(k, str) for k in sample_keys):
+                                sample_values = [json_data[k] for k in sample_keys if k in json_data]
+                                if sample_values and all(isinstance(v, list) for v in sample_values):
+                                    is_basename_format = True
+                                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Detected basename format JSON: {len(json_data)} query tables")
+                            
+                            # Check if it's table_id format: {"results": [table_ids], "search_type": ...}
+                            if "results" in json_data and isinstance(json_data.get("results"), list):
+                                is_table_id_format = True
+                                logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Detected table_id format JSON")
+                        
+                        if not is_basename_format and not is_table_id_format:
+                            logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Unknown JSON format, will re-search")
+                            cached_results = None
+                        elif is_basename_format:
+                            # Use basename format directly
+                            cached_results = {"format": "basename", "data": json_data}
+                        elif is_table_id_format:
+                            # Verify the cached results match the search_type
+                            cached_search_type = json_data.get('search_type', '')
+                            if cached_search_type and cached_search_type != search_type_name:
+                                logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON search_type ({cached_search_type}) doesn't match current ({search_type_name}), will re-search")
+                                cached_results = None
+                            else:
+                                # Verify table IDs exist in database
+                                table_ids = json_data.get('results', [])
+                                if table_ids:
+                                    import duckdb
+                                    con = duckdb.connect(DEFAULT_DB_PATH, read_only=True)
+                                    try:
+                                        table_ids_str = ','.join(str(tid) for tid in table_ids)
+                                        verify_query = f"""
+                                            SELECT DISTINCT tableid 
+                                            FROM modellake_index 
+                                            WHERE tableid IN ({table_ids_str}) AND rowid = -1
+                                        """
+                                        verified_ids = [row[0] for row in con.execute(verify_query).fetchall()]
+                                        
+                                        if len(verified_ids) == len(table_ids):
+                                            logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Cached JSON is valid ({len(table_ids)} table IDs verified)")
+                                            cached_results = {"format": "table_id", "results": table_ids}
+                                        else:
+                                            logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Cached JSON has invalid table IDs ({len(verified_ids)}/{len(table_ids)} valid), will re-search")
+                                            logger.log(f"     Missing table IDs: {set(table_ids) - set(verified_ids)}")
+                                            cached_results = None
+                                    except Exception as e:
+                                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Error verifying cached JSON: {str(e)}, will re-search")
+                                        cached_results = None
+                                    finally:
+                                        con.close()
+                                else:
+                                    logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Cached JSON has no table IDs, will re-search")
+                                    cached_results = None
+                    except json.JSONDecodeError as e:
+                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Cached JSON is invalid (JSON decode error: {str(e)}), will re-search")
+                        cached_results = None
+                    except Exception as e:
+                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Error reading cached JSON: {str(e)}, will re-search")
+                        cached_results = None
+                else:
+                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] No cached JSON file found: {cache_file}, will perform new search")
+                
+                # If we have valid cached results, use them
+                if cached_results:
+                    # Get query tables for the model
+                    from src.search.card2tab2card import get_tables_for_model
+                    query_tables = get_tables_for_model(
+                        model_id=model_id,
+                        schema_log_path=DEFAULT_SCHEMA_LOG,
+                        use_citationlake=True
+                    )
+                    
+                    # If model has no tables, try to use the query_csv basename
+                    if not query_tables and query_csv:
+                        query_tables = [query_csv]
+                        logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Model has no tables, using query CSV: {query_csv}")
+                    
+                    if not query_tables:
+                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] No query tables found for model {model_id} and no query CSV available")
+                        return search_type_name, {"error": f"No query tables found for model {model_id}", "model_ids": [], "intermediate": {}}
+                    
+                    # Handle different JSON formats
+                    if cached_results.get("format") == "basename":
+                        # Format: {csv_basename: [retrieved_csv_basenames]}
+                        basename_data = cached_results["data"]
+                        logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Using basename format JSON with {len(basename_data)} query tables")
+                        
+                        # Build table_search_results: use basename as key
+                        table_search_results = {}
+                        for query_table in query_tables:
+                            table_basename = os.path.basename(str(query_table))
+                            # Look up in JSON using basename
+                            if table_basename in basename_data:
+                                retrieved_basenames = basename_data[table_basename]
+                                # Ensure it's a list
+                                if not isinstance(retrieved_basenames, list):
+                                    retrieved_basenames = [retrieved_basenames] if retrieved_basenames else []
+                                # Map both full path and basename to retrieved basenames
+                                table_search_results[query_table] = retrieved_basenames
+                                table_search_results[table_basename] = retrieved_basenames
+                                logger.log(f"     Found {len(retrieved_basenames)} results for {table_basename}")
+                            else:
+                                logger.log(f"     ⚠️  No results in JSON for {table_basename}")
+                        
+                        if not table_search_results:
+                            logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] No matching query tables found in JSON, will re-search")
+                            cached_results = None
+                        else:
+                            logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Using search_card2tab2card_from_tables with {len(table_search_results)} query tables from basename JSON")
+                    else:
+                        # Format: {"results": [table_ids]}
+                        table_ids = cached_results.get('results', [])
+                        logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Loading from table_id format JSON: {len(table_ids)} table IDs")
+                        
+                        # Convert table IDs to filenames using database
+                        import duckdb
+                        con = duckdb.connect(DEFAULT_DB_PATH, read_only=True)
+                        try:
+                            table_ids_str = ','.join(str(tid) for tid in table_ids)
+                            filename_query = f"""
+                                SELECT DISTINCT tableid, filename 
+                                FROM modellake_index 
+                                WHERE tableid IN ({table_ids_str}) AND rowid = -1
+                            """
+                            filename_results = con.execute(filename_query).fetchall()
+                            tableid_to_filename = {tid: filename for tid, filename in filename_results}
+                            retrieved_filenames = list(tableid_to_filename.values())
+                            
+                            logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Converted {len(retrieved_filenames)} table IDs to filenames")
+                            
+                            if not retrieved_filenames:
+                                logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] No filenames found for table IDs, will re-search")
+                                cached_results = None  # Force re-search
+                            else:
+                                # Build table_search_results dict: map query table to retrieved filenames
+                                table_search_results = {}
+                                for query_table in query_tables:
+                                    table_key = query_table
+                                    table_basename = os.path.basename(str(query_table))
+                                    table_search_results[table_key] = retrieved_filenames
+                                    table_search_results[table_basename] = retrieved_filenames
+                                
+                                logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Using search_card2tab2card_from_tables with {len(query_tables)} query tables and {len(retrieved_filenames)} retrieved tables")
+                        finally:
+                            con.close()
+                    
+                    # If we have valid table_search_results, proceed with search
+                    if cached_results and 'table_search_results' in locals() and table_search_results:
+                            
+                            # Use search_card2tab2card_from_tables
+                            from src.search.card2tab2card import search_card2tab2card_from_tables
+                            results = search_card2tab2card_from_tables(
+                                model_id=model_id,
+                                table_search_results=table_search_results,
+                                relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
+                                schema_log_path=DEFAULT_SCHEMA_LOG,
+                                use_citationlake=True,
+                                k=top_k,
+                                modelcard_k=top_k
+                            )
+                            
+                            # Build intermediate data structure
+                            intermediate_data = {
+                                "retrieved_table_ids": table_ids,
+                                "retrieved_table_filenames": retrieved_filenames,
+                                "table_id_to_filename": {str(tid): filename for tid, filename in tableid_to_filename.items()},
+                                "table_to_models": {}  # Will be populated by search_card2tab2card_from_tables if needed
+                            }
+                            
+                            logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Found {len(results)} results from cached JSON")
+                            return search_type_name, {
+                                "model_ids": results,
+                                "intermediate": intermediate_data
+                            }
+                    finally:
+                        con.close()
+                
+                # If we reach here, we need to perform a new search
+                # Check if we should load from manually provided JSON (old behavior)
+                if tab2tab_mode == 'load' and tab2tab_json:
+                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Loading from saved JSON results...")
+                    try:
+                        import json
+                        saved_results = json.loads(tab2tab_json)
+                        
+                        # Check if saved results match the current search type
+                        saved_search_type = saved_results.get('search_type', '')
+                        if saved_search_type and saved_search_type != search_type_name:
+                            logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Saved JSON search_type ({saved_search_type}) doesn't match current search_type ({search_type_name}), using anyway...")
+                        
+                        # Extract table IDs from saved results
+                        # Format from tab2tab.py: {"query": ..., "search_type": ..., "k": ..., "results": [table_ids], ...}
+                        table_ids = saved_results.get('results', [])
+                        if not table_ids:
+                            logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] No table IDs found in saved JSON")
+                            return search_type_name, {"error": "No table IDs in saved JSON", "model_ids": [], "intermediate": {}}
+                        
+                        logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Found {len(table_ids)} table IDs in saved JSON (saved search_type: {saved_search_type})")
+                        
+                        # Convert table IDs to filenames using database
+                        import duckdb
+                        con = duckdb.connect(DEFAULT_DB_PATH, read_only=True)
+                        try:
+                            table_ids_str = ','.join(str(tid) for tid in table_ids)
+                            filename_query = f"""
+                                SELECT DISTINCT tableid, filename 
+                                FROM modellake_index 
+                                WHERE tableid IN ({table_ids_str}) AND rowid = -1
+                            """
+                            filename_results = con.execute(filename_query).fetchall()
+                            tableid_to_filename = {tid: filename for tid, filename in filename_results}
+                            retrieved_filenames = list(tableid_to_filename.values())
+                            
+                            logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Converted {len(retrieved_filenames)} table IDs to filenames")
+                            
+                            if not retrieved_filenames:
+                                logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] No filenames found for table IDs")
+                                return search_type_name, {"error": "No filenames found for table IDs", "model_ids": [], "intermediate": {}}
+                            
+                            # Get query tables for the model
+                            from src.search.card2tab2card import get_tables_for_model
+                            query_tables = get_tables_for_model(
+                                model_id=model_id,
+                                schema_log_path=DEFAULT_SCHEMA_LOG,
+                                use_citationlake=True
+                            )
+                            
+                            if not query_tables:
+                                logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] No query tables found for model {model_id}")
+                                return search_type_name, {"error": f"No query tables found for model {model_id}", "model_ids": [], "intermediate": {}}
+                            
+                            # Build table_search_results dict: map query table to retrieved filenames
+                            # For simplicity, map all query tables to all retrieved filenames
+                            # (In a more sophisticated implementation, we could match based on search_type)
+                            table_search_results = {}
+                            for query_table in query_tables:
+                                table_key = query_table
+                                table_basename = os.path.basename(str(query_table))
+                                table_search_results[table_key] = retrieved_filenames
+                                table_search_results[table_basename] = retrieved_filenames
+                            
+                            logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Using search_card2tab2card_from_tables with {len(query_tables)} query tables and {len(retrieved_filenames)} retrieved tables")
+                            
+                            # Use search_card2tab2card_from_tables
+                            from src.search.card2tab2card import search_card2tab2card_from_tables
+                            results = search_card2tab2card_from_tables(
+                                model_id=model_id,
+                                table_search_results=table_search_results,
+                                relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
+                                schema_log_path=DEFAULT_SCHEMA_LOG,
+                                use_citationlake=True,
+                                k=top_k,
+                                modelcard_k=top_k
+                            )
+                            
+                            # Build intermediate data structure
+                            if cached_results.get("format") == "basename":
+                                # For basename format, collect all retrieved basenames
+                                all_retrieved = set()
+                                for fnames in table_search_results.values():
+                                    all_retrieved.update(fnames)
+                                intermediate_data = {
+                                    "retrieved_table_ids": [],
+                                    "retrieved_table_filenames": list(all_retrieved),
+                                    "table_id_to_filename": {},
+                                    "table_to_models": {},
+                                    "source": "basename_json"
+                                }
+                            else:
+                                # For table_id format
+                                intermediate_data = {
+                                    "retrieved_table_ids": table_ids,
+                                    "retrieved_table_filenames": retrieved_filenames,
+                                    "table_id_to_filename": {str(tid): filename for tid, filename in tableid_to_filename.items()},
+                                    "table_to_models": {},
+                                    "source": "table_id_json"
+                                }
+                            
+                            logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Found {len(results)} results from saved JSON")
+                            return search_type_name, {
+                                "model_ids": results,
+                                "intermediate": intermediate_data
+                            }
+                    else:
+                        # No valid results from cached JSON
+                        cached_results = None
+                        finally:
+                            con.close()
+                    except json.JSONDecodeError as e:
+                        logger.log(f"  ❌ [Card2Tab2Card-{search_type_name}] JSON decode error: {str(e)}")
+                        return search_type_name, {"error": f"Invalid JSON: {str(e)}"}
+                    except Exception as e:
+                        logger.log(f"  ❌ [Card2Tab2Card-{search_type_name}] Error loading from JSON: {str(e)}")
+                        import traceback
+                        logger.log(f"  Traceback: {traceback.format_exc()}")
+                        return search_type_name, {"error": str(e)}
+                
+                # Default: temporary dataset search
                 # Use a temporary JSON file to capture intermediate results
                 import tempfile
                 import json
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
                     tmp_json_path = tmp_file.name
                 
+                # Validate query_parsed before proceeding
+                if query_parsed is None:
+                    logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] query_parsed is None, cannot perform search")
+                    return search_type_name, {"error": f"query_parsed is None for {search_type_name}", "model_ids": [], "intermediate": {}}
+                
                 # Log query details for debugging
                 if search_type_name == 'single_column':
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} values")
+                    if query_parsed:
+                        logger.log(f"     Sample values: {query_parsed[:3]}{'...' if len(query_parsed) > 3 else ''}")
                 elif search_type_name == 'keyword':
                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: {len(query_parsed) if query_parsed else 0} keywords")
+                    if query_parsed:
+                        logger.log(f"     Keywords: {query_parsed[:5]}{'...' if len(query_parsed) > 5 else ''}")
                 elif search_type_name in ['multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', 'negative_example']:
-                    logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: DataFrame with {len(query_parsed) if query_parsed is not None else 0} rows")
+                    if query_parsed is not None:
+                        logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Query: DataFrame with {len(query_parsed)} rows, {len(query_parsed.columns) if hasattr(query_parsed, 'columns') else 'N/A'} columns")
+                    else:
+                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Query: DataFrame is None")
                 
-                # Use provided table_search_k or default to top_k * 2 for table search
+                # Use provided table_search_k or default to top_k * 1.5 (minimum 20) for table search
                 # This allows more tables to be retrieved, then we limit modelcards to top_k
                 if table_search_k is None:
-                    table_search_k = top_k * 2  # Get more tables, then filter to top_k modelcards
+                    table_search_k = max(int(top_k * 1.5), 20)  # Get more tables, then filter to top_k modelcards
                 
                 logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Table search k: {table_search_k}, ModelCard k: {top_k}")
+                logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] DB path: {DEFAULT_DB_PATH}")
+                logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] DB exists: {os.path.exists(DEFAULT_DB_PATH) if DEFAULT_DB_PATH else False}")
                 
-                results = search_card2tab2card(
-                    model_id=model_id,
-                    relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
-                    query=query_parsed,
-                    search_type=search_type_name,
-                    k=top_k,  # Legacy parameter for backward compatibility
-                    table_search_k=table_search_k,  # Control table search topk
-                    modelcard_k=top_k,  # Control final modelcard topk
-                    schema_log_path=DEFAULT_SCHEMA_LOG,
-                    use_citationlake=True,
-                    output_json=tmp_json_path,
-                    db_path=DEFAULT_DB_PATH
-                )
+                logger.log(f"  🔍 [Card2Tab2Card-{search_type_name}] Performing new tab2tab search using Blend_internal...")
+                try:
+                    results = search_card2tab2card(
+                        model_id=model_id,
+                        relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
+                        query=query_parsed,
+                        search_type=search_type_name,
+                        k=top_k,  # Legacy parameter for backward compatibility
+                        table_search_k=table_search_k,  # Control table search topk
+                        modelcard_k=top_k,  # Control final modelcard topk
+                        schema_log_path=DEFAULT_SCHEMA_LOG,
+                        use_citationlake=True,
+                        output_json=tmp_json_path,
+                        db_path=DEFAULT_DB_PATH
+                    )
+                    logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Search completed, got {len(results) if results else 0} results")
+                except Exception as e:
+                    logger.log(f"  ❌ [Card2Tab2Card-{search_type_name}] Error during search: {str(e)}")
+                    import traceback
+                    logger.log(f"  Traceback: {traceback.format_exc()}")
+                    return search_type_name, {"error": f"Search failed: {str(e)}", "model_ids": [], "intermediate": {}}
                 
                 # Read intermediate results from JSON
                 intermediate_data = {}
@@ -322,6 +785,30 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                                     full_results = json.loads(content)
                                     intermediate_data = full_results.get('intermediate', {})
                                     logger.log(f"  ℹ️  [Card2Tab2Card-{search_type_name}] Loaded intermediate data from {tmp_json_path} ({file_size} bytes)")
+                                    
+                                    # Save tab2tab results to cache for future use
+                                    table_ids = intermediate_data.get('retrieved_table_ids', [])
+                                    if table_ids:
+                                        try:
+                                            cache_data = {
+                                                "query": str(query_parsed) if query_parsed is not None else None,
+                                                "search_type": search_type_name,
+                                                "k": table_search_k,
+                                                "results": table_ids,
+                                                "num_results": len(table_ids),
+                                                "timestamp": datetime.now().isoformat()
+                                            }
+                                            
+                                            # Save to cache file (use the standard cache directory)
+                                            with open(cache_file, 'w', encoding='utf-8') as f:
+                                                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+                                            
+                                            logger.log(f"  ✅ [Card2Tab2Card-{search_type_name}] Saved tab2tab results to cache: {os.path.abspath(cache_file)} ({len(table_ids)} table IDs)")
+                                        except Exception as e:
+                                            logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] Error saving to cache: {str(e)}")
+                                            # Don't fail the search if cache save fails
+                                    else:
+                                        logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] No table IDs in results, skipping cache save")
                                 else:
                                     logger.log(f"  ⚠️  [Card2Tab2Card-{search_type_name}] JSON file is empty")
                         else:
@@ -474,8 +961,47 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         card2tab2card_all = {}
         
         # Only run Card2Tab2Card if model has tables
-        if not has_tables:
-            logger.log("⚠️  Skipping Card2Tab2Card pipeline - model has no tables")
+        # Check if we have JSON files available (even if model has no tables)
+        has_json_files = False
+        if query_df is not None:
+            # Check if any JSON files exist for the search types we'll run
+            cache_dir = "data/tab2tab_cache"
+            base_paths = [
+                ".", "data", cache_dir,
+                "../starmie_internal", "../starmie_internal/data", "../starmie_internal/output",
+                "src/Blend_internal", "../Blend_internal",
+                "../CitationLake", "../CitationLake/data", "../CitationLake/output",
+                "data_citationlake",
+            ]
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+            
+            # Check for common JSON filenames
+            search_types_to_check = ['keyword', 'single_column', 'multi_column', 'unionable']
+            for search_type in search_types_to_check:
+                possible_filenames = []
+                if search_type == 'keyword':
+                    possible_filenames = ['keyword_ori_tr_str.json', 'keyword_ori_tr.json', 'baseline_keyword.json']
+                elif search_type == 'single_column':
+                    possible_filenames = ['singcol_joinable_ori_tr_str.json', 'baseline_singcol_joinable.json']
+                
+                for base_path in base_paths:
+                    for filename in possible_filenames:
+                        if os.path.isabs(base_path):
+                            full_path = os.path.join(base_path, filename)
+                        else:
+                            full_path = os.path.join(project_root, base_path, filename)
+                        full_path = os.path.normpath(full_path)
+                        if os.path.exists(full_path):
+                            has_json_files = True
+                            logger.log(f"  ℹ️  Found JSON file for Card2Tab2Card: {full_path}")
+                            break
+                    if has_json_files:
+                        break
+                if has_json_files:
+                    break
+        
+        if not has_tables and not has_json_files:
+            logger.log("⚠️  Skipping Card2Tab2Card pipeline - model has no tables and no JSON files found")
             # Only run Card2Card
             card2card_results = run_card2card()
             # Set empty results for Card2Tab2Card
@@ -990,6 +1516,8 @@ def search():
         mode = data.get('mode', 'query')  # 'query' or 'modelid'
         top_k = data.get('top_k', 20)
         table_search_k = data.get('table_search_k', None)  # Optional: defaults to top_k * 2 in pipeline
+        tab2tab_mode = data.get('tab2tab_mode', 'search')  # 'search' or 'load'
+        tab2tab_json = data.get('tab2tab_json', None)  # JSON string when tab2tab_mode='load'
         
         if mode == 'query':
             query = data.get('query')
@@ -1004,6 +1532,10 @@ def search():
         else:
             return jsonify({"status": "error", "message": f"Invalid mode: {mode}. Must be 'query' or 'modelid'"}), 400
         
+        # Validate tab2tab mode
+        if tab2tab_mode == 'load' and not tab2tab_json:
+            return jsonify({"status": "error", "message": "tab2tab_json is required when tab2tab_mode='load'"}), 400
+        
         # Create job
         job_id = str(uuid.uuid4())
         jobs[job_id] = JobLogger(job_id)
@@ -1011,7 +1543,7 @@ def search():
         # Start pipeline in background thread
         thread = threading.Thread(
             target=run_search_pipeline,
-            args=(job_id, query, top_k, model_id, table_search_k)
+            args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json)
         )
         thread.daemon = True
         thread.start()
