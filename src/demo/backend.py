@@ -587,8 +587,9 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                                 "model_ids": results,
                                 "intermediate": intermediate_data
                             }
-                    finally:
-                        con.close()
+                    else:
+                        # No valid results from cached JSON
+                        cached_results = None
                 
                 # If we reach here, we need to perform a new search
                 # Check if we should load from manually provided JSON (old behavior)
@@ -696,9 +697,6 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                                 "model_ids": results,
                                 "intermediate": intermediate_data
                             }
-                    else:
-                        # No valid results from cached JSON
-                        cached_results = None
                         finally:
                             con.close()
                     except json.JSONDecodeError as e:
