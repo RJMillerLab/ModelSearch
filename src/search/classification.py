@@ -29,14 +29,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 
 def _find_tab2know_repo() -> Optional[str]:
-    """Find Tab2Know repository directory"""
-    # Check environment variable
+    """Find Tab2Know repository directory - checks local others/ first, then external repos"""
+    # Priority 1: Check local others/tab2know directory (bundled with this repo)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+    local_tab2know = os.path.join(project_root, 'others', 'tab2know')
+    if os.path.exists(os.path.join(local_tab2know, 'run_inference.py')):
+        return local_tab2know
+    
+    # Priority 2: Check environment variable
     if 'TAB2KNOW_REPO' in os.environ:
         repo_dir = os.environ['TAB2KNOW_REPO']
         if os.path.exists(os.path.join(repo_dir, 'run_inference.py')):
             return repo_dir
     
-    # Check common locations
+    # Priority 3: Check common external locations
     possible_paths = [
         os.path.join(os.path.expanduser('~'), 'Repo', 'TabKnow_internal'),
         os.path.join(os.path.dirname(__file__), '../../..', 'TabKnow_internal'),
@@ -109,13 +115,25 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
     output_jsonl = os.path.join(temp_dir, 'preds.jsonl')
     
     try:
+        # Find models directory (try local first, then external repo)
+        models_dir = os.path.join(tab2know_repo, 'models')
+        if not os.path.exists(models_dir):
+            # Try external repo location for models
+            external_repo = os.path.join(os.path.expanduser('~'), 'Repo', 'TabKnow_internal')
+            external_models = os.path.join(external_repo, 'models')
+            if os.path.exists(external_models):
+                models_dir = external_models
+            else:
+                # Last resort: use default path (may fail, but let tab2know handle it)
+                models_dir = os.path.join(tab2know_repo, 'models')
+        
         # Run tab2know inference
         cmd = [
             sys.executable,
             os.path.join(tab2know_repo, 'run_inference.py'),
             temp_dir,
             '--output', output_jsonl,
-            '--modeldir', os.path.join(tab2know_repo, 'models'),
+            '--modeldir', models_dir,
             '--type-model', 'supervised-lr',
             '--no-caption',
             '--quiet'

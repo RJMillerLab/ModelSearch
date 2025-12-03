@@ -227,14 +227,20 @@ def integrate_tables_intersection(
 
 
 def _find_dialite_internal() -> Optional[str]:
-    """Find dialite_internal repository directory"""
-    # Check environment variable
+    """Find dialite_internal repository directory - checks local others/ first, then external repos"""
+    # Priority 1: Check local others/dialite directory (bundled with this repo)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+    local_dialite = os.path.join(project_root, 'others', 'dialite')
+    if os.path.exists(os.path.join(local_dialite, 'alite', 'alite_fd.py')):
+        return local_dialite
+    
+    # Priority 2: Check environment variable
     if 'DIALITE_INTERNAL_REPO' in os.environ:
         repo_dir = os.environ['DIALITE_INTERNAL_REPO']
         if os.path.exists(os.path.join(repo_dir, 'alite', 'alite_fd.py')):
             return repo_dir
     
-    # Check common locations
+    # Priority 3: Check common external locations
     possible_paths = [
         os.path.join(os.path.dirname(__file__), '../../..', 'dialite_internal'),
         os.path.join(os.path.dirname(__file__), '../..', 'dialite_internal'),
