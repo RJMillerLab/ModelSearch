@@ -28,7 +28,19 @@ try:
         load_relationship_parquet,
         get_tables_for_model,
         search_card2tab2card,
-        search_card2tab2card_from_tables
+        search_card2tab2card_from_tables,
+        search_card2tab2card_by_type
+    )
+    
+    from .classification import (
+        classify_table,
+        classify_table_from_db,
+        classify_datalake_batch,
+        load_classifications
+    )
+    
+    from .tab2tab_by_type import (
+        search_table2table_by_type
     )
 except ImportError:
     # Fallback for direct script execution
@@ -50,7 +62,19 @@ except ImportError:
         load_relationship_parquet,
         get_tables_for_model,
         search_card2tab2card,
-        search_card2tab2card_from_tables
+        search_card2tab2card_from_tables,
+        search_card2tab2card_by_type
+    )
+    
+    from src.search.classification import (
+        classify_table,
+        classify_table_from_db,
+        classify_datalake_batch,
+        load_classifications
+    )
+    
+    from src.search.tab2tab_by_type import (
+        search_table2table_by_type
     )
 
 # Lazy import for tab2tab functions to avoid DBHandler initialization
@@ -64,7 +88,8 @@ def __getattr__(name):
         'search_single_column',
         'search_multi_column',
         'search_keyword',
-        'search_table2table'
+        'search_table2table',
+        'search_table2table_by_type'
     }
     
     if name in tab2tab_functions:
@@ -90,6 +115,7 @@ __all__ = [
     'search_multi_column',
     'search_keyword',
     'search_table2table',
+    'search_table2table_by_type',
     # query2modelcard
     'search_query2modelcard',
     # card2tab2card
@@ -97,4 +123,10 @@ __all__ = [
     'get_tables_for_model',
     'search_card2tab2card',
     'search_card2tab2card_from_tables',
+    'search_card2tab2card_by_type',
+    # classification
+    'classify_table',
+    'classify_table_from_db',
+    'classify_datalake_batch',
+    'load_classifications',
 ]

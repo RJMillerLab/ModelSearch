@@ -230,6 +230,124 @@ python -m src.search.card2tab2card \
 ```
 </details>
 
+### 5.1. Table Classification (New)
+
+Classify tables based on their content and structure using tab2know. This is used to filter search results to only include tables of the same type.
+
+**Classification Labels (from tab2know):**
+- `Observation`: Performance/result tables (most common in academic papers)
+- `Input`: Configuration/input tables
+- `Other`: Other types of tables
+- `Example`: Example tables
+
+**Prerequisites:**
+- Tab2Know repository should be available (set `TAB2KNOW_REPO` environment variable or ensure `TabKnow_internal` is in a standard location)
+
+**Step 1: Classify all tables in datalake (one-time setup)**
+
+```bash
+# Batch classify all tables in modellake.db using tab2know (default)
+python -m src.search.classification \
+  --mode batch \
+  --db_path data_citationlake/modellake.db \
+  --output_json data/table_classifications.json \
+  --method tab2know
+
+# Or with a limit (for testing)
+python -m src.search.classification \
+  --mode batch \
+  --db_path data_citationlake/modellake.db \
+  --output_json data/table_classifications.json \
+  --limit 100 \
+  --method tab2know
+
+# Use heuristic method (faster but less accurate)
+python -m src.search.classification \
+  --mode batch \
+  --db_path data_citationlake/modellake.db \
+  --output_json data/table_classifications.json \
+  --method heuristic
+```
+
+**Step 2: Classify a single table**
+
+```bash
+# Classify from CSV file using tab2know (default)
+python -m src.search.classification \
+  --mode single \
+  --table data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+  --method tab2know
+
+# Classify from database table ID
+python -m src.search.classification \
+  --mode single \
+  --tableid 12345 \
+  --db_path data_citationlake/modellake.db \
+  --method tab2know
+```
+
+### 5.2. Table to Table Search by Type (New)
+
+Search for similar tables, filtering results to only include tables with the same classification as the query table.
+
+**Prerequisites:** Run table classification first (see 5.1 above).
+
+```bash
+# Single column search with classification filtering
+python -m src.search.tab2tab_by_type \
+  --query "train,dataset,model" \
+  --search_type single_column \
+  --classification_json data/table_classifications.json \
+  --k 10 \
+  --db_path data_citationlake/modellake.db \
+  --output data/tab2tab_by_type_results.json
+
+# Keyword search with classification filtering
+python -m src.search.tab2tab_by_type \
+  --query "train,dataset,model" \
+  --search_type keyword \
+  --classification_json data/table_classifications.json \
+  --k 10 \
+  --db_path data_citationlake/modellake.db
+
+# Multi-column search from CSV file
+python -m src.search.tab2tab_by_type \
+  --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+  --search_type multi_column \
+  --classification_json data/table_classifications.json \
+  --k 10 \
+  --db_path data_citationlake/modellake.db
+```
+
+### 5.3. Card to Tab to Card Search by Type (New)
+
+Search for model cards via table search with classification filtering. This ensures that only tables of the same type are considered in the search.
+
+**Prerequisites:** Run table classification first (see 5.1 above).
+
+```bash
+# Search with classification filtering
+python -m src.search.card2tab2card \
+  --model_id Salesforce/codet5-base \
+  --mode by_type \
+  --classification_json data/table_classifications.json \
+  --search_type keyword \
+  --query "train,model,dataset" \
+  --db_path data_citationlake/modellake.db \
+  --k 10 \
+  --output_json data/card2tab2card_by_type_results.json
+
+# Using CSV file as query
+python -m src.search.card2tab2card \
+  --model_id Salesforce/codet5-base \
+  --mode by_type \
+  --classification_json data/table_classifications.json \
+  --search_type single_column \
+  --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+  --db_path data_citationlake/modellake.db \
+  --k 10
+```
+
 ### 6. Interactive Demo
 
 Compare two search pipelines (Card2Card vs Card2Tab2Card) with a web interface:
