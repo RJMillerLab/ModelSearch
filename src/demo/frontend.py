@@ -1075,6 +1075,8 @@ HTML_TEMPLATE = """
                             <select id="integration_type" style="margin-left: 5px; padding: 5px;">
                                 <option value="union">Union</option>
                                 <option value="intersection">Intersection</option>
+                                <option value="alite">ALITE (FD-based)</option>
+                                <option value="outer_join">Outer Join</option>
                             </select>
                         </label>
                         <label>

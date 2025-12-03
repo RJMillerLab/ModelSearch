@@ -1,7 +1,12 @@
 """
 Table Integration Implementation
 
-Integrates multiple tables using Blend_internal's Union and Intersection operations.
+Integrates multiple tables using various methods:
+- Union: Combine all rows from all tables
+- Intersection: Find common rows across all tables
+- ALITE: FD-based integration using dialite_internal (requires dialite_internal repository)
+- Outer Join: Merge all tables using outer join
+
 Works with pre-searched table results to avoid re-searching.
 """
 
@@ -221,6 +226,128 @@ def integrate_tables_intersection(
         return None
 
 
+def _find_dialite_internal() -> Optional[str]:
+    """Find dialite_internal repository directory"""
+    # Check environment variable
+    if 'DIALITE_INTERNAL_REPO' in os.environ:
+        repo_dir = os.environ['DIALITE_INTERNAL_REPO']
+        if os.path.exists(os.path.join(repo_dir, 'alite', 'alite_fd.py')):
+            return repo_dir
+    
+    # Check common locations
+    possible_paths = [
+        os.path.join(os.path.dirname(__file__), '../../..', 'dialite_internal'),
+        os.path.join(os.path.dirname(__file__), '../..', 'dialite_internal'),
+        '/Users/doradong/Repo/dialite_internal',
+        os.path.join(os.path.expanduser('~'), 'Repo', 'dialite_internal'),
+    ]
+    
+    for path in possible_paths:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(os.path.join(abs_path, 'alite', 'alite_fd.py')):
+            return abs_path
+    
+    return None
+
+
+def integrate_tables_alite(
+    tables: List[pd.DataFrame],
+    table_paths: List[str],
+    k: int = 10
+) -> Optional[pd.DataFrame]:
+    """
+    Integrate tables using ALITE FD-based algorithm.
+    
+    Args:
+        tables: List of DataFrames (not used directly, but kept for consistency)
+        table_paths: List of paths to CSV files (required for ALITE)
+        k: Maximum number of rows to return
+        
+    Returns:
+        Integrated DataFrame or None if integration fails
+    """
+    dialite_repo = _find_dialite_internal()
+    if dialite_repo is None:
+        print("⚠️  dialite_internal not found. ALITE integration requires dialite_internal repository.")
+        print("   Set DIALITE_INTERNAL_REPO environment variable or ensure dialite_internal is in a standard location.")
+        return None
+    
+    try:
+        # Add dialite_internal to path
+        if dialite_repo not in sys.path:
+            sys.path.insert(0, dialite_repo)
+        
+        # Import alite module
+        import alite.alite_fd as alite_module
+        
+        # ALITE requires file paths, not DataFrames
+        # Use the provided table_paths
+        if not table_paths:
+            print("⚠️  ALITE requires file paths, not DataFrames")
+            return None
+        
+        # Run ALITE algorithm
+        result_FD, stats_df, debug_dict = alite_module.FDAlgorithm(table_paths.copy())
+        
+        # Limit to k rows
+        if result_FD is not None and len(result_FD) > 0:
+            return result_FD.head(k)
+        return result_FD
+    
+    except Exception as e:
+        print(f"❌ Error in ALITE integration: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def integrate_tables_outer_join(
+    tables: List[pd.DataFrame],
+    k: int = 10
+) -> Optional[pd.DataFrame]:
+    """
+    Integrate tables using outer join (merge all tables on index).
+    
+    This is similar to dialite_internal's outer join implementation.
+    
+    Args:
+        tables: List of DataFrames to integrate
+        k: Maximum number of rows to return
+        
+    Returns:
+        Integrated DataFrame or None if integration fails
+    """
+    if not tables or len(tables) == 0:
+        return None
+    
+    if len(tables) == 1:
+        return tables[0].head(k)
+    
+    try:
+        # Start with first table
+        result = tables[0].copy()
+        
+        # Merge all other tables using outer join on index
+        # This combines all columns from all tables
+        for df in tables[1:]:
+            # Reset index for both to ensure proper merging
+            result_reset = result.reset_index(drop=True)
+            df_reset = df.reset_index(drop=True)
+            
+            # Outer join: keep all rows from both tables
+            # Use index as join key (implicit)
+            result = pd.concat([result_reset, df_reset], axis=1, join='outer')
+        
+        # Limit to k rows
+        return result.head(k)
+    
+    except Exception as e:
+        print(f"❌ Error in outer join integration: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def integrate_tables(
     table_paths: List[str],
     integration_type: str = "union",
@@ -232,7 +359,7 @@ def integrate_tables(
     
     Args:
         table_paths: List of paths to CSV files
-        integration_type: "union" or "intersection"
+        integration_type: "union", "intersection", "alite", or "outer_join"
         k: Maximum number of rows in result
         db_path: Optional path to modellake.db (for Blend_internal integration)
         
@@ -272,10 +399,15 @@ def integrate_tables(
         integrated_df = integrate_tables_union(tables, k)
     elif integration_type == "intersection":
         integrated_df = integrate_tables_intersection(tables, k)
+    elif integration_type == "alite":
+        # ALITE requires file paths, not DataFrames
+        integrated_df = integrate_tables_alite(tables, loaded_paths, k)
+    elif integration_type == "outer_join":
+        integrated_df = integrate_tables_outer_join(tables, k)
     else:
         return {
             "success": False,
-            "error": f"Unknown integration type: {integration_type}",
+            "error": f"Unknown integration type: {integration_type}. Supported types: union, intersection, alite, outer_join",
             "integrated_table": None,
             "stats": {}
         }

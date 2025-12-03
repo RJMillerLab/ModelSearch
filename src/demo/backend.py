@@ -1721,7 +1721,7 @@ def integrate():
         data = request.json or {}
         job_id = data.get('job_id')
         search_type = data.get('search_type', 'single_column')  # Which search type to use
-        integration_type = data.get('integration_type', 'union')  # union or intersection
+        integration_type = data.get('integration_type', 'union')  # union, intersection, alite, or outer_join
         k = data.get('k', 10)  # Number of tables to integrate, and max rows in result
         
         if not job_id:
