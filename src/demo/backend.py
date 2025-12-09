@@ -38,7 +38,7 @@ from src.search import (
     get_tables_for_model,
     load_relationship_parquet
 )
-from src.integration.table_integration import integrate_tables_from_search_results
+from src.integration.table_integration import integrate_tables_from_search_results, integrate_tables_from_model_search_results
 
 
 app = Flask(__name__)
@@ -1824,6 +1824,124 @@ def integrate():
         }), 500
 
 
+@app.route('/api/integrate-model-search', methods=['POST'])
+def integrate_model_search():
+    """Table integration endpoint for model search (Card2Card) results"""
+    try:
+        data = request.json or {}
+        job_id = data.get('job_id')
+        integration_type = data.get('integration_type', 'union')  # union, intersection, alite, or outer_join
+        k = data.get('k', 10)  # Number of tables to integrate, and max rows in result
+        max_models = data.get('max_models', 10)  # Maximum number of models to process
+        
+        if not job_id:
+            return jsonify({"status": "error", "message": "job_id is required"}), 400
+        
+        # Find the search results file
+        search_results_path = None
+        
+        # Strategy 1: Try job_id-based filename (for backward compatibility)
+        search_results_path = os.path.join('data', f'compare_search_{job_id}.json')
+        if not os.path.exists(search_results_path):
+            # Strategy 2: Look in saved search folders
+            data_dir = 'data'
+            if os.path.exists(data_dir):
+                # Check all subdirectories for search_results.json
+                for folder_name in os.listdir(data_dir):
+                    folder_path = os.path.join(data_dir, folder_name)
+                    if os.path.isdir(folder_path):
+                        # Check for search_results.json in this folder
+                        potential_path = os.path.join(folder_path, 'search_results.json')
+                        if os.path.exists(potential_path):
+                            try:
+                                with open(potential_path, 'r', encoding='utf-8') as f:
+                                    folder_data = json.load(f)
+                                if folder_data.get('job_id') == job_id:
+                                    search_results_path = potential_path
+                                    print(f"✅ Found search results in folder: {folder_path}")
+                                    break
+                            except Exception as e:
+                                print(f"⚠️  Error reading {potential_path}: {e}")
+                                continue
+                        
+                        # Also check for compare_search_{job_id}.json in folder
+                        potential_path = os.path.join(folder_path, f'compare_search_{job_id}.json')
+                        if os.path.exists(potential_path):
+                            search_results_path = potential_path
+                            print(f"✅ Found search results (legacy format) in folder: {folder_path}")
+                            break
+        
+        if not search_results_path or not os.path.exists(search_results_path):
+            return jsonify({
+                "status": "error",
+                "message": f"Search results not found for job_id: {job_id}. Please run a search first."
+            }), 404
+        
+        # Run integration
+        result = integrate_tables_from_model_search_results(
+            search_results_path,
+            integration_type=integration_type,
+            k=k,
+            max_models=max_models,
+            relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
+            schema_log_path=DEFAULT_SCHEMA_LOG,
+            use_citationlake=True
+        )
+        
+        if not result["success"]:
+            return jsonify({
+                "status": "error",
+                "message": result.get("error", "Integration failed")
+            }), 500
+        
+        # Convert DataFrame to JSON-serializable format
+        integrated_df = result["integrated_table"]
+        integrated_data = {
+            "columns": list(integrated_df.columns),
+            "data": integrated_df.fillna("").astype(str).values.tolist(),
+            "shape": list(integrated_df.shape)
+        }
+        
+        # Save integration results
+        integration_output_path = os.path.join('data', f'integration_model_search_{job_id}.json')
+        os.makedirs('data', exist_ok=True)
+        integration_result = {
+            "job_id": job_id,
+            "integration_type": integration_type,
+            "k": k,
+            "max_models": max_models,
+            "stats": result["stats"],
+            "integrated_table": integrated_data,
+            "model_ids": result.get("model_ids", []),
+            "models_with_tables": result.get("models_with_tables", []),
+            "models_without_tables": result.get("models_without_tables", []),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        with open(integration_output_path, 'w', encoding='utf-8') as f:
+            json.dump(integration_result, f, ensure_ascii=False, indent=2)
+        
+        return jsonify({
+            "status": "success",
+            "job_id": job_id,
+            "integration_type": integration_type,
+            "stats": result["stats"],
+            "integrated_table": integrated_data,
+            "model_ids": result.get("model_ids", []),
+            "models_with_tables": result.get("models_with_tables", []),
+            "models_without_tables": result.get("models_without_tables", []),
+            "output_path": integration_output_path
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 if __name__ == '__main__':
     print("Starting ModelSearch Backend API...")
     print("Endpoints:")
@@ -1831,5 +1949,7 @@ if __name__ == '__main__':
     print("  GET /api/status/<job_id> - Get job status and logs")
     print("  GET /api/results/<job_id> - Get final results")
     print("  GET /api/logs/<job_id> - Stream logs (SSE)")
+    print("  POST /api/integrate - Integrate tables from Card2Tab2Card (table search) results")
+    print("  POST /api/integrate-model-search - Integrate tables from Card2Card (model search) results")
     print("\nAll results saved to data/ directory")
     app.run(host='0.0.0.0', port=5002, debug=False, threaded=True)

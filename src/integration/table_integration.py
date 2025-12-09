@@ -606,3 +606,346 @@ def integrate_tables_from_search_results(
     # Integrate tables
     return integrate_tables(table_paths, integration_type, k, db_path)
 
+
+def integrate_tables_from_model_search_results(
+    search_results_json: str,
+    integration_type: str = "union",
+    k: int = 10,
+    max_models: int = 10,
+    db_path: Optional[str] = None,
+    relationship_parquet: Optional[str] = None,
+    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
+    use_citationlake: bool = True
+) -> Dict[str, Any]:
+    """
+    Integrate tables from Card2Card (model search) results.
+    
+    Gets tables for each model in the Card2Card results and integrates them.
+    
+    Args:
+        search_results_json: Path to JSON file with search results
+        integration_type: "union", "intersection", "alite", or "outer_join"
+        k: Maximum number of rows in result
+        max_models: Maximum number of models to process (default: 10)
+        db_path: Optional path to modellake.db (for Blend_internal integration)
+        relationship_parquet: Optional path to relationship parquet file
+        schema_log_path: Path to parquet_schema.log (for CitationLake)
+        use_citationlake: Whether to use CitationLake get_from (default: True)
+        
+    Returns:
+        Dictionary with integration results
+    """
+    print(f"\n{'='*60}")
+    print(f"🔗 Table Integration from Model Search Results")
+    print(f"{'='*60}")
+    
+    # Load search results
+    if not os.path.exists(search_results_json):
+        return {
+            "success": False,
+            "error": f"Search results file not found: {search_results_json}",
+            "integrated_table": None
+        }
+    
+    with open(search_results_json, 'r', encoding='utf-8') as f:
+        search_results = json.load(f)
+    
+    # Extract Card2Card model IDs
+    card2card_results = []
+    if isinstance(search_results, dict):
+        # Try to get card2card_results
+        if "card2card_results" in search_results:
+            card2card_results = search_results["card2card_results"]
+        elif "results" in search_results and "card2card_results" in search_results["results"]:
+            card2card_results = search_results["results"]["card2card_results"]
+    elif isinstance(search_results, list):
+        # Direct list of model IDs
+        card2card_results = search_results
+    
+    # Handle both string and object formats
+    model_ids = []
+    for item in card2card_results:
+        if isinstance(item, str):
+            model_ids.append(item)
+        elif isinstance(item, dict) and "model_id" in item:
+            model_ids.append(item["model_id"])
+        elif isinstance(item, dict) and "modelId" in item:
+            model_ids.append(item["modelId"])
+    
+    if not model_ids:
+        return {
+            "success": False,
+            "error": "No model IDs found in Card2Card results",
+            "integrated_table": None
+        }
+    
+    print(f"✅ Found {len(model_ids)} models in Card2Card results")
+    print(f"   Processing first {min(max_models, len(model_ids))} models")
+    
+    # Limit to max_models
+    model_ids = model_ids[:max_models]
+    
+    # Import get_tables_for_model and load_relationship_parquet
+    # Import directly from card2tab2card to avoid triggering card2card imports that require torch
+    # Add parent directory to path if needed
+    import sys
+    parent_dir = os.path.join(os.path.dirname(__file__), '../..')
+    parent_dir_abs = os.path.abspath(parent_dir)
+    if parent_dir_abs not in sys.path:
+        sys.path.insert(0, parent_dir_abs)
+    
+    # Import directly from card2tab2card module (avoiding __init__.py which imports card2card)
+    try:
+        # Try direct import first (avoids triggering card2card imports)
+        import importlib.util
+        card2tab2card_path = os.path.join(os.path.dirname(__file__), '..', 'search', 'card2tab2card.py')
+        if os.path.exists(card2tab2card_path):
+            spec = importlib.util.spec_from_file_location("card2tab2card", card2tab2card_path)
+            card2tab2card_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(card2tab2card_module)
+            get_tables_for_model = card2tab2card_module.get_tables_for_model
+            load_relationship_parquet = card2tab2card_module.load_relationship_parquet
+        else:
+            # Fallback to regular import
+            from src.search.card2tab2card import get_tables_for_model, load_relationship_parquet
+    except Exception as e:
+        # Last resort: try importing from search module (may trigger torch requirement)
+        try:
+            from src.search.card2tab2card import get_tables_for_model, load_relationship_parquet
+        except ImportError:
+            raise ImportError(f"Could not import get_tables_for_model and load_relationship_parquet: {e}")
+    
+    # Load relationship data if needed
+    relationship_df = None
+    if not use_citationlake:
+        # Only load relationship parquet if CitationLake is not being used
+        if relationship_parquet and os.path.exists(relationship_parquet):
+            try:
+                relationship_df = load_relationship_parquet(relationship_parquet)
+                print(f"✅ Loaded relationship parquet: {relationship_parquet}")
+            except Exception as e:
+                print(f"⚠️  Failed to load relationship parquet {relationship_parquet}: {e}")
+                print(f"   Will try to use CitationLake approach instead...")
+                use_citationlake = True  # Fallback to CitationLake
+        else:
+            # Try default path
+            default_parquet = "data_citationlake/processed/modelcard_step3_dedup.parquet"
+            if os.path.exists(default_parquet):
+                try:
+                    relationship_df = load_relationship_parquet(default_parquet)
+                    print(f"✅ Loaded default relationship parquet: {default_parquet}")
+                except Exception as e:
+                    print(f"⚠️  Failed to load default relationship parquet: {e}")
+                    print(f"   Will try to use CitationLake approach instead...")
+                    use_citationlake = True  # Fallback to CitationLake
+    
+    # Check if CitationLake is actually available
+    try:
+        # Try to check if CitationLake get_from is available
+        card2tab2card_path = os.path.join(os.path.dirname(__file__), '..', 'search', 'card2tab2card.py')
+        if os.path.exists(card2tab2card_path):
+            spec = importlib.util.spec_from_file_location("card2tab2card_check", card2tab2card_path)
+            card2tab2card_check_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(card2tab2card_check_module)
+            citationlake_available = getattr(card2tab2card_check_module, 'USE_CITATIONLAKE_GET_FROM', False)
+        else:
+            citationlake_available = False
+    except:
+        citationlake_available = False
+    
+    # Fallback: Try to extract table information from search_results JSON
+    # This is useful for template/fake data when real data sources are unavailable
+    fallback_table_paths = []
+    fallback_models_with_tables = {}
+    
+    # Priority 1: Check for dedicated card2card_integration_tables field (separate from table search)
+    if isinstance(search_results, dict) and "card2card_integration_tables" in search_results:
+        card2card_integration = search_results["card2card_integration_tables"]
+        print(f"✅ Found dedicated card2card_integration_tables field in search results")
+        
+        # Get table paths
+        if "table_paths" in card2card_integration:
+            fallback_table_paths = card2card_integration["table_paths"]
+            print(f"   Found {len(fallback_table_paths)} table paths")
+        
+        # Get model_to_tables mapping
+        if "model_to_tables" in card2card_integration:
+            model_to_tables = card2card_integration["model_to_tables"]
+            # Map our model_ids to tables
+            for model_id in model_ids:
+                if model_id in model_to_tables:
+                    tables = model_to_tables[model_id]
+                    if isinstance(tables, list):
+                        fallback_models_with_tables[model_id] = tables
+                        # Add to fallback_table_paths if not already there
+                        for table_path in tables:
+                            if table_path not in fallback_table_paths:
+                                fallback_table_paths.append(table_path)
+                    print(f"   Model {model_id}: {len(tables)} tables")
+    
+    # Priority 2: Fallback to card2tab2card_results if dedicated field not available
+    elif isinstance(search_results, dict) and "card2tab2card_results" in search_results:
+        print(f"⚠️  No dedicated card2card_integration_tables field, using card2tab2card_results as fallback")
+        card2tab2card_results = search_results["card2tab2card_results"]
+        # Extract table_to_models mapping from any search type
+        for search_type, type_results in card2tab2card_results.items():
+            if isinstance(type_results, dict) and "intermediate" in type_results:
+                intermediate = type_results["intermediate"]
+                table_to_models = intermediate.get("table_to_models", {})
+                # Build reverse mapping: model_id -> list of tables
+                for table_path, model_list in table_to_models.items():
+                    # Normalize model list
+                    normalized_models = []
+                    for m in (model_list if isinstance(model_list, list) else []):
+                        if isinstance(m, str):
+                            normalized_models.append(m)
+                        elif isinstance(m, dict):
+                            normalized_models.append(m.get("model_id") or m.get("modelId") or str(m))
+                    
+                    # Check if any of our Card2Card models are in this list
+                    for model_id in model_ids:
+                        if model_id in normalized_models:
+                            if model_id not in fallback_models_with_tables:
+                                fallback_models_with_tables[model_id] = []
+                            if table_path not in fallback_models_with_tables[model_id]:
+                                fallback_models_with_tables[model_id].append(table_path)
+                            if table_path not in fallback_table_paths:
+                                fallback_table_paths.append(table_path)
+    
+    # Check if we should use fallback data
+    use_fallback = False
+    
+    # If CitationLake is not available and we don't have relationship_df, try fallback
+    if use_citationlake and not citationlake_available and relationship_df is None:
+        if fallback_table_paths:
+            use_fallback = True
+        else:
+            return {
+                "success": False,
+                "error": "Cannot get tables: CitationLake not available, relationship parquet failed to load, and no fallback data found in search results",
+                "integrated_table": None
+            }
+    else:
+        # Use relationship_df approach if CitationLake is not available or if explicitly requested
+        if not citationlake_available or (relationship_df is not None and not use_citationlake):
+            if relationship_df is None:
+                # Try fallback before giving up
+                if fallback_table_paths:
+                    use_fallback = True
+                else:
+                    return {
+                        "success": False,
+                        "error": "relationship_df is required when CitationLake is not available, and no fallback data found",
+                        "integrated_table": None
+                    }
+            else:
+                use_citationlake = False
+    
+    # Collect all table paths from all models
+    all_table_paths = []
+    models_with_tables = []
+    models_without_tables = []
+    
+    # Use fallback data if available and real sources are not available
+    if use_fallback:
+        print(f"⚠️  Cannot get tables from real sources, but found {len(fallback_table_paths)} tables from search results JSON")
+        print(f"   Using fallback data from card2tab2card_results")
+        all_table_paths = fallback_table_paths[:k]
+        models_with_tables = list(fallback_models_with_tables.keys())
+        models_without_tables = [m for m in model_ids if m not in models_with_tables]
+        print(f"✅ Using {len(all_table_paths)} fallback tables from {len(models_with_tables)} models")
+    else:
+        # Try to get real tables from models
+        for model_id in model_ids:
+            try:
+                # Get tables for this model
+                if use_citationlake and citationlake_available:
+                    model_tables = get_tables_for_model(
+                        model_id=model_id,
+                        schema_log_path=schema_log_path,
+                        use_citationlake=True
+                    )
+                else:
+                    if relationship_df is None:
+                        raise ValueError("relationship_df is required when use_citationlake=False")
+                    model_tables = get_tables_for_model(
+                        model_id=model_id,
+                        relationship_df=relationship_df,
+                        use_citationlake=False
+                    )
+                
+                if model_tables:
+                    # Convert basenames to full paths
+                    for table_basename in model_tables:
+                        # Try to find the full path
+                        table_path = None
+                        
+                        # Try common base directories
+                        possible_base_dirs = [
+                            "data_citationlake/processed/deduped_hugging_csvs",
+                            "data_citationlake/processed/deduped_github_csvs",
+                            "data_citationlake/processed/tables_output",
+                        ]
+                        
+                        for base_dir in possible_base_dirs:
+                            full_path = os.path.join(base_dir, table_basename)
+                            if os.path.exists(full_path):
+                                table_path = full_path
+                                break
+                        
+                        # If not found, try using load_table_from_file to find it
+                        if not table_path:
+                            test_df = load_table_from_file(table_basename)
+                            if test_df is not None:
+                                # Find which path worked
+                                for base_dir in possible_base_dirs:
+                                    full_path = os.path.join(base_dir, table_basename)
+                                    if os.path.exists(full_path):
+                                        table_path = full_path
+                                        break
+                        
+                        if table_path and table_path not in all_table_paths:
+                            all_table_paths.append(table_path)
+                    
+                    models_with_tables.append(model_id)
+                    print(f"  ✅ Model {model_id}: {len(model_tables)} tables")
+                else:
+                    models_without_tables.append(model_id)
+                    print(f"  ⚠️  Model {model_id}: No tables found")
+            except Exception as e:
+                print(f"  ❌ Error getting tables for model {model_id}: {str(e)}")
+                models_without_tables.append(model_id)
+    
+    if not all_table_paths:
+        return {
+            "success": False,
+            "error": f"No tables found for any of the {len(model_ids)} models",
+            "integrated_table": None,
+            "stats": {
+                "models_processed": len(model_ids),
+                "models_with_tables": len(models_with_tables),
+                "models_without_tables": len(models_without_tables)
+            }
+        }
+    
+    print(f"\n✅ Collected {len(all_table_paths)} unique tables from {len(models_with_tables)} models")
+    print(f"   Using first {min(k, len(all_table_paths))} tables for integration")
+    
+    # Limit to k tables
+    table_paths = all_table_paths[:k]
+    
+    # Integrate tables
+    result = integrate_tables(table_paths, integration_type, k, db_path)
+    
+    # Add model search specific stats
+    if result.get("success"):
+        result["stats"]["models_processed"] = len(model_ids)
+        result["stats"]["models_with_tables"] = len(models_with_tables)
+        result["stats"]["models_without_tables"] = len(models_without_tables)
+        result["stats"]["total_unique_tables"] = len(all_table_paths)
+        result["model_ids"] = model_ids
+        result["models_with_tables"] = models_with_tables
+        result["models_without_tables"] = models_without_tables
+    
+    return result
+
