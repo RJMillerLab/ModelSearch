@@ -1207,6 +1207,48 @@ HTML_TEMPLATE = """
                         </div>
                     </div>
                     <div id="evaluationResults" style="margin-top: 20px; display: none;"></div>
+                    </div>
+                    
+                    <!-- QA Section -->
+                    <div class="qa-section" style="margin-top: 30px; padding: 20px; background: #d1ecf1; border-radius: 8px; border: 2px solid #17a2b8; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h3 style="margin-top: 0; color: #0c5460;">💬 Question Answering (QA)</h3>
+                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
+                            Ask questions about the integrated table and get AI-powered answers based on the data.
+                        </p>
+                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 12px; background: white; border-radius: 4px;">
+                            <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
+                                <input type="radio" name="qa_mode" value="generate" id="qa_mode_generate" checked onchange="toggleQAMode()" style="width: 18px; height: 18px;">
+                                <span>Generate New Answer</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
+                                <input type="radio" name="qa_mode" value="use_fake" id="qa_mode_fake" onchange="toggleQAMode()" style="width: 18px; height: 18px;">
+                                <span>Use Fake Response (for testing/demo)</span>
+                            </label>
+                        </div>
+                        <div id="qa_generate_options" style="display: block; margin-bottom: 15px;">
+                            <label style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;">
+                                <span style="font-weight: 500;">Use Integration Source:</span>
+                                <select id="qa_integration_source" style="padding: 5px; width: 100%;">
+                                    <option value="table_search">Table Search Integration</option>
+                                    <option value="model_search">Model Search Integration</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div id="qa_use_fake_options" style="display: none; margin-bottom: 15px;">
+                            <label style="display: flex; flex-direction: column; gap: 5px;">
+                                <span style="font-weight: 500;">Load Fake Response File:</span>
+                                <input type="file" id="qa_fake_file" accept=".json" onchange="handleQAFakeFileSelect()" style="padding: 5px;">
+                                <span id="qa_fake_file_name" style="font-size: 12px; color: #666;"></span>
+                            </label>
+                        </div>
+                        <div style="text-align: center;">
+                            <button id="qaBtn" onclick="runQA('${results.job_id || currentJobId}')" 
+                                    style="padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                💬 Generate Answer
+                            </button>
+                        </div>
+                        <div id="qaResults" style="margin-top: 20px; display: none;"></div>
+                    </div>
                 </div>
             `;
             
@@ -1437,6 +1479,34 @@ HTML_TEMPLATE = """
         }
         
         let fakeResponseFile = null;
+        let qaFakeResponseFile = null;
+        
+        function toggleQAMode() {
+            const generateMode = document.getElementById('qa_mode_generate')?.checked || false;
+            const fakeMode = document.getElementById('qa_mode_fake')?.checked || false;
+            const generateOptions = document.getElementById('qa_generate_options');
+            const fakeOptions = document.getElementById('qa_use_fake_options');
+            
+            if (generateMode) {
+                if (generateOptions) generateOptions.style.display = 'block';
+                if (fakeOptions) fakeOptions.style.display = 'none';
+            } else if (fakeMode) {
+                if (generateOptions) generateOptions.style.display = 'none';
+                if (fakeOptions) fakeOptions.style.display = 'block';
+            }
+        }
+        
+        function handleQAFakeFileSelect() {
+            const fileInput = document.getElementById('qa_fake_file');
+            const fileNameSpan = document.getElementById('qa_fake_file_name');
+            if (fileInput && fileInput.files.length > 0) {
+                qaFakeResponseFile = fileInput.files[0];
+                if (fileNameSpan) {
+                    fileNameSpan.textContent = qaFakeResponseFile.name;
+                    fileNameSpan.style.color = '#28a745';
+                }
+            }
+        }
         
         function toggleEvaluationMode() {
             const generateMode = document.getElementById('eval_mode_generate').checked;
@@ -1617,10 +1687,10 @@ HTML_TEMPLATE = """
             resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running evaluation...</div>';
             
             try {
+                // Don't hardcode integration types - let backend auto-discover from saved integration files
                 const requestBody = {
                     job_id: jobId,
-                    integration1_type: 'single_column',
-                    integration2_type: 'model_search',
+                    // integration1_type and integration2_type are optional - backend will auto-discover
                     use_fake: useFake  // Explicitly set based on radio button selection
                 };
                 
@@ -1941,6 +2011,196 @@ HTML_TEMPLATE = """
                     console.log('✅ Table preview already loaded, skipping fetch');
                 }
             }
+        }
+        
+        async function runQA(jobId) {
+            // Check which mode is selected
+            const generateMode = document.getElementById('qa_mode_generate')?.checked || false;
+            const fakeMode = document.getElementById('qa_mode_fake')?.checked || false;
+            const useFake = fakeMode;
+            const useTableSearch = document.getElementById('qa_integration_source')?.value === 'table_search';
+            
+            const qaBtn = document.getElementById('qaBtn');
+            const resultsDiv = document.getElementById('qaResults');
+            
+            if (!qaBtn || !resultsDiv) {
+                console.error('QA elements not found');
+                return;
+            }
+            
+            // Disable button and show loading
+            qaBtn.disabled = true;
+            qaBtn.textContent = '⏳ Generating answer...';
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running QA...</div>';
+            
+            try {
+                const requestBody = {
+                    job_id: jobId,
+                    use_table_search: useTableSearch,
+                    use_fake: useFake
+                };
+                
+                console.log('📤 Sending QA request:', { use_fake: useFake, use_table_search: useTableSearch, job_id: jobId });
+                
+                // If fake file is selected, read it
+                if (useFake && qaFakeResponseFile) {
+                    const fileReader = new FileReader();
+                    fileReader.onload = async function(e) {
+                        try {
+                            const fakeContent = e.target.result;
+                            const fakeData = JSON.parse(fakeContent);
+                            
+                            requestBody.fake_response_content = fakeData;
+                            
+                            await sendQARequest(requestBody, resultsDiv, qaBtn);
+                        } catch (error) {
+                            resultsDiv.innerHTML = `
+                                <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                                    <strong>❌ Error:</strong> Failed to parse fake response file: ${error.message}
+                                </div>
+                            `;
+                            qaBtn.disabled = false;
+                            qaBtn.textContent = '💬 Generate Answer';
+                        }
+                    };
+                    fileReader.readAsText(qaFakeResponseFile);
+                    return;
+                }
+                
+                await sendQARequest(requestBody, resultsDiv, qaBtn);
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                        <strong>❌ Error:</strong> ${error.message}
+                    </div>
+                `;
+                qaBtn.disabled = false;
+                qaBtn.textContent = '💬 Generate Answer';
+            }
+        }
+        
+        async function sendQARequest(requestBody, resultsDiv, qaBtn) {
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/qa', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!response.ok) {
+                    let errorMessage = 'Unknown error';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+                    } catch (e) {
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    resultsDiv.innerHTML = `
+                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                            <strong>❌ QA Failed:</strong> ${errorMessage}
+                        </div>
+                    `;
+                    qaBtn.disabled = false;
+                    qaBtn.textContent = '💬 Generate Answer';
+                    return;
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    displayQAResults(data.qa, data.query, resultsDiv);
+                } else {
+                    resultsDiv.innerHTML = `
+                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                            <strong>❌ QA Failed:</strong> ${data.message || 'Unknown error'}
+                        </div>
+                    `;
+                }
+                
+                qaBtn.disabled = false;
+                qaBtn.textContent = '💬 Generate Answer';
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                        <strong>❌ Error:</strong> ${error.message}
+                    </div>
+                `;
+                qaBtn.disabled = false;
+                qaBtn.textContent = '💬 Generate Answer';
+            }
+        }
+        
+        function displayQAResults(qaResult, query, resultsDiv) {
+            if (!resultsDiv) return;
+            
+            resultsDiv.style.display = 'block';
+            
+            const answer = qaResult.answer || {};
+            const answerText = answer.answer || 'No answer provided';
+            const keyFindings = answer.key_findings || [];
+            const dataSummary = answer.data_summary || {};
+            const confidence = answer.confidence || 'unknown';
+            const limitations = answer.limitations || [];
+            
+            let html = `
+                <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
+                    <h4 style="margin-top: 0; color: #17a2b8; margin-bottom: 15px;">💬 Answer</h4>
+                    
+                    <div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #17a2b8;">
+                        <strong>Question:</strong> ${query}
+                    </div>
+                    
+                    <div style="margin-bottom: 20px; padding: 15px; background: #e7f3ff; border-radius: 4px;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 8px;">Answer:</div>
+                        <div style="font-size: 15px; line-height: 1.6; color: #333;">${answerText}</div>
+                    </div>
+                    
+                    ${keyFindings.length > 0 ? `
+                        <div style="margin-bottom: 20px;">
+                            <strong style="color: #17a2b8;">Key Findings:</strong>
+                            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 14px;">
+                                ${keyFindings.map(finding => `<li>${finding}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    
+                    ${dataSummary.total_rows ? `
+                        <div style="margin-bottom: 20px; padding: 12px; background: #f8f9fa; border-radius: 4px;">
+                            <strong style="color: #17a2b8;">Data Summary:</strong>
+                            <div style="margin-top: 8px; font-size: 14px;">
+                                <div>Total Rows: <strong>${dataSummary.total_rows}</strong></div>
+                                ${dataSummary.key_columns && dataSummary.key_columns.length > 0 ? `
+                                    <div style="margin-top: 5px;">Key Columns: ${dataSummary.key_columns.join(', ')}</div>
+                                ` : ''}
+                                ${dataSummary.notable_statistics ? `
+                                    <div style="margin-top: 5px;">Notable Statistics: ${dataSummary.notable_statistics}</div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div style="margin-bottom: 15px; padding: 10px; background: ${confidence === 'high' ? '#d4edda' : confidence === 'medium' ? '#fff3cd' : '#f8d7da'}; border-radius: 4px;">
+                        <strong>Confidence:</strong> <span style="text-transform: capitalize; font-weight: bold;">${confidence}</span>
+                    </div>
+                    
+                    ${limitations.length > 0 ? `
+                        <div style="margin-top: 15px; padding: 12px; background: #fff3cd; border-radius: 4px; border-left: 4px solid #ffc107;">
+                            <strong>Limitations:</strong>
+                            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px;">
+                                ${limitations.map(lim => `<li>${lim}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    
+                    ${qaResult.source ? `
+                        <div style="margin-top: 10px; font-size: 11px; color: #999; font-style: italic;">
+                            Source: ${qaResult.source}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            resultsDiv.innerHTML = html;
         }
     </script>
 </body>

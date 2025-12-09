@@ -52,6 +52,7 @@ from src.search import (
 )
 from src.integration.table_integration import integrate_tables_from_search_results, integrate_tables_from_model_search_results
 from src.evaluation.llm import evaluate_diversity_with_llm
+from src.qa.llm import answer_question_with_llm
 
 
 app = Flask(__name__)
@@ -1972,25 +1973,51 @@ def evaluate():
         if not job_id:
             return jsonify({"status": "error", "message": "job_id is required"}), 400
         
-        # Find integration results
+        # Find integration results - automatically discover files based on job_id
         integration1_path = None
         integration2_path = None
         
-        # Strategy: Look for integration results files
+        # Strategy: Scan for integration results files matching job_id
         data_dir = 'data'
         if os.path.exists(data_dir):
-            # Look for integration files
+            # For table search integration: look for integration_{job_id}_{search_type}.json
+            # Try common search types if specific job_id not provided
             if integration1_job_id:
-                integration1_path = os.path.join(data_dir, f'integration_{integration1_job_id}_{integration1_type}.json')
+                # Try with provided integration1_type (which should be search_type)
+                potential_path = os.path.join(data_dir, f'integration_{integration1_job_id}_{integration1_type}.json')
+                if os.path.exists(potential_path):
+                    integration1_path = potential_path
             else:
-                # Try to find latest integration for table search
-                integration1_path = os.path.join(data_dir, f'integration_{job_id}_{integration1_type}.json')
+                # Scan for any integration file matching job_id
+                # Try common search types
+                for search_type in ['single_column', 'multi_column', 'table_search']:
+                    potential_path = os.path.join(data_dir, f'integration_{job_id}_{search_type}.json')
+                    if os.path.exists(potential_path):
+                        integration1_path = potential_path
+                        print(f"✅ Found table search integration: {integration1_path}")
+                        break
+                
+                # If not found, scan all files in data_dir
+                if not integration1_path:
+                    for filename in os.listdir(data_dir):
+                        if filename.startswith(f'integration_{job_id}_') and filename.endswith('.json'):
+                            # Exclude model search files
+                            if not filename.startswith(f'integration_model_search_{job_id}'):
+                                potential_path = os.path.join(data_dir, filename)
+                                if os.path.exists(potential_path):
+                                    integration1_path = potential_path
+                                    print(f"✅ Found table search integration (scanned): {integration1_path}")
+                                    break
             
+            # For model search integration: look for integration_model_search_{job_id}.json
             if integration2_job_id:
-                integration2_path = os.path.join(data_dir, f'integration_{integration2_job_id}_{integration2_type}.json')
+                potential_path = os.path.join(data_dir, f'integration_model_search_{integration2_job_id}.json')
+                if os.path.exists(potential_path):
+                    integration2_path = potential_path
             else:
-                # Try to find latest integration for model search
                 integration2_path = os.path.join(data_dir, f'integration_model_search_{job_id}.json')
+                if not os.path.exists(integration2_path):
+                    integration2_path = None
         
         # Load integration results
         table1_df = None
@@ -2007,7 +2034,10 @@ def evaluate():
                     table1_data = integration1_data['integrated_table']
                     if 'data' in table1_data and 'columns' in table1_data:
                         table1_df = pd.DataFrame(table1_data['data'], columns=table1_data['columns'])
+                        integration1_type_used = integration1_data.get('integration_type', 'unknown')
+                        search_type_used = integration1_data.get('search_type', 'unknown')
                         print(f"✅ Loaded table1 (Table Search): {table1_df.shape[0]} rows × {table1_df.shape[1]} columns")
+                        print(f"   Integration type used: {integration1_type_used}, Search type: {search_type_used}")
                     else:
                         print(f"⚠️  Table1 data missing 'data' or 'columns' keys")
             except Exception as e:
@@ -2023,7 +2053,9 @@ def evaluate():
                     table2_data = integration2_data['integrated_table']
                     if 'data' in table2_data and 'columns' in table2_data:
                         table2_df = pd.DataFrame(table2_data['data'], columns=table2_data['columns'])
+                        integration2_type_used = integration2_data.get('integration_type', 'unknown')
                         print(f"✅ Loaded table2 (Model Search): {table2_df.shape[0]} rows × {table2_df.shape[1]} columns")
+                        print(f"   Integration type used: {integration2_type_used}")
                     else:
                         print(f"⚠️  Table2 data missing 'data' or 'columns' keys")
             except Exception as e:
@@ -2046,22 +2078,31 @@ def evaluate():
                     except:
                         continue
         
-        if table1_df is None or table2_df is None:
-            error_msg = "Could not find integration results. Please run table integration first."
-            debug_info = {
-                "integration1_path": integration1_path,
-                "integration2_path": integration2_path,
-                "integration1_exists": os.path.exists(integration1_path) if integration1_path else False,
-                "integration2_exists": os.path.exists(integration2_path) if integration2_path else False,
-                "table1_df_is_none": table1_df is None,
-                "table2_df_is_none": table2_df is None
-            }
+        # Provide helpful error messages
+        if table1_df is None:
+            error_msg = f"Could not find table search integration results for job_id: {job_id}. "
+            error_msg += "Please run 'Table Integration (from Table Search)' first with your desired integration type (union, intersection, etc.)."
+            if integration1_path:
+                error_msg += f" Expected file: {integration1_path}"
             print(f"❌ {error_msg}")
-            print(f"   Debug info: {debug_info}")
             return jsonify({
                 "status": "error",
                 "message": error_msg,
-                **debug_info
+                "integration1_path": integration1_path,
+                "integration1_exists": os.path.exists(integration1_path) if integration1_path else False
+            }), 404
+        
+        if table2_df is None:
+            error_msg = f"Could not find model search integration results for job_id: {job_id}. "
+            error_msg += "Please run 'Table Integration (from Model Search)' first with your desired integration type (union, intersection, etc.)."
+            if integration2_path:
+                error_msg += f" Expected file: {integration2_path}"
+            print(f"❌ {error_msg}")
+            return jsonify({
+                "status": "error",
+                "message": error_msg,
+                "integration2_path": integration2_path,
+                "integration2_exists": os.path.exists(integration2_path) if integration2_path else False
             }), 404
         
         # Run evaluation
@@ -2188,6 +2229,218 @@ def evaluate():
         }), 500
 
 
+@app.route('/api/qa', methods=['POST'])
+def qa():
+    """Answer questions based on integrated table using LLM"""
+    try:
+        data = request.json or {}
+        job_id = data.get('job_id')
+        integration_job_id = data.get('integration_job_id')  # Optional: specific integration job_id
+        use_table_search = data.get('use_table_search', True)  # Use table search integration by default
+        use_fake = data.get('use_fake', False)  # Use fake response for testing
+        fake_response_path = data.get('fake_response_path')  # Optional path to fake response file
+        fake_response_content = data.get('fake_response_content')  # Optional fake response content
+        model = data.get('model', 'gpt-4')  # LLM model to use
+        
+        if not job_id:
+            return jsonify({"status": "error", "message": "job_id is required"}), 400
+        
+        # Find integration results
+        integration_path = None
+        data_dir = 'data'
+        
+        if os.path.exists(data_dir):
+            if integration_job_id:
+                # Use specific integration job_id
+                if use_table_search:
+                    # Try to find table search integration
+                    for search_type in ['single_column', 'multi_column', 'table_search']:
+                        potential_path = os.path.join(data_dir, f'integration_{integration_job_id}_{search_type}.json')
+                        if os.path.exists(potential_path):
+                            integration_path = potential_path
+                            break
+                else:
+                    # Use model search integration
+                    integration_path = os.path.join(data_dir, f'integration_model_search_{integration_job_id}.json')
+            else:
+                # Auto-discover integration files
+                if use_table_search:
+                    # Find table search integration
+                    for search_type in ['single_column', 'multi_column', 'table_search']:
+                        potential_path = os.path.join(data_dir, f'integration_{job_id}_{search_type}.json')
+                        if os.path.exists(potential_path):
+                            integration_path = potential_path
+                            print(f"✅ Found table search integration: {integration_path}")
+                            break
+                    
+                    # If not found, scan all files
+                    if not integration_path:
+                        for filename in os.listdir(data_dir):
+                            if filename.startswith(f'integration_{job_id}_') and filename.endswith('.json'):
+                                if not filename.startswith(f'integration_model_search_{job_id}'):
+                                    potential_path = os.path.join(data_dir, filename)
+                                    if os.path.exists(potential_path):
+                                        integration_path = potential_path
+                                        print(f"✅ Found table search integration (scanned): {integration_path}")
+                                        break
+                else:
+                    # Use model search integration
+                    integration_path = os.path.join(data_dir, f'integration_model_search_{job_id}.json')
+        
+        # Load integration results
+        table_df = None
+        query = None
+        table_source = "Integrated Table"
+        
+        if integration_path and os.path.exists(integration_path):
+            try:
+                with open(integration_path, 'r', encoding='utf-8') as f:
+                    integration_data = json.load(f)
+                if integration_data.get('integrated_table'):
+                    import pandas as pd
+                    table_data = integration_data['integrated_table']
+                    if 'data' in table_data and 'columns' in table_data:
+                        table_df = pd.DataFrame(table_data['data'], columns=table_data['columns'])
+                        integration_type_used = integration_data.get('integration_type', 'unknown')
+                        search_type_used = integration_data.get('search_type', 'unknown')
+                        table_source = f"{'Table Search' if use_table_search else 'Model Search'} Integration ({integration_type_used})"
+                        print(f"✅ Loaded table for QA: {table_df.shape[0]} rows × {table_df.shape[1]} columns")
+                        print(f"   Integration type: {integration_type_used}, Search type: {search_type_used}")
+                    else:
+                        print(f"⚠️  Table data missing 'data' or 'columns' keys")
+            except Exception as e:
+                print(f"❌ Error loading table from {integration_path}: {e}")
+                import traceback
+                print(traceback.format_exc())
+        
+        # Get query from search results
+        if not query:
+            search_results_path = None
+            for folder_name in os.listdir(data_dir):
+                folder_path = os.path.join(data_dir, folder_name)
+                if os.path.isdir(folder_path):
+                    potential_path = os.path.join(folder_path, 'search_results.json')
+                    if os.path.exists(potential_path):
+                        try:
+                            with open(potential_path, 'r', encoding='utf-8') as f:
+                                search_data = json.load(f)
+                            if search_data.get('job_id') == job_id:
+                                query = search_data.get('query', 'Model search query')
+                                break
+                        except:
+                            continue
+        
+        if table_df is None or table_df.empty:
+            error_msg = f"Could not find integration results for job_id: {job_id}. "
+            error_msg += f"Please run {'Table Integration' if use_table_search else 'Model Search Integration'} first."
+            if integration_path:
+                error_msg += f" Expected file: {integration_path}"
+            print(f"❌ {error_msg}")
+            return jsonify({
+                "status": "error",
+                "message": error_msg,
+                "integration_path": integration_path,
+                "integration_exists": os.path.exists(integration_path) if integration_path else False
+            }), 404
+        
+        if not query:
+            query = "Please analyze this integrated table and provide insights."
+        
+        # Run QA
+        print(f"📝 Running QA with use_fake={use_fake}")
+        print(f"   Query: {query}")
+        print(f"   Table shape: {table_df.shape}")
+        
+        # Check API key if not using fake
+        if not use_fake:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                return jsonify({
+                    "status": "error",
+                    "message": "OPENAI_API_KEY not found. Please set OPENAI_API_KEY in your environment or use fake response mode."
+                }), 400
+            else:
+                print(f"✅ OPENAI_API_KEY found, proceeding with LLM QA...")
+        
+        try:
+            result = answer_question_with_llm(
+                query=query,
+                table=table_df,
+                table_source=table_source,
+                use_fake=use_fake,
+                fake_response_path=fake_response_path,
+                fake_response_content=fake_response_content,
+                model=model
+            )
+            print(f"✅ QA result success: {result.get('success')}")
+        except Exception as qa_error:
+            import traceback
+            error_traceback = traceback.format_exc()
+            print(f"❌ Error in answer_question_with_llm: {str(qa_error)}")
+            print(f"Traceback:\n{error_traceback}")
+            return jsonify({
+                "status": "error",
+                "message": f"QA function error: {str(qa_error)}",
+                "traceback": error_traceback
+            }), 500
+        
+        if not result.get("success"):
+            error_msg = result.get("error", "QA failed")
+            print(f"❌ QA failed: {error_msg}")
+            return jsonify({
+                "status": "error",
+                "message": error_msg,
+                "qa_result": result
+            }), 500
+        
+        # Save QA results
+        qa_output_path = os.path.join('data', f'qa_{job_id}_{"table_search" if use_table_search else "model_search"}.json')
+        os.makedirs('data', exist_ok=True)
+        qa_result = {
+            "job_id": job_id,
+            "query": query,
+            "integration_path": integration_path,
+            "table_source": table_source,
+            "qa": result,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        with open(qa_output_path, 'w', encoding='utf-8') as f:
+            json.dump(qa_result, f, ensure_ascii=False, indent=2)
+        
+        # Also return the table for reference
+        table_data = {
+            "columns": list(table_df.columns),
+            "data": table_df.fillna("").astype(str).values.tolist(),
+            "shape": list(table_df.shape)
+        }
+        
+        return jsonify({
+            "status": "success",
+            "job_id": job_id,
+            "query": query,
+            "qa": result,
+            "table": {
+                "source": table_source,
+                "data": table_data,
+                "stats": {
+                    "rows": table_df.shape[0],
+                    "columns": table_df.shape[1],
+                    "column_names": list(table_df.columns)
+                }
+            },
+            "output_path": qa_output_path
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 if __name__ == '__main__':
     print("Starting ModelSearch Backend API...")
     print("Endpoints:")
@@ -2198,5 +2451,6 @@ if __name__ == '__main__':
     print("  POST /api/integrate - Integrate tables from Card2Tab2Card (table search) results")
     print("  POST /api/integrate-model-search - Integrate tables from Card2Card (model search) results")
     print("  POST /api/evaluate - Evaluate diversity between two integrated tables using LLM")
+    print("  POST /api/qa - Answer questions based on integrated table using LLM")
     print("\nAll results saved to data/ directory")
     app.run(host='0.0.0.0', port=5002, debug=False, threaded=True)
