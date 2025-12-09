@@ -16,6 +16,18 @@ from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+print(f"🔍 Backend startup: Loading environment variables...")
+print(f"   OPENAI_API_KEY loaded: {os.getenv('OPENAI_API_KEY') is not None}")
+if os.getenv('OPENAI_API_KEY'):
+    api_key = os.getenv('OPENAI_API_KEY')
+    print(f"   API key length: {len(api_key)}")
+    print(f"   API key prefix: {api_key[:10]}...")
+else:
+    print(f"   ⚠️  OPENAI_API_KEY not found in environment")
 
 # Auto-detect device: use CUDA if available, otherwise CPU
 def get_device():
@@ -2061,13 +2073,26 @@ def evaluate():
         print(f"   Table1 (Model Search) shape: {table2_df.shape if table2_df is not None else 'None'}")
         print(f"   Table2 (Table Search) shape: {table1_df.shape if table1_df is not None else 'None'}")
         
-        # If use_fake is False but LLM API might not be available, check and auto-fallback
+        # If use_fake is False, check if OPENAI_API_KEY is available
+        # If not available, return error instead of auto-fallback
         if not use_fake:
-            # Check if OPENAI_API_KEY is available
-            import os
-            if not os.getenv("OPENAI_API_KEY"):
-                print("⚠️  OPENAI_API_KEY not found, auto-switching to fake response")
-                use_fake = True
+            # os is already imported at the top of backend.py
+            api_key = os.getenv("OPENAI_API_KEY")
+            print(f"🔍 Debug: Checking OPENAI_API_KEY...")
+            print(f"   API key exists: {api_key is not None}")
+            print(f"   API key length: {len(api_key) if api_key else 0}")
+            print(f"   API key prefix: {api_key[:10] + '...' if api_key and len(api_key) > 10 else 'N/A'}")
+            print(f"   All env vars with 'OPENAI': {[k for k in os.environ.keys() if 'OPENAI' in k.upper()]}")
+            
+            if not api_key:
+                error_msg = "OPENAI_API_KEY not found. Please set OPENAI_API_KEY in your environment or use fake response mode."
+                print(f"❌ {error_msg}")
+                return jsonify({
+                    "status": "error",
+                    "error": error_msg
+                }), 400
+            else:
+                print(f"✅ OPENAI_API_KEY found, proceeding with LLM evaluation...")
         
         try:
             result = evaluate_diversity_with_llm(

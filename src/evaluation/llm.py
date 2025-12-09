@@ -63,18 +63,21 @@ def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = Non
         # Fallback to direct OpenAI
         try:
             import openai
+            # os is already imported at the top of the file
             api_key = api_key or os.getenv("OPENAI_API_KEY")
             if api_key:
                 print(f"📡 Using direct OpenAI API...")
                 client = openai.OpenAI(api_key=api_key)
+                # Note: response_format is only supported by certain models
+                # Remove it for compatibility with older models
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": "You are an expert data analyst. Provide evaluations in valid JSON format."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.3,
-                    response_format={"type": "json_object"}
+                    temperature=0.3
+                    # Removed response_format for compatibility
                 )
                 return response.choices[0].message.content
             else:
@@ -100,6 +103,9 @@ def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = Non
     full_prompt = f"{system_message}\n\n{prompt}"
     
     print(f"🔍 Step 3: Setting up OpenAI...")
+    print(f"   Checking environment variables...")
+    print(f"   OPENAI_API_KEY in os.environ: {'OPENAI_API_KEY' in os.environ}")
+    print(f"   os.getenv('OPENAI_API_KEY'): {os.getenv('OPENAI_API_KEY') is not None}")
     try:
         setup_openai('', mode='openai')
         print(f"✅ OpenAI setup successful")
@@ -112,11 +118,12 @@ def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = Non
     print(f"🔍 Step 4: Calling LLM_response with model: {llm_model}")
     try:
         # CitationLake's query_openai accepts kwargs and passes them to openai API
+        # Note: Don't pass response_format as it's not supported by all models
         response, _ = LLM_response(
             chat_prompt=full_prompt,
             llm_model=llm_model,
             history=[],
-            kwargs={"temperature": 0.3},  # Pass temperature in kwargs
+            kwargs={"temperature": 0.3},  # Only pass temperature, not response_format
             max_tokens=2000
         )
         print(f"✅ LLM API call successful, response length: {len(response)}")
@@ -227,16 +234,22 @@ def evaluate_diversity_with_llm(
     except ValueError as ve:
         # This is the "LLM API not available" error from call_llm_api
         print(f"⚠️  LLM API ValueError: {ve}")
+        # If use_fake is False, raise error instead of falling back
+        if not use_fake:
+            raise ValueError(f"LLM API not available: {str(ve)}. Please set OPENAI_API_KEY or use fake response mode.")
         print(f"   Falling back to fake response...")
         fake_result = load_fake_response(fake_response_path)
         fake_result["fallback_reason"] = f"LLM API not available: {str(ve)}"
         return fake_result
     except Exception as e:
-        # If LLM API fails for any other reason, fallback to fake response
+        # If LLM API fails for any other reason
         print(f"⚠️  LLM API error: {e}")
-        print(f"   Falling back to fake response...")
         import traceback
         print(traceback.format_exc())
+        # If use_fake is False, raise error instead of falling back
+        if not use_fake:
+            raise Exception(f"LLM API error: {str(e)}. Please check your API configuration or use fake response mode.")
+        print(f"   Falling back to fake response...")
         fake_result = load_fake_response(fake_response_path)
         fake_result["fallback_reason"] = f"LLM API error: {str(e)}"
         return fake_result

@@ -1071,12 +1071,12 @@ HTML_TEMPLATE = """
                 `;
             }
             
-            // Add Integration Sections - Side by side layout
+            // Add Integration Sections - Vertical layout (one above the other)
             html += `
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px;">
-                    <!-- Left: Model Search Integration (Card2Card) -->
-                    <div class="integration-section" style="padding: 20px; background: #e7f3ff; border-radius: 8px; border: 1px solid #b3d9ff;">
-                        <h3>Table Integration (from Model Search)</h3>
+                <div style="display: flex; flex-direction: column; gap: 20px; margin-top: 30px;">
+                    <!-- First: Model Search Integration (Card2Card) -->
+                    <div class="integration-section" style="padding: 20px; background: #e7f3ff; border-radius: 8px; border: 1px solid #b3d9ff; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h3 style="margin-top: 0;">Table Integration (from Model Search)</h3>
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                             Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.
                         </p>
@@ -1106,9 +1106,9 @@ HTML_TEMPLATE = """
                         <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                     
-                    <!-- Right: Table Search Integration (Card2Tab2Card) -->
-                    <div class="integration-section" style="padding: 20px; background: #f8f9fa; border-radius: 8px;">
-                        <h3>Table Integration (from Table Search)</h3>
+                    <!-- Second: Table Search Integration (Card2Tab2Card) -->
+                    <div class="integration-section" style="padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h3 style="margin-top: 0;">Table Integration (from Table Search)</h3>
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                             Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
                         </p>
@@ -1166,21 +1166,17 @@ HTML_TEMPLATE = """
                             <span>Generate New Response</span>
                         </label>
                         <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
-                            <input type="radio" name="evaluation_mode" value="use_existing" id="eval_mode_existing" onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
-                            <span>Use Existing Response</span>
+                            <input type="radio" name="evaluation_mode" value="use_fake" id="eval_mode_fake" onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
+                            <span>Use Fake Response (for testing/demo)</span>
                         </label>
                     </div>
                     <div id="evaluation_generate_options" style="display: block;">
                         <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
-                            <label style="display: flex; align-items: center; gap: 5px;">
-                                <input type="checkbox" id="evaluation_use_fake" style="width: 18px; height: 18px;">
-                                <span>Use Fake Response (for testing/demo)</span>
-                            </label>
                             <label style="display: flex; align-items: center; gap: 5px; margin-left: 10px;">
                                 <input type="file" id="evaluation_fake_file" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
                                 <button type="button" onclick="document.getElementById('evaluation_fake_file').click()" 
                                         style="padding: 5px 10px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                                    Load Fake Response File
+                                    Load Fake Response File (optional)
                                 </button>
                                 <span id="fake_file_name" style="font-size: 11px; color: #666; margin-left: 5px;"></span>
                             </label>
@@ -1192,16 +1188,22 @@ HTML_TEMPLATE = """
                             </button>
                         </div>
                     </div>
-                    <div id="evaluation_use_existing_options" style="display: none;">
+                    <div id="evaluation_use_fake_options" style="display: none;">
                         <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
                             <label>
-                                <input type="file" id="evaluation_existing_file" accept=".json" style="display: none;" onchange="handleExistingResponseSelect()">
-                                <button type="button" onclick="document.getElementById('evaluation_existing_file').click()" 
-                                        style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                    📁 Load Existing Response File
+                                <input type="file" id="evaluation_fake_file2" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
+                                <button type="button" onclick="document.getElementById('evaluation_fake_file2').click()" 
+                                        style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                    📁 Load Fake Response File
                                 </button>
-                                <span id="existing_file_name" style="font-size: 11px; color: #666; margin-left: 5px;"></span>
+                                <span id="fake_file_name2" style="font-size: 11px; color: #666; margin-left: 5px;"></span>
                             </label>
+                        </div>
+                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                            <button id="evaluationBtnFake" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                    style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                📊 Use Fake Response
+                            </button>
                         </div>
                     </div>
                     <div id="evaluationResults" style="margin-top: 20px; display: none;"></div>
@@ -1435,19 +1437,19 @@ HTML_TEMPLATE = """
         }
         
         let fakeResponseFile = null;
-        let existingResponseFile = null;
         
         function toggleEvaluationMode() {
             const generateMode = document.getElementById('eval_mode_generate').checked;
+            const fakeMode = document.getElementById('eval_mode_fake').checked;
             const generateOptions = document.getElementById('evaluation_generate_options');
-            const existingOptions = document.getElementById('evaluation_use_existing_options');
+            const fakeOptions = document.getElementById('evaluation_use_fake_options');
             
             if (generateMode) {
-                generateOptions.style.display = 'block';
-                existingOptions.style.display = 'none';
-            } else {
-                generateOptions.style.display = 'none';
-                existingOptions.style.display = 'block';
+                if (generateOptions) generateOptions.style.display = 'block';
+                if (fakeOptions) fakeOptions.style.display = 'none';
+            } else if (fakeMode) {
+                if (generateOptions) generateOptions.style.display = 'none';
+                if (fakeOptions) fakeOptions.style.display = 'block';
             }
         }
         
@@ -1460,34 +1462,6 @@ HTML_TEMPLATE = """
                     fileNameSpan.textContent = fakeResponseFile.name;
                     fileNameSpan.style.color = '#28a745';
                 }
-            }
-        }
-        
-        function handleExistingResponseSelect() {
-            const fileInput = document.getElementById('evaluation_existing_file');
-            const fileNameSpan = document.getElementById('existing_file_name');
-            if (fileInput && fileInput.files.length > 0) {
-                existingResponseFile = fileInput.files[0];
-                if (fileNameSpan) {
-                    fileNameSpan.textContent = existingResponseFile.name;
-                    fileNameSpan.style.color = '#28a745';
-                }
-                
-                // Load and display the existing response
-                const fileReader = new FileReader();
-                fileReader.onload = function(e) {
-                    try {
-                        const responseData = JSON.parse(e.target.result);
-                        // Handle both full response format and evaluation-only format
-                        const eval_result = responseData.evaluation || responseData;
-                        const table1Data = responseData.table1 || null;
-                        const table2Data = responseData.table2 || null;
-                        displayEvaluationResults(eval_result, document.getElementById('evaluationResults'), table1Data, table2Data);
-                    } catch (error) {
-                        alert('Error loading response file: ' + error.message);
-                    }
-                };
-                fileReader.readAsText(existingResponseFile);
             }
         }
         
@@ -1613,9 +1587,15 @@ HTML_TEMPLATE = """
         }
         
         async function runEvaluation(jobId) {
-            const useFakeCheckbox = document.getElementById('evaluation_use_fake');
-            const useFake = useFakeCheckbox ? useFakeCheckbox.checked : false;
-            const evaluationBtn = document.getElementById('evaluationBtn');
+            // Check which mode is selected
+            const generateMode = document.getElementById('eval_mode_generate')?.checked || false;
+            const fakeMode = document.getElementById('eval_mode_fake')?.checked || false;
+            const useFake = fakeMode;  // Use fake only if fake mode is selected
+            
+            // Get the appropriate button based on mode
+            const evaluationBtn = useFake ? 
+                (document.getElementById('evaluationBtnFake') || document.getElementById('evaluationBtn')) :
+                document.getElementById('evaluationBtn');
             const resultsDiv = document.getElementById('evaluationResults');
             
             if (!evaluationBtn || !resultsDiv) {
@@ -1623,10 +1603,10 @@ HTML_TEMPLATE = """
                 return;
             }
             
-            // Debug: log checkbox state
-            console.log('🔍 Evaluation checkbox state:', {
-                checkboxFound: !!useFakeCheckbox,
-                checked: useFakeCheckbox ? useFakeCheckbox.checked : 'N/A',
+            // Debug: log mode state
+            console.log('🔍 Evaluation mode state:', {
+                generateMode: generateMode,
+                fakeMode: fakeMode,
                 useFake: useFake
             });
             
@@ -1641,7 +1621,7 @@ HTML_TEMPLATE = """
                     job_id: jobId,
                     integration1_type: 'single_column',
                     integration2_type: 'model_search',
-                    use_fake: useFake  // Explicitly set based on checkbox
+                    use_fake: useFake  // Explicitly set based on radio button selection
                 };
                 
                 console.log('📤 Sending evaluation request:', { use_fake: useFake, job_id: jobId });
@@ -1691,6 +1671,26 @@ HTML_TEMPLATE = """
                     body: JSON.stringify(requestBody)
                 });
                 
+                // Check if response is ok (status 200-299)
+                if (!response.ok) {
+                    // Try to parse error response
+                    let errorMessage = 'Unknown error';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+                    } catch (e) {
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    resultsDiv.innerHTML = `
+                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                            <strong>❌ Evaluation Failed:</strong> ${errorMessage}
+                        </div>
+                    `;
+                    evaluationBtn.disabled = false;
+                    evaluationBtn.textContent = '📊 Generate Evaluation';
+                    return;
+                }
+                
                 const data = await response.json();
                 
                 if (data.status === 'success') {
@@ -1699,16 +1699,18 @@ HTML_TEMPLATE = """
                     const table2Data = data.table2 || null;
                     displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data);
                 } else {
+                    // Handle error status in response
+                    const errorMessage = data.error || data.message || 'Unknown error';
                     resultsDiv.innerHTML = `
                         <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                            <strong>❌ Evaluation Failed:</strong> ${data.message || 'Unknown error'}
+                            <strong>❌ Evaluation Failed:</strong> ${errorMessage}
                         </div>
                     `;
                 }
             } catch (error) {
                 resultsDiv.innerHTML = `
                     <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                        <strong>❌ Error:</strong> ${error.message}
+                        <strong>❌ Error:</strong> ${error.message || 'Failed to connect to server'}
                     </div>
                 `;
             } finally {

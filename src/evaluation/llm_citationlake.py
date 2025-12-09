@@ -18,6 +18,9 @@ def setup_openai(fname, mode='azure'):
     assert mode in {'openai', 'azure'}
     load_dotenv()
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'sk-test')
+    print(f"🔍 setup_openai: API key exists: {OPENAI_API_KEY is not None and OPENAI_API_KEY != 'sk-test'}")
+    print(f"   API key length: {len(OPENAI_API_KEY) if OPENAI_API_KEY else 0}")
+    print(f"   API key prefix: {OPENAI_API_KEY[:10] + '...' if OPENAI_API_KEY and len(OPENAI_API_KEY) > 10 and OPENAI_API_KEY != 'sk-test' else 'N/A or default'}")
     if mode == 'openai':
         openai.api_type = "open_ai"
         openai.api_base = "https://api.openai.com/v1"
@@ -80,7 +83,9 @@ def LLM_response(chat_prompt,llm_model="gpt-3.5-turbo-0125",history=[],kwargs={}
     """
     if llm_model.startswith('gpt-3.5') or llm_model.startswith('gpt-4') or llm_model.startswith('gpt3.5') or llm_model.startswith('gpt4'):
         setup_openai('', mode='openai')
-        response = query_openai(chat_prompt, mode="openai", model=llm_model, max_tokens=max_tokens)
+        # Filter out response_format from kwargs as it's not supported by all models
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k != 'response_format'} if kwargs else {}
+        response = query_openai(chat_prompt, mode="openai", model=llm_model, max_tokens=max_tokens, **filtered_kwargs)
         history.append([chat_prompt, response])
     elif llm_model in ['llama3','llama2','mistral','dolphin-phi','phi','neural-chat','starling-lm','codellama','llama2-uncensored','llama2:13b','llama2:70b','orca-mini','vicuna','llava','gemma:2b','gemma:7b']:
         # use ollama instead, required ollama installed and models downloaded, https://github.com/ollama/ollama/tree/main?tab=readme-ov-file
