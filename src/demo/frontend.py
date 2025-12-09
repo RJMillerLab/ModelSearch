@@ -1035,94 +1035,176 @@ HTML_TEMPLATE = """
                 </div>
             `;
             
+            // Comparison Section - Display as Table
             if (results.comparison) {
-                html += '<div class="comparison-section"><h3>Comparison</h3>';
-                html += Object.entries(results.comparison).map(([type, comp]) => `
-                    <div class="comparison-item">
-                        <strong>${type}:</strong> Overlap: ${comp.overlap_count} (${(comp.overlap_ratio * 100).toFixed(1)}%)
+                html += `
+                    <div class="comparison-section" style="margin-top: 30px; padding: 20px; background: #e7f3ff; border-radius: 8px;">
+                        <h3>Comparison</h3>
+                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
+                            Overlap analysis between Card2Card and Card2Tab2Card search results
+                        </p>
+                        <div style="overflow-x: auto;">
+                            <table style="width: 100%; border-collapse: collapse; background: white; border-radius: 4px; overflow: hidden;">
+                                <thead>
+                                    <tr style="background: #007bff; color: white;">
+                                        <th style="padding: 10px; text-align: left; border: 1px solid #0056b3;">Search Type</th>
+                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Card2Card Count</th>
+                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Card2Tab2Card Count</th>
+                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Overlap Count</th>
+                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Overlap Ratio</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${Object.entries(results.comparison).map(([type, comp], idx) => `
+                                        <tr style="${idx % 2 === 0 ? 'background: #f8f9fa;' : 'background: white;'}">
+                                            <td style="padding: 8px; border: 1px solid #dee2e6; font-weight: 500;">${type}</td>
+                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center;">${comp.card2card_count || 0}</td>
+                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center;">${comp.card2tab2card_count || 0}</td>
+                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center; font-weight: bold; color: #28a745;">${comp.overlap_count || 0}</td>
+                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center; font-weight: bold;">${((comp.overlap_ratio || 0) * 100).toFixed(1)}%</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                `).join('');
-                html += '</div>';
+                `;
             }
             
-            // Add Integration Section for Table Search (Card2Tab2Card)
+            // Add Integration Sections - Side by side layout
             html += `
-                <div class="integration-section" style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
-                    <h3>Table Integration (from Table Search)</h3>
-                    <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                        Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
-                    </p>
-                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                        <label>
-                            Search Type:
-                            <select id="integration_search_type" style="margin-left: 5px; padding: 5px;">
-                                <option value="single_column">Single Column</option>
-                                <option value="keyword">Keyword</option>
-                                <option value="multi_column">Multi Column</option>
-                                <option value="unionable">Unionable</option>
-                                <option value="complex">Complex (Union+Join+Correlation)</option>
-                                <option value="correlation">Correlation</option>
-                                <option value="imputation">Imputation</option>
-                                <option value="augmentation">Augmentation</option>
-                                <option value="dependent_data">Dependent Data</option>
-                                <option value="feature_for_ml">Feature for ML</option>
-                                <option value="multi_column_collinearity">Multi-Column Collinearity</option>
-                                <option value="negative_example">Negative Example</option>
-                            </select>
-                        </label>
-                        <label>
-                            Integration Type:
-                            <select id="integration_type" style="margin-left: 5px; padding: 5px;">
-                                <option value="union">Union</option>
-                                <option value="intersection">Intersection</option>
-                                <option value="alite">ALITE (FD-based)</option>
-                                <option value="outer_join">Outer Join</option>
-                            </select>
-                        </label>
-                        <label>
-                            Top K Tables:
-                            <input type="number" id="integration_k" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 60px;">
-                        </label>
-                        <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" 
-                                style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                            🔗 Integrate Tables
-                        </button>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px;">
+                    <!-- Left: Model Search Integration (Card2Card) -->
+                    <div class="integration-section" style="padding: 20px; background: #e7f3ff; border-radius: 8px; border: 1px solid #b3d9ff;">
+                        <h3>Table Integration (from Model Search)</h3>
+                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
+                            Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.
+                        </p>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <label>
+                                Integration Type:
+                                <select id="integration_model_search_type" style="margin-left: 5px; padding: 5px; width: 100%;">
+                                    <option value="union">Union</option>
+                                    <option value="intersection">Intersection</option>
+                                    <option value="alite">ALITE (FD-based)</option>
+                                    <option value="outer_join">Outer Join</option>
+                                </select>
+                            </label>
+                            <label>
+                                Max Models:
+                                <input type="number" id="integration_max_models" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 100%;">
+                            </label>
+                            <label>
+                                Top K Tables:
+                                <input type="number" id="integration_model_search_k" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 100%;">
+                            </label>
+                            <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" 
+                                    style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
+                                🔗 Integrate Model Search Tables
+                            </button>
+                        </div>
+                        <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
                     </div>
-                    <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
+                    
+                    <!-- Right: Table Search Integration (Card2Tab2Card) -->
+                    <div class="integration-section" style="padding: 20px; background: #f8f9fa; border-radius: 8px;">
+                        <h3>Table Integration (from Table Search)</h3>
+                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
+                            Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
+                        </p>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <label>
+                                Search Type:
+                                <select id="integration_search_type" style="margin-left: 5px; padding: 5px; width: 100%;">
+                                    <option value="single_column">Single Column</option>
+                                    <option value="keyword">Keyword</option>
+                                    <option value="multi_column">Multi Column</option>
+                                    <option value="unionable">Unionable</option>
+                                    <option value="complex">Complex (Union+Join+Correlation)</option>
+                                    <option value="correlation">Correlation</option>
+                                    <option value="imputation">Imputation</option>
+                                    <option value="augmentation">Augmentation</option>
+                                    <option value="dependent_data">Dependent Data</option>
+                                    <option value="feature_for_ml">Feature for ML</option>
+                                    <option value="multi_column_collinearity">Multi-Column Collinearity</option>
+                                    <option value="negative_example">Negative Example</option>
+                                </select>
+                            </label>
+                            <label>
+                                Integration Type:
+                                <select id="integration_type" style="margin-left: 5px; padding: 5px; width: 100%;">
+                                    <option value="union">Union</option>
+                                    <option value="intersection">Intersection</option>
+                                    <option value="alite">ALITE (FD-based)</option>
+                                    <option value="outer_join">Outer Join</option>
+                                </select>
+                            </label>
+                            <label>
+                                Top K Tables:
+                                <input type="number" id="integration_k" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 100%;">
+                            </label>
+                            <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" 
+                                    style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
+                                🔗 Integrate Tables
+                            </button>
+                        </div>
+                        <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
+                    </div>
                 </div>
             `;
             
-            // Add Integration Section for Model Search (Card2Card)
+            // Add Evaluation Section - Always visible card
             html += `
-                <div class="integration-section" style="margin-top: 30px; padding: 20px; background: #e7f3ff; border-radius: 8px; border: 1px solid #b3d9ff;">
-                    <h3>Table Integration (from Model Search)</h3>
+                <div class="evaluation-section" style="margin-top: 30px; padding: 20px; background: #fff3cd; border-radius: 8px; border: 2px solid #ffc107; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <h3 style="margin-top: 0; color: #856404;">📊 Evaluation on Integrated Tables</h3>
                     <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                        Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.
+                        Evaluate diversity between Table Search Integration and Model Search Integration results using LLM.
                     </p>
-                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                        <label>
-                            Integration Type:
-                            <select id="integration_model_search_type" style="margin-left: 5px; padding: 5px;">
-                                <option value="union">Union</option>
-                                <option value="intersection">Intersection</option>
-                                <option value="alite">ALITE (FD-based)</option>
-                                <option value="outer_join">Outer Join</option>
-                            </select>
+                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 12px; background: white; border-radius: 4px;">
+                        <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
+                            <input type="radio" name="evaluation_mode" value="generate" id="eval_mode_generate" checked onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
+                            <span>Generate New Response</span>
                         </label>
-                        <label>
-                            Max Models:
-                            <input type="number" id="integration_max_models" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 60px;">
+                        <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
+                            <input type="radio" name="evaluation_mode" value="use_existing" id="eval_mode_existing" onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
+                            <span>Use Existing Response</span>
                         </label>
-                        <label>
-                            Top K Tables:
-                            <input type="number" id="integration_model_search_k" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 60px;">
-                        </label>
-                        <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" 
-                                style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                            🔗 Integrate Model Search Tables
-                        </button>
                     </div>
-                    <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
+                    <div id="evaluation_generate_options" style="display: block;">
+                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
+                            <label style="display: flex; align-items: center; gap: 5px;">
+                                <input type="checkbox" id="evaluation_use_fake" style="width: 18px; height: 18px;">
+                                <span>Use Fake Response (for testing/demo)</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 5px; margin-left: 10px;">
+                                <input type="file" id="evaluation_fake_file" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
+                                <button type="button" onclick="document.getElementById('evaluation_fake_file').click()" 
+                                        style="padding: 5px 10px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                    Load Fake Response File
+                                </button>
+                                <span id="fake_file_name" style="font-size: 11px; color: #666; margin-left: 5px;"></span>
+                            </label>
+                        </div>
+                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                            <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                    style="padding: 8px 16px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                📊 Generate Evaluation
+                            </button>
+                        </div>
+                    </div>
+                    <div id="evaluation_use_existing_options" style="display: none;">
+                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
+                            <label>
+                                <input type="file" id="evaluation_existing_file" accept=".json" style="display: none;" onchange="handleExistingResponseSelect()">
+                                <button type="button" onclick="document.getElementById('evaluation_existing_file').click()" 
+                                        style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                    📁 Load Existing Response File
+                                </button>
+                                <span id="existing_file_name" style="font-size: 11px; color: #666; margin-left: 5px;"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div id="evaluationResults" style="margin-top: 20px; display: none;"></div>
                 </div>
             `;
             
@@ -1325,6 +1407,14 @@ HTML_TEMPLATE = """
                     
                     html += `</div>`;
                     resultsDiv.innerHTML = html;
+                    
+                    // Show evaluation section after successful integration
+                    setTimeout(() => {
+                        const evaluationSection = document.querySelector('.evaluation-section');
+                        if (evaluationSection) {
+                            evaluationSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                    }, 500);
                 } else {
                     resultsDiv.innerHTML = `
                         <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
@@ -1341,6 +1431,289 @@ HTML_TEMPLATE = """
             } finally {
                 integrationBtn.disabled = false;
                 integrationBtn.textContent = '🔗 Integrate Model Search Tables';
+            }
+        }
+        
+        let fakeResponseFile = null;
+        let existingResponseFile = null;
+        
+        function toggleEvaluationMode() {
+            const generateMode = document.getElementById('eval_mode_generate').checked;
+            const generateOptions = document.getElementById('evaluation_generate_options');
+            const existingOptions = document.getElementById('evaluation_use_existing_options');
+            
+            if (generateMode) {
+                generateOptions.style.display = 'block';
+                existingOptions.style.display = 'none';
+            } else {
+                generateOptions.style.display = 'none';
+                existingOptions.style.display = 'block';
+            }
+        }
+        
+        function handleFakeFileSelect() {
+            const fileInput = document.getElementById('evaluation_fake_file');
+            const fileNameSpan = document.getElementById('fake_file_name');
+            if (fileInput && fileInput.files.length > 0) {
+                fakeResponseFile = fileInput.files[0];
+                if (fileNameSpan) {
+                    fileNameSpan.textContent = fakeResponseFile.name;
+                    fileNameSpan.style.color = '#28a745';
+                }
+            }
+        }
+        
+        function handleExistingResponseSelect() {
+            const fileInput = document.getElementById('evaluation_existing_file');
+            const fileNameSpan = document.getElementById('existing_file_name');
+            if (fileInput && fileInput.files.length > 0) {
+                existingResponseFile = fileInput.files[0];
+                if (fileNameSpan) {
+                    fileNameSpan.textContent = existingResponseFile.name;
+                    fileNameSpan.style.color = '#28a745';
+                }
+                
+                // Load and display the existing response
+                const fileReader = new FileReader();
+                fileReader.onload = function(e) {
+                    try {
+                        const responseData = JSON.parse(e.target.result);
+                        // Handle both full response format and evaluation-only format
+                        const eval_result = responseData.evaluation || responseData;
+                        const table1Data = responseData.table1 || null;
+                        const table2Data = responseData.table2 || null;
+                        displayEvaluationResults(eval_result, document.getElementById('evaluationResults'), table1Data, table2Data);
+                    } catch (error) {
+                        alert('Error loading response file: ' + error.message);
+                    }
+                };
+                fileReader.readAsText(existingResponseFile);
+            }
+        }
+        
+        function displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data) {
+            if (!resultsDiv) return;
+            
+            resultsDiv.style.display = 'block';
+            
+            // Get comparison scores - Note: model_search is LEFT, table_search is RIGHT
+            const comparisonScore = eval_result.comparison_score || {};
+            const modelSearchScore = comparisonScore.model_search_quality || eval_result.model_search_quality || 'N/A';
+            const tableSearchScore = comparisonScore.table_search_quality || eval_result.table_search_quality || 'N/A';
+            const winner = comparisonScore.winner || eval_result.winner || 'N/A';
+            const difference = comparisonScore.overall_difference || eval_result.overall_difference || 'N/A';
+            
+            const qualityAnalysis = eval_result.quality_analysis || {};
+            const modelSearchAnalysis = qualityAnalysis.model_search || {};
+            const tableSearchAnalysis = qualityAnalysis.table_search || {};
+            
+            let html = `
+                <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
+                    <h4 style="margin-top: 0; color: #ffc107; margin-bottom: 15px;">📊 Quality Comparison - Table Search vs Model Search</h4>
+                    
+                    <!-- Quality Score Comparison - Left: Model Search, Right: Table Search -->
+                    <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                            <div style="padding: 15px; background: ${winner === 'model_search' ? '#d4edda' : '#e7f3ff'}; border-radius: 4px; border: 2px solid ${winner === 'model_search' ? '#28a745' : '#007bff'};">
+                                <div style="font-size: 14px; color: #666; margin-bottom: 5px;">Model Search Quality</div>
+                                <div style="font-size: 32px; font-weight: bold; color: ${winner === 'model_search' ? '#28a745' : '#004085'};">
+                                    ${modelSearchScore}/100
+                                </div>
+                                ${winner === 'model_search' ? '<div style="font-size: 11px; color: #28a745; margin-top: 5px;">🏆 Winner</div>' : ''}
+                            </div>
+                            <div style="padding: 15px; background: ${winner === 'table_search' ? '#d4edda' : '#fff3cd'}; border-radius: 4px; border: 2px solid ${winner === 'table_search' ? '#28a745' : '#ffc107'};">
+                                <div style="font-size: 14px; color: #666; margin-bottom: 5px;">Table Search Quality</div>
+                                <div style="font-size: 32px; font-weight: bold; color: ${winner === 'table_search' ? '#28a745' : '#856404'};">
+                                    ${tableSearchScore}/100
+                                </div>
+                                ${winner === 'table_search' ? '<div style="font-size: 11px; color: #28a745; margin-top: 5px;">🏆 Winner</div>' : ''}
+                            </div>
+                        </div>
+                        <div style="text-align: center; padding: 10px; background: white; border-radius: 4px;">
+                            <div style="font-size: 14px; color: #666;">Quality Difference</div>
+                            <div style="font-size: 20px; font-weight: bold; color: #dc3545;">
+                                ${difference > 0 ? '+' : ''}${difference} points
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quality Analysis - Left: Model Search, Right: Table Search -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                        <div style="padding: 15px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
+                            <h5 style="margin-top: 0; color: #004085;">Model Search Analysis</h5>
+                            ${modelSearchAnalysis.summary ? `<p style="font-size: 12px; margin-bottom: 10px;">${modelSearchAnalysis.summary}</p>` : ''}
+                            ${modelSearchAnalysis.strengths && modelSearchAnalysis.strengths.length > 0 ? `
+                                <div style="margin-top: 10px;">
+                                    <strong style="font-size: 12px; color: #28a745;">Strengths:</strong>
+                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
+                                        ${modelSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                            ${modelSearchAnalysis.weaknesses && modelSearchAnalysis.weaknesses.length > 0 ? `
+                                <div style="margin-top: 10px;">
+                                    <strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong>
+                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
+                                        ${modelSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div style="padding: 15px; background: #fff3cd; border-radius: 4px; border-left: 4px solid #ffc107;">
+                            <h5 style="margin-top: 0; color: #856404;">Table Search Analysis</h5>
+                            ${tableSearchAnalysis.summary ? `<p style="font-size: 12px; margin-bottom: 10px;">${tableSearchAnalysis.summary}</p>` : ''}
+                            ${tableSearchAnalysis.strengths && tableSearchAnalysis.strengths.length > 0 ? `
+                                <div style="margin-top: 10px;">
+                                    <strong style="font-size: 12px; color: #28a745;">Strengths:</strong>
+                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
+                                        ${tableSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                            ${tableSearchAnalysis.weaknesses && tableSearchAnalysis.weaknesses.length > 0 ? `
+                                <div style="margin-top: 10px;">
+                                    <strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong>
+                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
+                                        ${tableSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                    
+                    <!-- Comparison Summary -->
+                    ${eval_result.comparison_summary ? `
+                        <div style="margin-top: 15px; padding: 12px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
+                            <strong>Comparison Summary:</strong>
+                            <p style="margin: 8px 0 0 0; font-size: 13px; line-height: 1.6;">${eval_result.comparison_summary}</p>
+                        </div>
+                    ` : ''}
+                    ${eval_result.key_differences && eval_result.key_differences.length > 0 ? `
+                        <div style="margin-top: 15px; padding: 12px; background: #e7f3ff; border-radius: 4px;">
+                            <strong>Key Differences:</strong>
+                            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px;">
+                                ${eval_result.key_differences.map(diff => `<li>${diff}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    ${eval_result.recommendation ? `
+                        <div style="margin-top: 15px; padding: 12px; background: #d4edda; border-radius: 4px; border-left: 4px solid #28a745;">
+                            <strong>Recommendation:</strong>
+                            <p style="margin: 8px 0 0 0; font-size: 13px; line-height: 1.6;">${eval_result.recommendation}</p>
+                        </div>
+                    ` : ''}
+                    ${eval_result.source ? `
+                        <div style="margin-top: 10px; font-size: 11px; color: #999; font-style: italic;">
+                            Source: ${eval_result.source}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            resultsDiv.innerHTML = html;
+        }
+        
+        async function runEvaluation(jobId) {
+            const useFakeCheckbox = document.getElementById('evaluation_use_fake');
+            const useFake = useFakeCheckbox ? useFakeCheckbox.checked : false;
+            const evaluationBtn = document.getElementById('evaluationBtn');
+            const resultsDiv = document.getElementById('evaluationResults');
+            
+            if (!evaluationBtn || !resultsDiv) {
+                console.error('Evaluation elements not found');
+                return;
+            }
+            
+            // Debug: log checkbox state
+            console.log('🔍 Evaluation checkbox state:', {
+                checkboxFound: !!useFakeCheckbox,
+                checked: useFakeCheckbox ? useFakeCheckbox.checked : 'N/A',
+                useFake: useFake
+            });
+            
+            // Disable button and show loading
+            evaluationBtn.disabled = true;
+            evaluationBtn.textContent = '⏳ Evaluating...';
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running evaluation...</div>';
+            
+            try {
+                const requestBody = {
+                    job_id: jobId,
+                    integration1_type: 'single_column',
+                    integration2_type: 'model_search',
+                    use_fake: useFake  // Explicitly set based on checkbox
+                };
+                
+                console.log('📤 Sending evaluation request:', { use_fake: useFake, job_id: jobId });
+                
+                // If fake file is selected, read it
+                if (useFake && fakeResponseFile) {
+                    const fileReader = new FileReader();
+                    fileReader.onload = async function(e) {
+                        try {
+                            const fakeContent = e.target.result;
+                            const fakeData = JSON.parse(fakeContent);
+                            
+                            requestBody.fake_response_content = fakeData;
+                            
+                            await sendEvaluationRequest(requestBody, resultsDiv, evaluationBtn);
+                        } catch (error) {
+                            resultsDiv.innerHTML = `
+                                <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                                    <strong>❌ Error:</strong> Failed to parse fake response file: ${error.message}
+                                </div>
+                            `;
+                            evaluationBtn.disabled = false;
+                            evaluationBtn.textContent = '📊 Generate Evaluation';
+                        }
+                    };
+                    fileReader.readAsText(fakeResponseFile);
+                    return;
+                }
+                
+                await sendEvaluationRequest(requestBody, resultsDiv, evaluationBtn);
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                        <strong>❌ Error:</strong> ${error.message}
+                    </div>
+                `;
+                evaluationBtn.disabled = false;
+                evaluationBtn.textContent = '📊 Generate Evaluation';
+            }
+        }
+        
+        async function sendEvaluationRequest(requestBody, resultsDiv, evaluationBtn) {
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/evaluate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    const eval_result = data.evaluation;
+                    const table1Data = data.table1 || null;
+                    const table2Data = data.table2 || null;
+                    displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data);
+                } else {
+                    resultsDiv.innerHTML = `
+                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                            <strong>❌ Evaluation Failed:</strong> ${data.message || 'Unknown error'}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
+                        <strong>❌ Error:</strong> ${error.message}
+                    </div>
+                `;
+            } finally {
+                evaluationBtn.disabled = false;
+                evaluationBtn.textContent = '📊 Generate Evaluation';
             }
         }
         
