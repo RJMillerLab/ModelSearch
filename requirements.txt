@@ -15,6 +15,14 @@ faiss-cpu>=1.7.4
 # For GPU (uncomment if using GPU):
 # faiss-gpu>=1.7.4
 
+# Sparse retrieval (BM25)
+rank-bm25>=0.2.2
+
+# OpenAI API and retry handling
+openai>=1.0.0
+tenacity>=8.0.0
+python-dotenv>=1.0.0
+
 # Web framework for demo backend
 flask>=2.0.0
 flask-cors>=3.0.0
