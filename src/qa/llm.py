@@ -4,7 +4,7 @@ LLM integration for QA (Question Answering) based on integrated tables
 import os
 import json
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import pandas as pd
 from .prompt import get_qa_prompt
 
@@ -156,8 +156,8 @@ def parse_llm_response(response_text: str) -> Dict[str, Any]:
             # If no JSON found, return the raw text as answer
             return {
                 "answer": response_text,
-                "key_findings": [],
-                "data_summary": {},
+                "model_ranking": [],
+                "summary": {},
                 "confidence": "medium",
                 "limitations": ["Could not parse structured response from LLM"]
             }
@@ -171,8 +171,8 @@ def parse_llm_response(response_text: str) -> Dict[str, Any]:
         # Return raw text as answer
         return {
             "answer": response_text,
-            "key_findings": [],
-            "data_summary": {},
+            "model_ranking": [],
+            "summary": {},
             "confidence": "medium",
             "limitations": [f"JSON parsing error: {str(e)}"]
         }
@@ -196,18 +196,108 @@ def load_fake_response(fake_response_path: Optional[str] = None, fake_response_c
         with open(fake_response_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     
-    # Default fake response
+    # Default fake response with model ranking
     return {
-        "answer": "Based on the integrated table, I can provide the following answer to your question. The data shows various models and their characteristics. Key insights include the diversity of model types and their applications.",
-        "key_findings": [
-            "Multiple model types are represented in the integrated data",
-            "Various characteristics and attributes are available for analysis",
-            "The data provides a comprehensive view of the model landscape"
+        "answer": "Based on your query requirements, I have analyzed all models in the integrated table and ranked them by suitability. The top recommendations are models that best match your specific needs, considering factors such as task compatibility, performance metrics, and use case fit.",
+        "model_ranking": [
+            {
+                "rank": 1,
+                "model_id": "openai/gpt-4",
+                "model_name": "GPT-4",
+                "suitability_score": 95,
+                "reasons": [
+                    "Excellent performance on the specified task",
+                    "Strong capabilities matching query requirements",
+                    "Proven track record in similar use cases"
+                ],
+                "strengths": [
+                    "High accuracy and performance",
+                    "Versatile and adaptable",
+                    "Well-documented and supported"
+                ],
+                "limitations": [
+                    "May require significant computational resources"
+                ],
+                "use_case": "Best suited for production applications requiring high accuracy"
+            },
+            {
+                "rank": 2,
+                "model_id": "bert-base-uncased",
+                "model_name": "BERT",
+                "suitability_score": 85,
+                "analysis": "BERT provides good performance on related tasks with efficient resource usage. Suitable for the specified domain based on model card and table data.",
+                "supporting_evidence": [
+                    {
+                        "claim": "Efficient model size",
+                        "source": "model_card",
+                        "evidence": "Parameters: 110M",
+                        "relevance": "Good balance between performance and efficiency"
+                    }
+                ],
+                "reasons": [
+                    "Good performance on related tasks",
+                    "Efficient and well-optimized",
+                    "Suitable for the specified domain"
+                ],
+                "strengths": [
+                    "Efficient inference",
+                    "Good balance of performance and resources",
+                    "Widely used and tested"
+                ],
+                "limitations": [
+                    "May not match top-tier performance"
+                ],
+                "key_metrics": {
+                    "parameters": "110M"
+                },
+                "use_case": "Good for applications requiring efficiency and good performance"
+            },
+            {
+                "rank": 3,
+                "model_id": "resnet50",
+                "model_name": "ResNet",
+                "suitability_score": 75,
+                "analysis": "ResNet is relevant for the task type with reasonable performance. Suitable as an alternative option.",
+                "supporting_evidence": [
+                    {
+                        "claim": "Computer vision capabilities",
+                        "source": "model_card",
+                        "evidence": "Model card indicates: 'ResNet-50 is designed for image classification tasks'",
+                        "relevance": "Relevant if query involves CV tasks"
+                    }
+                ],
+                "reasons": [
+                    "Relevant for the task type",
+                    "Reasonable performance",
+                    "Suitable as an alternative option"
+                ],
+                "strengths": [
+                    "Proven architecture",
+                    "Good for specific use cases"
+                ],
+                "limitations": [
+                    "May not be optimal for the exact requirements"
+                ],
+                "key_metrics": {
+                    "parameters": "25M"
+                },
+                "use_case": "Alternative option for specific scenarios"
+            }
         ],
-        "data_summary": {
-            "total_rows": 10,
-            "key_columns": ["model_name", "type", "description"],
-            "notable_statistics": "The integrated table contains diverse model information"
+        "summary": {
+            "total_models_analyzed": 3,
+            "top_recommendations": ["openai/gpt-4", "bert-base-uncased", "resnet50"],
+            "key_criteria_used": [
+                "Task compatibility",
+                "Performance metrics",
+                "Use case fit",
+                "Resource requirements"
+            ],
+            "evidence_sources": {
+                "table_cells_used": false,
+                "model_cards_used": true,
+                "data_quality": "Based on model card information"
+            }
         },
         "confidence": "high",
         "limitations": []
@@ -218,6 +308,9 @@ def answer_question_with_llm(
     query: str,
     table: pd.DataFrame,
     table_source: str = "Integrated Table",
+    qa_mode: str = "card2tab2card",  # "card2card" or "card2tab2card"
+    model_ids_to_rank: Optional[List[str]] = None,
+    search_results_data: Optional[Dict] = None,  # Full search results for model card access
     use_fake: bool = False,
     fake_response_path: Optional[str] = None,
     fake_response_content: Optional[Dict] = None,
@@ -251,11 +344,25 @@ def answer_question_with_llm(
     if not api_key:
         raise ValueError("OPENAI_API_KEY not found. Please set OPENAI_API_KEY in your environment or use fake response mode.")
     
-    # Serialize table
-    table_serialized = serialize_table_for_prompt(table)
+    # Serialize table (may be empty for Card2Card mode)
+    table_serialized = serialize_table_for_prompt(table) if not table.empty else "No integrated table available. Analysis will be based on model card information only."
     
-    # Generate prompt
-    prompt = get_qa_prompt(query, table_serialized, table_source)
+    # Extract model card information if available
+    model_card_info = {}
+    if search_results_data:
+        # Try to extract model card information from search results
+        # This is a placeholder - actual model card extraction would need to access CitationLake or parquet files
+        model_card_info = {}  # Will be populated if model card access is implemented
+    
+    # Generate prompt with model IDs to rank and QA mode
+    prompt = get_qa_prompt(
+        query=query,
+        table_serialized=table_serialized,
+        table_source=table_source,
+        qa_mode=qa_mode,
+        model_ids_to_rank=model_ids_to_rank,
+        model_card_info=model_card_info
+    )
     
     # Call LLM
     try:

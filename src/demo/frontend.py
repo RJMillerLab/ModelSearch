@@ -2138,43 +2138,151 @@ HTML_TEMPLATE = """
             
             const answer = qaResult.answer || {};
             const answerText = answer.answer || 'No answer provided';
-            const keyFindings = answer.key_findings || [];
-            const dataSummary = answer.data_summary || {};
+            const modelRanking = answer.model_ranking || [];
+            const summary = answer.summary || {};
             const confidence = answer.confidence || 'unknown';
             const limitations = answer.limitations || [];
             
             let html = `
                 <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
-                    <h4 style="margin-top: 0; color: #17a2b8; margin-bottom: 15px;">💬 Answer</h4>
+                    <h4 style="margin-top: 0; color: #17a2b8; margin-bottom: 15px;">🏆 Model Ranking & Recommendations</h4>
                     
                     <div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #17a2b8;">
-                        <strong>Question:</strong> ${query}
+                        <strong>Query Requirements:</strong> ${query}
                     </div>
                     
                     <div style="margin-bottom: 20px; padding: 15px; background: #e7f3ff; border-radius: 4px;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 8px;">Answer:</div>
+                        <div style="font-size: 14px; color: #666; margin-bottom: 8px;">Summary:</div>
                         <div style="font-size: 15px; line-height: 1.6; color: #333;">${answerText}</div>
                     </div>
                     
-                    ${keyFindings.length > 0 ? `
+                    ${modelRanking.length > 0 ? `
                         <div style="margin-bottom: 20px;">
-                            <strong style="color: #17a2b8;">Key Findings:</strong>
-                            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 14px;">
-                                ${keyFindings.map(finding => `<li>${finding}</li>`).join('')}
-                            </ul>
+                            <h5 style="color: #17a2b8; margin-bottom: 10px;">Model Rankings:</h5>
+                            <div style="display: flex; flex-direction: column; gap: 15px;">
+                                ${modelRanking.map(model => `
+                                    <div style="padding: 15px; background: ${model.rank <= 3 ? '#e7f3ff' : '#f8f9fa'}; border-radius: 4px; border-left: 4px solid ${model.rank === 1 ? '#28a745' : model.rank === 2 ? '#17a2b8' : model.rank === 3 ? '#ffc107' : '#6c757d'};">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                            <div>
+                                                <span style="font-size: 18px; font-weight: bold; color: ${model.rank === 1 ? '#28a745' : model.rank === 2 ? '#17a2b8' : model.rank === 3 ? '#ffc107' : '#6c757d'};">
+                                                    #${model.rank}
+                                                </span>
+                                                <div style="margin-left: 10px;">
+                                                    <div style="font-size: 16px; font-weight: bold;">${model.model_name || model.model_id || 'Unknown Model'}</div>
+                                                    ${model.model_id && model.model_id !== model.model_name ? `
+                                                        <div style="font-size: 12px; color: #666; font-family: monospace; margin-top: 2px;">${model.model_id}</div>
+                                                    ` : ''}
+                                                </div>
+                                            </div>
+                                            <div style="padding: 5px 12px; background: ${model.suitability_score >= 80 ? '#d4edda' : model.suitability_score >= 60 ? '#fff3cd' : '#f8d7da'}; border-radius: 12px; font-weight: bold; color: ${model.suitability_score >= 80 ? '#155724' : model.suitability_score >= 60 ? '#856404' : '#721c24'};">
+                                                Score: ${model.suitability_score || 'N/A'}/100
+                                            </div>
+                                        </div>
+                                        
+                                        ${model.analysis ? `
+                                            <div style="margin-bottom: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px;">
+                                                <strong style="color: #17a2b8; font-size: 13px;">Analysis:</strong>
+                                                <div style="margin-top: 5px; font-size: 13px; line-height: 1.5;">${model.analysis}</div>
+                                            </div>
+                                        ` : ''}
+                                        
+                                        ${model.supporting_evidence && model.supporting_evidence.length > 0 ? `
+                                            <div style="margin-bottom: 10px;">
+                                                <strong style="color: #17a2b8; font-size: 13px;">Supporting Evidence:</strong>
+                                                <div style="margin-top: 5px;">
+                                                    ${model.supporting_evidence.map(evidence => `
+                                                        <div style="margin-bottom: 8px; padding: 8px; background: white; border-left: 3px solid ${evidence.source === 'table_cell' ? '#28a745' : '#17a2b8'}; border-radius: 3px; font-size: 12px;">
+                                                            <div style="font-weight: bold; margin-bottom: 3px;">
+                                                                <span style="color: ${evidence.source === 'table_cell' ? '#28a745' : '#17a2b8'};">
+                                                                    ${evidence.source === 'table_cell' ? '📊 Table Cell' : '📄 Model Card'}
+                                                                </span>
+                                                            </div>
+                                                            <div style="color: #333; margin-bottom: 3px;"><strong>Claim:</strong> ${evidence.claim || 'N/A'}</div>
+                                                            <div style="color: #666; font-family: monospace; font-size: 11px; margin-bottom: 3px;"><strong>Evidence:</strong> ${evidence.evidence || 'N/A'}</div>
+                                                            ${evidence.relevance ? `<div style="color: #666; font-size: 11px;"><strong>Relevance:</strong> ${evidence.relevance}</div>` : ''}
+                                                        </div>
+                                                    `).join('')}
+                                                </div>
+                                            </div>
+                                        ` : ''}
+                                        
+                                        ${model.reasons && model.reasons.length > 0 ? `
+                                            <div style="margin-bottom: 10px;">
+                                                <strong style="color: #17a2b8; font-size: 13px;">Why this model:</strong>
+                                                <ul style="margin: 5px 0 0 0; padding-left: 20px; font-size: 13px;">
+                                                    ${model.reasons.map(reason => `<li>${reason}</li>`).join('')}
+                                                </ul>
+                                            </div>
+                                        ` : ''}
+                                        
+                                        ${model.strengths && model.strengths.length > 0 ? `
+                                            <div style="margin-bottom: 10px;">
+                                                <strong style="color: #28a745; font-size: 13px;">Strengths:</strong>
+                                                <ul style="margin: 5px 0 0 0; padding-left: 20px; font-size: 13px;">
+                                                    ${model.strengths.map(strength => `<li>${strength}</li>`).join('')}
+                                                </ul>
+                                            </div>
+                                        ` : ''}
+                                        
+                                        ${model.limitations && model.limitations.length > 0 ? `
+                                            <div style="margin-bottom: 10px;">
+                                                <strong style="color: #dc3545; font-size: 13px;">Limitations:</strong>
+                                                <ul style="margin: 5px 0 0 0; padding-left: 20px; font-size: 13px;">
+                                                    ${model.limitations.map(lim => `<li>${lim}</li>`).join('')}
+                                                </ul>
+                                            </div>
+                                        ` : ''}
+                                        
+                                        ${model.key_metrics ? `
+                                            <div style="margin-top: 10px; padding: 8px; background: white; border-radius: 3px; font-size: 12px;">
+                                                <strong>Key Metrics:</strong>
+                                                <div style="margin-top: 5px; font-family: monospace; color: #666;">
+                                                    ${Object.entries(model.key_metrics).map(([key, value]) => `${key}: ${value}`).join(', ')}
+                                                </div>
+                                            </div>
+                                        ` : model.key_metrics_from_table ? `
+                                            <div style="margin-top: 10px; padding: 8px; background: white; border-radius: 3px; font-size: 12px;">
+                                                <strong>Key Metrics from Table:</strong>
+                                                <div style="margin-top: 5px; font-family: monospace; color: #666;">
+                                                    ${Object.entries(model.key_metrics_from_table).map(([key, value]) => `${key}: ${value}`).join(', ')}
+                                                </div>
+                                            </div>
+                                        ` : ''}
+                                        
+                                        ${model.use_case ? `
+                                            <div style="margin-top: 10px; padding: 8px; background: white; border-radius: 3px; font-size: 12px; color: #666;">
+                                                <strong>Best Use Case:</strong> ${model.use_case}
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
                         </div>
                     ` : ''}
                     
-                    ${dataSummary.total_rows ? `
+                    ${summary.total_models_analyzed ? `
                         <div style="margin-bottom: 20px; padding: 12px; background: #f8f9fa; border-radius: 4px;">
-                            <strong style="color: #17a2b8;">Data Summary:</strong>
+                            <strong style="color: #17a2b8;">Analysis Summary:</strong>
                             <div style="margin-top: 8px; font-size: 14px;">
-                                <div>Total Rows: <strong>${dataSummary.total_rows}</strong></div>
-                                ${dataSummary.key_columns && dataSummary.key_columns.length > 0 ? `
-                                    <div style="margin-top: 5px;">Key Columns: ${dataSummary.key_columns.join(', ')}</div>
+                                <div>Total Models Analyzed: <strong>${summary.total_models_analyzed}</strong></div>
+                                ${summary.top_recommendations && summary.top_recommendations.length > 0 ? `
+                                    <div style="margin-top: 5px;">Top Recommendations: <strong>${summary.top_recommendations.join(', ')}</strong></div>
                                 ` : ''}
-                                ${dataSummary.notable_statistics ? `
-                                    <div style="margin-top: 5px;">Notable Statistics: ${dataSummary.notable_statistics}</div>
+                                ${summary.key_criteria_used && summary.key_criteria_used.length > 0 ? `
+                                    <div style="margin-top: 5px;">Key Criteria Used: ${summary.key_criteria_used.join(', ')}</div>
+                                ` : ''}
+                                ${summary.evidence_sources ? `
+                                    <div style="margin-top: 5px;">
+                                        <strong>Evidence Sources:</strong>
+                                        <div style="margin-top: 3px; font-size: 12px;">
+                                            ${summary.evidence_sources.table_cells_used ? '✅ Table Cells' : '❌ Table Cells'} | 
+                                            ${summary.evidence_sources.model_cards_used ? '✅ Model Cards' : '❌ Model Cards'}
+                                            ${summary.evidence_sources.data_quality ? ` | Quality: ${summary.evidence_sources.data_quality}` : ''}
+                                        </div>
+                                    </div>
+                                ` : ''}
+                                ${summary.table_analysis ? `
+                                    <div style="margin-top: 5px; font-style: italic; color: #666;">Table Analysis: ${summary.table_analysis}</div>
                                 ` : ''}
                             </div>
                         </div>

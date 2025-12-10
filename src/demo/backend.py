@@ -2313,9 +2313,14 @@ def qa():
                 import traceback
                 print(traceback.format_exc())
         
-        # Get query from search results
-        if not query:
-            search_results_path = None
+        # Get query and model IDs from search results
+        # Extract model IDs from BOTH Card2Card and Card2Tab2Card results
+        card2card_model_ids = []  # Model IDs from Card2Card search results
+        card2tab2card_model_ids = []  # Model IDs from Card2Tab2Card search results
+        search_results_path = None
+        search_data = None
+        
+        if not query or not card2card_model_ids or not card2tab2card_model_ids:
             for folder_name in os.listdir(data_dir):
                 folder_path = os.path.join(data_dir, folder_name)
                 if os.path.isdir(folder_path):
@@ -2325,14 +2330,59 @@ def qa():
                             with open(potential_path, 'r', encoding='utf-8') as f:
                                 search_data = json.load(f)
                             if search_data.get('job_id') == job_id:
-                                query = search_data.get('query', 'Model search query')
+                                if not query:
+                                    query = search_data.get('query', 'Model search query')
+                                
+                                # Extract model IDs from Card2Card results
+                                card2card_results = search_data.get('card2card_results', [])
+                                if card2card_results:
+                                    for item in card2card_results:
+                                        if isinstance(item, str):
+                                            card2card_model_ids.append(item)
+                                        elif isinstance(item, dict):
+                                            if 'model_id' in item:
+                                                card2card_model_ids.append(item['model_id'])
+                                            elif 'modelId' in item:
+                                                card2card_model_ids.append(item['modelId'])
+                                
+                                # Extract model IDs from Card2Tab2Card results
+                                card2tab2card_results = search_data.get('card2tab2card_results', {})
+                                if isinstance(card2tab2card_results, dict):
+                                    # Card2Tab2Card results are organized by search type
+                                    for search_type, results in card2tab2card_results.items():
+                                        if isinstance(results, dict) and 'model_ids' in results:
+                                            for model_id in results['model_ids']:
+                                                if model_id not in card2tab2card_model_ids:
+                                                    card2tab2card_model_ids.append(model_id)
+                                        elif isinstance(results, list):
+                                            for item in results:
+                                                if isinstance(item, str):
+                                                    if item not in card2tab2card_model_ids:
+                                                        card2tab2card_model_ids.append(item)
+                                                elif isinstance(item, dict):
+                                                    model_id = item.get('model_id') or item.get('modelId')
+                                                    if model_id and model_id not in card2tab2card_model_ids:
+                                                        card2tab2card_model_ids.append(model_id)
+                                
+                                print(f"✅ Found {len(card2card_model_ids)} model IDs from Card2Card results")
+                                print(f"✅ Found {len(card2tab2card_model_ids)} model IDs from Card2Tab2Card results")
+                                search_results_path = potential_path
                                 break
-                        except:
+                        except Exception as e:
+                            print(f"⚠️  Error reading search results: {e}")
+                            import traceback
+                            print(traceback.format_exc())
                             continue
         
-        if table_df is None or table_df.empty:
+        # Determine QA mode based on integration type
+        qa_mode = "card2tab2card" if use_table_search else "card2card"
+        model_ids_to_rank = card2tab2card_model_ids if use_table_search else card2card_model_ids
+        
+        # For Card2Card mode, table might be optional (can work with just model cards)
+        # For Card2Tab2Card mode, table is required
+        if qa_mode == "card2tab2card" and (table_df is None or table_df.empty):
             error_msg = f"Could not find integration results for job_id: {job_id}. "
-            error_msg += f"Please run {'Table Integration' if use_table_search else 'Model Search Integration'} first."
+            error_msg += f"Please run Table Integration first."
             if integration_path:
                 error_msg += f" Expected file: {integration_path}"
             print(f"❌ {error_msg}")
@@ -2342,6 +2392,12 @@ def qa():
                 "integration_path": integration_path,
                 "integration_exists": os.path.exists(integration_path) if integration_path else False
             }), 404
+        
+        # For Card2Card mode, if no table, use empty DataFrame
+        if qa_mode == "card2card" and (table_df is None or table_df.empty):
+            import pandas as pd
+            table_df = pd.DataFrame()  # Empty table, will rely on model card information
+            print(f"⚠️  No integrated table found for Card2Card mode, will use model card information only")
         
         if not query:
             query = "Please analyze this integrated table and provide insights."
@@ -2367,11 +2423,16 @@ def qa():
                 query=query,
                 table=table_df,
                 table_source=table_source,
+                qa_mode=qa_mode,  # "card2card" or "card2tab2card"
+                model_ids_to_rank=model_ids_to_rank,  # Pass model IDs from search results
+                search_results_data=search_data,  # Pass full search results for model card access
                 use_fake=use_fake,
                 fake_response_path=fake_response_path,
                 fake_response_content=fake_response_content,
                 model=model
             )
+            print(f"   QA Mode: {qa_mode}")
+            print(f"   Model IDs to rank: {len(model_ids_to_rank) if model_ids_to_rank else 0}")
             print(f"✅ QA result success: {result.get('success')}")
         except Exception as qa_error:
             import traceback
