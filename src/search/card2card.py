@@ -2,14 +2,16 @@
 ModelCard to ModelCard Search
 
 This module provides functions for dense semantic search over model cards.
+Supports sparse (BM25), dense (FAISS), and hybrid retrieval modes.
 Reuses functionality from baseline1 and modelsearch modules.
 """
 
 import os
 import json
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import argparse
+import pickle
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
@@ -147,12 +149,202 @@ def build_card_index(
     print(f"✅ Card index built: {output_index}")
 
 
+# Global cache for BM25 index and corpus
+_bm25_cache: Optional[Tuple[object, List[str], List[str]]] = None
+_bm25_cache_jsonl: Optional[str] = None
+
+
+def _load_corpus_for_bm25(jsonl_path: str) -> Tuple[List[str], List[str]]:
+    """
+    Load corpus from JSONL file for BM25 indexing.
+    
+    Returns:
+        (model_ids, texts): List of model IDs and corresponding texts
+    """
+    model_ids = []
+    texts = []
+    
+    if not os.path.exists(jsonl_path):
+        raise FileNotFoundError(f"Corpus file not found: {jsonl_path}")
+    
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip():
+                continue
+            doc = json.loads(line)
+            model_ids.append(doc['id'])
+            texts.append(doc['contents'])
+    
+    return model_ids, texts
+
+
+def _tokenize(text: str) -> List[str]:
+    """Simple tokenizer for BM25. Split by whitespace and convert to lowercase."""
+    return text.lower().split()
+
+
+def _get_bm25_index(jsonl_path: str = "data/card2card_corpus.jsonl"):
+    """
+    Get or build BM25 index. Uses global cache to avoid rebuilding.
+    
+    Returns:
+        (bm25_index, model_ids, texts): BM25 index and corpus data
+    """
+    global _bm25_cache, _bm25_cache_jsonl
+    
+    # Check if cache is valid
+    if _bm25_cache is not None and _bm25_cache_jsonl == jsonl_path:
+        return _bm25_cache
+    
+    # Import rank_bm25
+    try:
+        from rank_bm25 import BM25Okapi
+    except ImportError:
+        raise ImportError("rank-bm25 not installed. Please install it with: pip install rank-bm25")
+    
+    # Load corpus
+    model_ids, texts = _load_corpus_for_bm25(jsonl_path)
+    
+    # Build BM25 index
+    tokenized_texts = [_tokenize(text) for text in texts]
+    bm25_index = BM25Okapi(tokenized_texts)
+    
+    # Cache the result
+    _bm25_cache = (bm25_index, model_ids, texts)
+    _bm25_cache_jsonl = jsonl_path
+    
+    return _bm25_cache
+
+
+def _sparse_search_bm25(
+    query_model_id: str,
+    model_ids: List[str],
+    texts: List[str],
+    bm25_index,
+    top_k: int = 20
+) -> List[Tuple[str, float]]:
+    """
+    Perform sparse retrieval using BM25.
+    
+    Returns:
+        List of (model_id, score) tuples, sorted by score descending
+    """
+    # Find query text
+    try:
+        query_idx = model_ids.index(query_model_id)
+    except ValueError:
+        raise ValueError(f"Model ID '{query_model_id}' not found in corpus")
+    
+    query_text = texts[query_idx]
+    tokenized_query = _tokenize(query_text)
+    
+    # Get BM25 scores
+    scores = bm25_index.get_scores(tokenized_query)
+    
+    # Create list of (model_id, score) pairs
+    results = [(model_ids[i], float(scores[i])) for i in range(len(model_ids))]
+    
+    # Sort by score descending
+    results.sort(key=lambda x: x[1], reverse=True)
+    
+    # Exclude query model itself and return top_k
+    filtered_results = [(mid, score) for mid, score in results if mid != query_model_id][:top_k]
+    
+    return filtered_results
+
+
+def _dense_search_faiss(
+    query_model_id: str,
+    model_ids: List[str],
+    emb_npz: str,
+    faiss_index: str,
+    top_k: int = 20
+) -> List[Tuple[str, float]]:
+    """
+    Perform dense retrieval using FAISS.
+    
+    Returns:
+        List of (model_id, score) tuples, sorted by score descending
+    """
+    import numpy as np
+    import faiss
+    
+    # Load embeddings and IDs
+    data = np.load(emb_npz)
+    embs = data['embeddings']
+    ids = data['ids'].tolist()
+    
+    # Find the index of the query model
+    try:
+        query_idx = ids.index(query_model_id)
+    except ValueError:
+        raise ValueError(f"Model ID '{query_model_id}' not found in embeddings")
+    
+    # Load FAISS index
+    index = faiss.read_index(faiss_index)
+    
+    # Search
+    query_emb = embs[query_idx:query_idx+1]
+    D, I = index.search(query_emb, top_k + 1)
+    
+    # Get results (excluding self)
+    results = []
+    for i, score in zip(I[0], D[0]):
+        if ids[i] != query_model_id:
+            # Convert distance to similarity (higher is better)
+            # FAISS returns L2 distance, so we use negative distance as score
+            results.append((ids[i], float(-score)))
+    
+    # Sort by score descending
+    results.sort(key=lambda x: x[1], reverse=True)
+    
+    return results[:top_k]
+
+
+def _reciprocal_rank_fusion(
+    sparse_results: List[Tuple[str, float]],
+    dense_results: List[Tuple[str, float]],
+    k: int = 60
+) -> List[Tuple[str, float]]:
+    """
+    Combine sparse and dense results using Reciprocal Rank Fusion (RRF).
+    
+    Returns:
+        List of (model_id, combined_score) tuples, sorted by score descending
+    """
+    # Build rank dictionaries
+    sparse_ranks = {mid: rank + 1 for rank, (mid, _) in enumerate(sparse_results)}
+    dense_ranks = {mid: rank + 1 for rank, (mid, _) in enumerate(dense_results)}
+    
+    # Get all unique model IDs
+    all_ids = set(sparse_ranks.keys()) | set(dense_ranks.keys())
+    
+    # Calculate RRF scores
+    rrf_scores = {}
+    for model_id in all_ids:
+        sparse_rank = sparse_ranks.get(model_id, float('inf'))
+        dense_rank = dense_ranks.get(model_id, float('inf'))
+        
+        rrf_score = 1 / (k + sparse_rank) + 1 / (k + dense_rank)
+        rrf_scores[model_id] = rrf_score
+    
+    # Sort by RRF score descending
+    results = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+    
+    return results
+
+
 def search_card2card(
     model_id: str,
     emb_npz: str = "data/card2card_embeddings.npz",
     faiss_index: str = "data/card2card.faiss",
     top_k: int = 20,
-    output_json: Optional[str] = None
+    output_json: Optional[str] = None,
+    retrieval_mode: str = "dense",
+    jsonl_path: str = "data/card2card_corpus.jsonl",
+    hybrid_method: str = "rrf",
+    sparse_weight: float = 0.5,
+    dense_weight: float = 0.5
 ) -> List[str]:
     """
     Search for similar model cards given a model ID.
@@ -163,48 +355,118 @@ def search_card2card(
         faiss_index: Path to FAISS index
         top_k: Number of neighbors to return
         output_json: Optional path to save results as JSON
+        retrieval_mode: Retrieval mode - "sparse", "dense", or "hybrid"
+        jsonl_path: Path to corpus JSONL file (required for sparse/hybrid)
+        hybrid_method: Hybrid combination method - "rrf" or "weighted"
+        sparse_weight: Weight for sparse scores (for weighted method)
+        dense_weight: Weight for dense scores (for weighted method)
     
     Returns:
         List of similar model IDs
     """
     import numpy as np
     import faiss
-    from tqdm import tqdm
     
-    # Load embeddings and IDs
-    data = np.load(emb_npz)
-    embs = data['embeddings']
-    ids = data['ids'].tolist()
+    if retrieval_mode not in ["sparse", "dense", "hybrid"]:
+        raise ValueError(f"Invalid retrieval_mode: {retrieval_mode}. Must be 'sparse', 'dense', or 'hybrid'")
     
-    # Find the index of the query model
-    try:
-        query_idx = ids.index(model_id)
-    except ValueError:
-        raise ValueError(f"Model ID '{model_id}' not found in corpus")
+    results = []
     
-    # Load FAISS index
-    index = faiss.read_index(faiss_index)
-    
-    # Search
-    query_emb = embs[query_idx:query_idx+1]
-    D, I = index.search(query_emb, top_k + 1)
-    
-    # Get neighbors (excluding self)
-    neighbor_indices = [i for i in I[0] if i != query_idx][:top_k]
-    neighbors = [ids[i] for i in neighbor_indices]
+    if retrieval_mode == "dense":
+        # Original dense retrieval
+        data = np.load(emb_npz)
+        ids = data['ids'].tolist()
+        
+        try:
+            query_idx = ids.index(model_id)
+        except ValueError:
+            raise ValueError(f"Model ID '{model_id}' not found in corpus")
+        
+        index = faiss.read_index(faiss_index)
+        embs = data['embeddings']
+        query_emb = embs[query_idx:query_idx+1]
+        D, I = index.search(query_emb, top_k + 1)
+        
+        neighbor_indices = [i for i in I[0] if i != query_idx][:top_k]
+        results = [ids[i] for i in neighbor_indices]
+        
+    elif retrieval_mode == "sparse":
+        # Sparse retrieval using BM25
+        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path)
+        sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k)
+        results = [mid for mid, _ in sparse_results]
+        
+    elif retrieval_mode == "hybrid":
+        # Hybrid retrieval: combine sparse and dense
+        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path)
+        
+        # Perform both searches
+        sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k * 2)
+        
+        # Load embeddings for dense search
+        data = np.load(emb_npz)
+        ids = data['ids'].tolist()
+        try:
+            query_idx = ids.index(model_id)
+        except ValueError:
+            raise ValueError(f"Model ID '{model_id}' not found in embeddings")
+        
+        index = faiss.read_index(faiss_index)
+        embs = data['embeddings']
+        query_emb = embs[query_idx:query_idx+1]
+        D, I = index.search(query_emb, top_k * 2 + 1)
+        
+        dense_results = []
+        for i, score in zip(I[0], D[0]):
+            if ids[i] != model_id:
+                dense_results.append((ids[i], float(-score)))
+        dense_results.sort(key=lambda x: x[1], reverse=True)
+        dense_results = dense_results[:top_k * 2]
+        
+        # Combine results
+        if hybrid_method == "rrf":
+            combined_results = _reciprocal_rank_fusion(sparse_results, dense_results)
+        elif hybrid_method == "weighted":
+            # Simple weighted combination (normalize scores first)
+            def normalize_scores(score_list):
+                if not score_list:
+                    return {}
+                max_score = max(score for _, score in score_list)
+                min_score = min(score for _, score in score_list)
+                score_range = max_score - min_score if max_score != min_score else 1.0
+                return {mid: (score - min_score) / score_range for mid, score in score_list}
+            
+            sparse_norm = normalize_scores(sparse_results)
+            dense_norm = normalize_scores(dense_results)
+            all_ids = set(sparse_norm.keys()) | set(dense_norm.keys())
+            
+            combined_scores = {}
+            for model_id in all_ids:
+                sparse_score = sparse_norm.get(model_id, 0.0)
+                dense_score = dense_norm.get(model_id, 0.0)
+                combined_scores[model_id] = sparse_weight * sparse_score + dense_weight * dense_score
+            
+            combined_results = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
+        else:
+            raise ValueError(f"Invalid hybrid_method: {hybrid_method}. Must be 'rrf' or 'weighted'")
+        
+        results = [mid for mid, _ in combined_results[:top_k]]
     
     # Save if requested
     if output_json:
         result = {
             "query": model_id,
-            "neighbors": neighbors
+            "neighbors": results,
+            "retrieval_mode": retrieval_mode
         }
+        if retrieval_mode == "hybrid":
+            result["hybrid_method"] = hybrid_method
         os.makedirs(os.path.dirname(output_json), exist_ok=True)
         with open(output_json, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {output_json}")
     
-    return neighbors
+    return results
 
 
 def search_card2card_batch(
@@ -282,6 +544,16 @@ def main():
     search_parser.add_argument('--faiss_index', default='data/card2card.faiss')
     search_parser.add_argument('--top_k', type=int, default=20)
     search_parser.add_argument('--output_json', default=None)
+    search_parser.add_argument('--retrieval_mode', choices=['sparse', 'dense', 'hybrid'], default='dense',
+                              help='Retrieval mode: sparse (BM25), dense (FAISS), or hybrid')
+    search_parser.add_argument('--jsonl_path', default='data/card2card_corpus.jsonl',
+                              help='Path to corpus JSONL file (required for sparse/hybrid)')
+    search_parser.add_argument('--hybrid_method', choices=['rrf', 'weighted'], default='rrf',
+                              help='Hybrid combination method: rrf or weighted')
+    search_parser.add_argument('--sparse_weight', type=float, default=0.5,
+                              help='Weight for sparse scores (for weighted method)')
+    search_parser.add_argument('--dense_weight', type=float, default=0.5,
+                              help='Weight for dense scores (for weighted method)')
     
     # Search batch command
     batch_parser = subparsers.add_parser('search-batch', help='Search for all models')
@@ -310,9 +582,14 @@ def main():
             emb_npz=args.emb_npz,
             faiss_index=args.faiss_index,
             top_k=args.top_k,
-            output_json=args.output_json
+            output_json=args.output_json,
+            retrieval_mode=args.retrieval_mode,
+            jsonl_path=args.jsonl_path,
+            hybrid_method=args.hybrid_method,
+            sparse_weight=args.sparse_weight,
+            dense_weight=args.dense_weight
         )
-        print(f"Found {len(neighbors)} neighbors for {args.model_id}")
+        print(f"Found {len(neighbors)} neighbors for {args.model_id} (mode: {args.retrieval_mode})")
         for i, neighbor in enumerate(neighbors, 1):
             print(f"  {i}. {neighbor}")
     elif args.command == 'search-batch':

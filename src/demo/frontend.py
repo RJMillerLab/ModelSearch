@@ -352,6 +352,25 @@ HTML_TEMPLATE = """
                 Both pipelines will return this many model cards (Card2Card and Card2Tab2Card)
             </p>
             
+            <div style="margin-top: 15px; padding: 12px; background: #e7f3ff; border-radius: 4px; border: 1px solid #b3d9ff;">
+                <label style="margin-bottom: 10px; display: block; font-weight: bold;">Card2Card Retrieval Mode:</label>
+                <div class="mode-option" style="margin-bottom: 10px;">
+                    <input type="radio" id="card2card_mode_dense" name="card2card_retrieval_mode" value="dense" checked>
+                    <label for="card2card_mode_dense">Dense (FAISS) - Semantic similarity using embeddings</label>
+                </div>
+                <div class="mode-option" style="margin-bottom: 10px;">
+                    <input type="radio" id="card2card_mode_sparse" name="card2card_retrieval_mode" value="sparse">
+                    <label for="card2card_mode_sparse">Sparse (BM25) - Keyword matching using BM25</label>
+                </div>
+                <div class="mode-option" style="margin-bottom: 10px;">
+                    <input type="radio" id="card2card_mode_hybrid" name="card2card_retrieval_mode" value="hybrid">
+                    <label for="card2card_mode_hybrid">Hybrid (BM25 + FAISS) - Combines sparse and dense retrieval</label>
+                </div>
+                <p style="font-size: 10px; color: #666; margin-top: 5px; margin-left: 26px;">
+                    Select the retrieval method for Card2Card search. Hybrid mode combines both sparse and dense results using RRF (Reciprocal Rank Fusion).
+                </p>
+            </div>
+            
             <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
                 <label style="margin-bottom: 10px; display: block; font-weight: bold;">Tab2Tab Step Mode (Card2Tab2Card Intermediate Step):</label>
                 <div class="mode-option" style="margin-bottom: 10px;">
@@ -666,6 +685,7 @@ HTML_TEMPLATE = """
             const topK = parseInt(document.getElementById('top_k').value);
             const tableSearchK = parseInt(document.getElementById('table_search_k').value);
             const tab2tabMode = document.querySelector('input[name="tab2tab_mode"]:checked').value;
+            const card2cardRetrievalMode = document.querySelector('input[name="card2card_retrieval_mode"]:checked').value;
             
             // Validate input based on mode
             if (mode === 'query' && !query) {
@@ -699,7 +719,8 @@ HTML_TEMPLATE = """
                     search_mode: 'new',  // Explicitly set to new search
                     mode: mode,
                     top_k: topK,
-                    tab2tab_mode: tab2tabMode
+                    tab2tab_mode: tab2tabMode,
+                    card2card_retrieval_mode: card2cardRetrievalMode
                 };
                 
                 // Add table_search_k only if mode is search
@@ -895,23 +916,67 @@ HTML_TEMPLATE = """
                 card2tab2cardIds[type] = 'card2tab2card-' + type + '-' + Date.now() + '-' + idx;
             });
             
+            // Get Card2Card results for all modes
+            const card2cardAllModes = results.card2card_all_modes || {};
+            const retrievalModes = [
+                { key: 'dense', label: 'Dense (FAISS)', desc: 'Semantic similarity using embeddings' },
+                { key: 'sparse', label: 'Sparse (BM25)', desc: 'Keyword matching using BM25' },
+                { key: 'hybrid', label: 'Hybrid (BM25 + FAISS)', desc: 'Combines sparse and dense retrieval' }
+            ];
+            const currentMode = results.card2card_retrieval_mode || 'dense';
+            
             let html = `
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
-                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;"><span class="number-badge">1</span> Card2Card Results (${results.card2card_results.length})</h3>
-                        <ul class="result-list">
-                            ${results.card2card_results.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
-                            ${results.card2card_results.length > 10 ? `
-                                <li class="collapsible-content" id="${card2cardMoreId}">
-                                    ${results.card2card_results.slice(10).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
-                                </li>
-                                <li>
-                                    <span class="expand-toggle" onclick="toggleExpand('${card2cardMoreId}', this)">
-                                        Show ${results.card2card_results.length - 10} more
-                                    </span>
-                                </li>
-                            ` : ''}
-                        </ul>
+                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px;">
+                            <span class="number-badge">1</span> Card2Card Results (Multiple Retrieval Modes)
+                        </h3>
+                        ${retrievalModes.map((modeInfo, idx) => {
+                            const modeKey = modeInfo.key;
+                            const modeResults = card2cardAllModes[modeKey] || [];
+                            const isError = modeResults.error !== undefined;
+                            const resultList = isError ? [] : (Array.isArray(modeResults) ? modeResults : []);
+                            const sectionId = `card2card-${modeKey}-${Date.now()}-${idx}`;
+                            const isCurrentMode = modeKey === currentMode;
+                            
+                            return `
+                                <div class="search-type-section" style="margin-bottom: 15px; ${isCurrentMode ? 'border: 2px solid #007bff;' : ''}">
+                                    <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)" style="${isCurrentMode ? 'background: #e7f3ff;' : ''}">
+                                        <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
+                                            ${modeInfo.label}
+                                            ${isCurrentMode ? '<span style="font-size: 11px; color: #007bff; font-weight: normal;">(Selected)</span>' : ''}
+                                            <span style="font-size: 12px; color: #666; font-weight: normal;">(${isError ? 'Error' : resultList.length + ' models'})</span>
+                                        </h4>
+                                    </div>
+                                    <div class="collapsible-content" id="${sectionId}" style="${isCurrentMode ? 'max-height: 5000px;' : ''}">
+                                        ${isError ? `
+                                            <div style="padding: 10px; color: #dc3545; background: #f8d7da; border-radius: 4px; margin: 10px 0;">
+                                                ❌ Error: ${modeResults.error || 'Unknown error'}
+                                            </div>
+                                        ` : resultList.length > 0 ? `
+                                            <p style="font-size: 11px; color: #666; margin: 10px 0 5px 0;">${modeInfo.desc}</p>
+                                            <ul class="result-list" style="list-style: none; padding: 0;">
+                                                ${resultList.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
+                                                ${resultList.length > 10 ? `
+                                                    <li class="collapsible-content" id="${sectionId}-more">
+                                                        ${resultList.slice(10).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
+                                                    </li>
+                                                    <li>
+                                                        <span class="expand-toggle" onclick="toggleExpand('${sectionId}-more', this)">
+                                                            Show ${resultList.length - 10} more
+                                                        </span>
+                                                    </li>
+                                                ` : ''}
+                                            </ul>
+                                        ` : `
+                                            <div style="padding: 10px; color: #666; background: #f8f9fa; border-radius: 4px; margin: 10px 0;">
+                                                No results available
+                                            </div>
+                                        `}
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>

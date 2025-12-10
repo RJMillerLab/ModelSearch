@@ -61,6 +61,7 @@ CORS(app)  # Enable CORS for frontend
 # Default paths
 DEFAULT_EMB_NPZ = "data/card2card_embeddings.npz"
 DEFAULT_FAISS_INDEX = "data/card2card.faiss"
+DEFAULT_JSONL = "data/card2card_corpus.jsonl"
 DEFAULT_SCHEMA_LOG = "data_citationlake/logs/parquet_schema.log"
 DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
 DEFAULT_DB_PATH = "data_citationlake/modellake.db"
@@ -105,7 +106,7 @@ class JobLogger:
             self.status = "completed"
 
 
-def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None, tab2tab_mode: str = 'search', tab2tab_json: Optional[str] = None):
+def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None, tab2tab_mode: str = 'search', tab2tab_json: Optional[str] = None, card2card_retrieval_mode: str = 'dense'):
     """Run the complete search pipeline in background
     
     Args:
@@ -259,28 +260,57 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         # Step 3: Run Card2Card and Card2Tab2Card in parallel
         logger.log("Step 3: Running Card2Card and Card2Tab2Card pipelines in parallel...")
         
+        def run_card2card_all_modes():
+            """Run Card2Card pipeline for all retrieval modes"""
+            all_results = {}
+            retrieval_modes = ["dense", "sparse", "hybrid"]
+            
+            for mode in retrieval_modes:
+                retrieval_mode_display = {
+                    "sparse": "sparse (BM25)",
+                    "dense": "dense (FAISS)",
+                    "hybrid": "hybrid (BM25 + FAISS)"
+                }.get(mode, mode)
+                logger.log(f"  [Card2Card-{mode.upper()}] Starting {retrieval_mode_display} semantic search...")
+                try:
+                    # Increase topk slightly to get more results (e.g., topk=3 -> 5-10 results)
+                    # Use max(top_k * 2, top_k + 5) to ensure we get more results
+                    expanded_topk = max(top_k * 2, top_k + 5)
+                    logger.log(f"  ℹ️  [Card2Card-{mode.upper()}] Using expanded top_k: {expanded_topk} (requested: {top_k})")
+                    results = search_card2card(
+                        model_id=model_id,
+                        emb_npz=DEFAULT_EMB_NPZ,
+                        faiss_index=DEFAULT_FAISS_INDEX,
+                        top_k=expanded_topk,
+                        output_json=None,
+                        retrieval_mode=mode,
+                        jsonl_path=DEFAULT_JSONL,
+                        hybrid_method="rrf"  # Default to RRF for hybrid
+                    )
+                    # Limit to requested top_k for final results
+                    final_results = results[:top_k]
+                    all_results[mode] = final_results
+                    logger.log(f"  ✅ [Card2Card-{mode.upper()}] Found {len(results)} results (returning top {len(final_results)})")
+                except Exception as e:
+                    logger.log(f"  ❌ [Card2Card-{mode.upper()}] Error: {str(e)}")
+                    import traceback
+                    logger.log(f"  Traceback: {traceback.format_exc()}")
+                    all_results[mode] = {"error": str(e)}
+            
+            # Return the selected mode's results as primary, plus all modes
+            primary_results = all_results.get(card2card_retrieval_mode, all_results.get("dense", []))
+            if isinstance(primary_results, dict) and "error" in primary_results:
+                # If primary failed, try to use dense as fallback
+                primary_results = all_results.get("dense", [])
+            
+            return {
+                "primary": primary_results if not isinstance(primary_results, dict) else [],
+                "all_modes": all_results
+            }
+        
         def run_card2card():
-            """Run Card2Card pipeline"""
-            logger.log("  [Card2Card] Starting dense semantic search...")
-            try:
-                # Increase topk slightly to get more results (e.g., topk=3 -> 5-10 results)
-                # Use max(top_k * 2, top_k + 5) to ensure we get more results
-                expanded_topk = max(top_k * 2, top_k + 5)
-                logger.log(f"  ℹ️  [Card2Card] Using expanded top_k: {expanded_topk} (requested: {top_k})")
-                results = search_card2card(
-                    model_id=model_id,
-                    emb_npz=DEFAULT_EMB_NPZ,
-                    faiss_index=DEFAULT_FAISS_INDEX,
-                    top_k=expanded_topk,
-                    output_json=None
-                )
-                # Limit to requested top_k for final results
-                final_results = results[:top_k]
-                logger.log(f"  ✅ [Card2Card] Found {len(results)} results (returning top {len(final_results)})")
-                return final_results
-            except Exception as e:
-                logger.log(f"  ❌ [Card2Card] Error: {str(e)}")
-                return {"error": str(e)}
+            """Run Card2Card pipeline (legacy single mode)"""
+            return run_card2card_all_modes()["primary"]
         
         def run_card2tab2card_search(search_type_name, query_parsed, table_search_k=None):
             """Run one Card2Tab2Card search type"""
@@ -1014,8 +1044,10 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         
         if not has_tables and not has_json_files:
             logger.log("⚠️  Skipping Card2Tab2Card pipeline - model has no tables and no JSON files found")
-            # Only run Card2Card
-            card2card_results = run_card2card()
+            # Only run Card2Card (all modes)
+            card2card_all_modes_result = run_card2card_all_modes()
+            card2card_results = card2card_all_modes_result["primary"]
+            card2card_all_modes = card2card_all_modes_result["all_modes"]
             # Set empty results for Card2Tab2Card
             card2tab2card_all = {
                 'single_column': [],
@@ -1036,8 +1068,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 # Submit all tasks
                 futures = {}
                 
-                # Submit Card2Card
-                futures['card2card'] = executor.submit(run_card2card)
+                # Submit Card2Card (all modes)
+                futures['card2card'] = executor.submit(run_card2card_all_modes)
                 
                 # Submit all Card2Tab2Card search types (run all: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation, dependent_data, feature_for_ml, multi_column_collinearity, negative_example)
                 all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', 'negative_example']
@@ -1064,10 +1096,37 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                         search_type_name, results = result
                         card2tab2card_all[search_type_name] = results
                     else:
-                        # Card2Card result
-                        card2card_results = result
+                        # Card2Card result (can be dict with all_modes or legacy list)
+                        if isinstance(result, dict) and "all_modes" in result:
+                            card2card_all_modes = result["all_modes"]
+                            card2card_results = result["primary"]
+                        else:
+                            card2card_results = result
+                            # Create all_modes dict for legacy format
+                            card2card_all_modes = {
+                                card2card_retrieval_mode: card2card_results
+                            }
+                            for mode in ["dense", "sparse", "hybrid"]:
+                                if mode != card2card_retrieval_mode:
+                                    card2card_all_modes[mode] = []
                 except Exception as e:
                     logger.log(f"  ❌ Future error: {str(e)}")
+        
+        # Handle card2card results (can be dict with all_modes or list)
+        card2card_all_modes = {}
+        if isinstance(card2card_results, dict) and "all_modes" in card2card_results:
+            # New format with all modes
+            card2card_all_modes = card2card_results["all_modes"]
+            card2card_results = card2card_results["primary"]
+        else:
+            # Legacy format - only one mode, create all_modes dict
+            card2card_all_modes = {
+                card2card_retrieval_mode: card2card_results
+            }
+            # Fill other modes with empty or error
+            for mode in ["dense", "sparse", "hybrid"]:
+                if mode != card2card_retrieval_mode:
+                    card2card_all_modes[mode] = []
         
         # Ensure we got card2card results
         if card2card_results is None or isinstance(card2card_results, dict) and "error" in card2card_results:
@@ -1114,6 +1173,14 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             return model_list
         
         card2card_results_with_links = add_hyperlinks(card2card_results)
+        # Add hyperlinks to all modes
+        card2card_all_modes_with_links = {}
+        for mode, results in card2card_all_modes.items():
+            if isinstance(results, dict) and "error" in results:
+                card2card_all_modes_with_links[mode] = results
+            else:
+                card2card_all_modes_with_links[mode] = add_hyperlinks(results)
+        
         card2tab2card_all_with_links = {}
         for search_type, results in card2tab2card_all.items():
             # Handle new format with intermediate data
@@ -1161,7 +1228,9 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             "model_url": f"https://huggingface.co/{model_id}",
             "top_k": top_k,
             "table_search_k": table_search_k,
+            "card2card_retrieval_mode": card2card_retrieval_mode,
             "card2card_results": card2card_results_with_links,
+            "card2card_all_modes": card2card_all_modes_with_links,
             "card2tab2card_results": card2tab2card_all_with_links,
             "comparison": comparison,
             "timestamp": datetime.fromtimestamp(start_time).isoformat(),
@@ -1530,6 +1599,11 @@ def search():
         table_search_k = data.get('table_search_k', None)  # Optional: defaults to top_k * 2 in pipeline
         tab2tab_mode = data.get('tab2tab_mode', 'search')  # 'search' or 'load'
         tab2tab_json = data.get('tab2tab_json', None)  # JSON string when tab2tab_mode='load'
+        card2card_retrieval_mode = data.get('card2card_retrieval_mode', 'dense')  # 'sparse', 'dense', or 'hybrid'
+        
+        # Validate card2card_retrieval_mode
+        if card2card_retrieval_mode not in ['sparse', 'dense', 'hybrid']:
+            return jsonify({"status": "error", "message": f"Invalid card2card_retrieval_mode: {card2card_retrieval_mode}. Must be 'sparse', 'dense', or 'hybrid'"}), 400
         
         if mode == 'query':
             query = data.get('query')
@@ -1555,7 +1629,7 @@ def search():
         # Start pipeline in background thread
         thread = threading.Thread(
             target=run_search_pipeline,
-            args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json)
+            args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode)
         )
         thread.daemon = True
         thread.start()
