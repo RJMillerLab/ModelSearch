@@ -1189,29 +1189,10 @@ HTML_TEMPLATE = """
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                             Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.
                         </p>
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
-                            <label>
-                                Integration Type:
-                                <select id="integration_model_search_type" style="margin-left: 5px; padding: 5px; width: 100%;">
-                                    <option value="union">Union</option>
-                                    <option value="intersection">Intersection</option>
-                                    <option value="alite">ALITE (FD-based)</option>
-                                    <option value="outer_join">Outer Join</option>
-                                </select>
-                            </label>
-                            <label>
-                                Max Models:
-                                <input type="number" id="integration_max_models" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 100%;">
-                            </label>
-                            <label>
-                                Top K Tables:
-                                <input type="number" id="integration_model_search_k" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 100%;">
-                            </label>
-                            <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" 
-                                    style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
-                                🔗 Integrate Model Search Tables
-                            </button>
-                        </div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_model_search_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_model_search_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
+                        <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Model Search Tables</button>
                         <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                     
@@ -1221,42 +1202,10 @@ HTML_TEMPLATE = """
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                             Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
                         </p>
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
-                            <label>
-                                Search Type:
-                                <select id="integration_search_type" style="margin-left: 5px; padding: 5px; width: 100%;">
-                                    <option value="single_column">Single Column</option>
-                                    <option value="keyword">Keyword</option>
-                                    <option value="multi_column">Multi Column</option>
-                                    <option value="unionable">Unionable</option>
-                                    <option value="complex">Complex (Union+Join+Correlation)</option>
-                                    <option value="correlation">Correlation</option>
-                                    <option value="imputation">Imputation</option>
-                                    <option value="augmentation">Augmentation</option>
-                                    <option value="dependent_data">Dependent Data</option>
-                                    <option value="feature_for_ml">Feature for ML</option>
-                                    <option value="multi_column_collinearity">Multi-Column Collinearity</option>
-                                    <option value="negative_example">Negative Example</option>
-                                </select>
-                            </label>
-                            <label>
-                                Integration Type:
-                                <select id="integration_type" style="margin-left: 5px; padding: 5px; width: 100%;">
-                                    <option value="union">Union</option>
-                                    <option value="intersection">Intersection</option>
-                                    <option value="alite">ALITE (FD-based)</option>
-                                    <option value="outer_join">Outer Join</option>
-                                </select>
-                            </label>
-                            <label>
-                                Top K Tables:
-                                <input type="number" id="integration_k" value="10" min="1" max="50" style="margin-left: 5px; padding: 5px; width: 100%;">
-                            </label>
-                            <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" 
-                                    style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
-                                🔗 Integrate Tables
-                            </button>
-                        </div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Search Type:</label><select id="integration_search_type" class="form-control" style="max-width: 280px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex (Union+Join+Correlation)</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
+                        <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Tables</button>
                         <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                 </div>
@@ -1269,94 +1218,81 @@ HTML_TEMPLATE = """
                     <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                         Evaluate diversity between Table Search Integration and Model Search Integration results using LLM.
                     </p>
-                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 12px; background: white; border-radius: 4px;">
+                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
                         <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
                             <input type="radio" name="evaluation_mode" value="generate" id="eval_mode_generate" checked onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
                             <span>Generate New Response</span>
                         </label>
                         <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
                             <input type="radio" name="evaluation_mode" value="use_fake" id="eval_mode_fake" onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
-                            <span>Use Fake Response (for testing/demo)</span>
+                            <span>Use Fake Response for testing/demo</span>
                         </label>
                     </div>
                     <div id="evaluation_generate_options" style="display: block;">
-                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
-                            <label style="display: flex; align-items: center; gap: 5px; margin-left: 10px;">
-                                <input type="file" id="evaluation_fake_file" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
-                                <button type="button" onclick="document.getElementById('evaluation_fake_file').click()" 
-                                        style="padding: 5px 10px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                                    Load Fake Response File (optional)
-                                </button>
-                                <span id="fake_file_name" style="font-size: 11px; color: #666; margin-left: 5px;"></span>
-                            </label>
-                        </div>
-                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                            <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
-                                    style="padding: 8px 16px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                📊 Generate Evaluation
-                            </button>
-                        </div>
+                        <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                style="padding: 8px 16px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
+                            📊 Generate Evaluation
+                        </button>
                     </div>
                     <div id="evaluation_use_fake_options" style="display: none;">
-                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
-                            <label>
-                                <input type="file" id="evaluation_fake_file2" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
-                                <button type="button" onclick="document.getElementById('evaluation_fake_file2').click()" 
-                                        style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                    📁 Load Fake Response File
-                                </button>
-                                <span id="fake_file_name2" style="font-size: 11px; color: #666; margin-left: 5px;"></span>
-                            </label>
-                        </div>
-                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                            <button id="evaluationBtnFake" onclick="runEvaluation('${results.job_id || currentJobId}')" 
-                                    style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                📊 Use Fake Response
+                        <div style="margin-bottom: 10px;">
+                            <input type="file" id="evaluation_fake_file2" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
+                            <button type="button" onclick="document.getElementById('evaluation_fake_file2').click()" 
+                                    style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
+                                📁 Load Fake Response File
                             </button>
+                            <span id="fake_file_name2" style="font-size: 11px; color: #666;"></span>
                         </div>
+                        <button id="evaluationBtnFake" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
+                            📊 Use Fake Response
+                        </button>
                     </div>
                     <div id="evaluationResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                     
-                    <!-- QA Section -->
+                    <!-- QA Section: fake choice + one button; after click show integrated tables + answers (two columns) -->
                     <div class="qa-section" style="margin-top: 30px; padding: 20px; background: #d1ecf1; border-radius: 8px; border: 2px solid #17a2b8; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <h3 style="margin-top: 0; color: #0c5460;">💬 Question Answering (QA)</h3>
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                            Ask questions about the integrated table and get AI-powered answers based on the data.
+                            QA on both integrated tables. One button generates two answers for comparison.
                         </p>
-                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 12px; background: white; border-radius: 4px;">
+                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
                             <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
                                 <input type="radio" name="qa_mode" value="generate" id="qa_mode_generate" checked onchange="toggleQAMode()" style="width: 18px; height: 18px;">
                                 <span>Generate New Answer</span>
                             </label>
                             <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
                                 <input type="radio" name="qa_mode" value="use_fake" id="qa_mode_fake" onchange="toggleQAMode()" style="width: 18px; height: 18px;">
-                                <span>Use Fake Response (for testing/demo)</span>
+                                <span>Use Fake Response for testing/demo</span>
                             </label>
-                        </div>
-                        <div id="qa_generate_options" style="display: block; margin-bottom: 15px;">
-                            <label style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;">
-                                <span style="font-weight: 500;">Use Integration Source:</span>
-                                <select id="qa_integration_source" style="padding: 5px; width: 100%;">
-                                    <option value="table_search">Table Search Integration</option>
-                                    <option value="model_search">Model Search Integration</option>
-                                </select>
-                            </label>
-                        </div>
-                        <div id="qa_use_fake_options" style="display: none; margin-bottom: 15px;">
-                            <label style="display: flex; flex-direction: column; gap: 5px;">
-                                <span style="font-weight: 500;">Load Fake Response File:</span>
-                                <input type="file" id="qa_fake_file" accept=".json" onchange="handleQAFakeFileSelect()" style="padding: 5px;">
+                            <div id="qa_use_fake_options" style="display: none; width: 100%; margin-top: 8px;">
+                                <input type="file" id="qa_fake_file" accept=".json" onchange="handleQAFakeFileSelect()" style="font-size: 13px;">
                                 <span id="qa_fake_file_name" style="font-size: 12px; color: #666;"></span>
-                            </label>
+                            </div>
                         </div>
-                        <div style="text-align: center;">
-                            <button id="qaBtn" onclick="runQA('${results.job_id || currentJobId}')" 
-                                    style="padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                💬 Generate Answer
-                            </button>
+                        <button id="qaBtn" onclick="runQABoth('${results.job_id || currentJobId}')" 
+                                style="padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
+                            💬 Generate Answer
+                        </button>
+                        <div id="qa_after_click" style="display: none; margin-top: 20px;">
+                            <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Integrated tables</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
+                                <div><strong style="font-size: 13px; color: #0c5460;">Table Search Integration</strong></div>
+                                <div><strong style="font-size: 13px; color: #0c5460;">Model Search Integration</strong></div>
+                            </div>
+                            <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Answers compare</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                <div>
+                                    <strong style="font-size: 13px; color: #0c5460;">Table Search</strong>
+                                    <div id="qaResultsTableSearch" style="margin-top: 8px;"></div>
+                                </div>
+                                <div>
+                                    <strong style="font-size: 13px; color: #0c5460;">Model Search</strong>
+                                    <div id="qaResultsModelSearch" style="margin-top: 8px;"></div>
+                                </div>
+                            </div>
                         </div>
-                        <div id="qaResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                 </div>
             `;
@@ -1421,10 +1357,10 @@ HTML_TEMPLATE = """
                             </div>
                         `;
                     } else {
-                        // Show table
+                        // Show table: scroll both horizontal and vertical
                         html += `
-                            <div style="max-height: 400px; overflow: auto;">
-                                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto;">
+                                <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
                                     <thead>
                                         <tr style="background: #f8f9fa; position: sticky; top: 0;">
                                             ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left;">${col}</th>`).join('')}
@@ -1536,10 +1472,10 @@ HTML_TEMPLATE = """
                             </div>
                         `;
                     } else {
-                        // Show table
+                        // Show table: scroll both horizontal and vertical
                         html += `
-                            <div style="max-height: 400px; overflow: auto;">
-                                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto;">
+                                <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
                                     <thead>
                                         <tr style="background: #f8f9fa; position: sticky; top: 0;">
                                             ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left;">${col}</th>`).join('')}
@@ -1591,18 +1527,9 @@ HTML_TEMPLATE = """
         let qaFakeResponseFile = null;
         
         function toggleQAMode() {
-            const generateMode = document.getElementById('qa_mode_generate')?.checked || false;
             const fakeMode = document.getElementById('qa_mode_fake')?.checked || false;
-            const generateOptions = document.getElementById('qa_generate_options');
             const fakeOptions = document.getElementById('qa_use_fake_options');
-            
-            if (generateMode) {
-                if (generateOptions) generateOptions.style.display = 'block';
-                if (fakeOptions) fakeOptions.style.display = 'none';
-            } else if (fakeMode) {
-                if (generateOptions) generateOptions.style.display = 'none';
-                if (fakeOptions) fakeOptions.style.display = 'block';
-            }
+            if (fakeOptions) fakeOptions.style.display = fakeMode ? 'block' : 'none';
         }
         
         function handleQAFakeFileSelect() {
@@ -2122,71 +2049,41 @@ HTML_TEMPLATE = """
             }
         }
         
-        async function runQA(jobId) {
-            // Check which mode is selected
-            const generateMode = document.getElementById('qa_mode_generate')?.checked || false;
-            const fakeMode = document.getElementById('qa_mode_fake')?.checked || false;
-            const useFake = fakeMode;
-            const useTableSearch = document.getElementById('qa_integration_source')?.value === 'table_search';
-            
+        async function runQABoth(jobId) {
             const qaBtn = document.getElementById('qaBtn');
-            const resultsDiv = document.getElementById('qaResults');
-            
-            if (!qaBtn || !resultsDiv) {
-                console.error('QA elements not found');
-                return;
-            }
-            
-            // Disable button and show loading
+            const afterClickDiv = document.getElementById('qa_after_click');
+            const resultsDivTable = document.getElementById('qaResultsTableSearch');
+            const resultsDivModel = document.getElementById('qaResultsModelSearch');
+            if (!qaBtn || !resultsDivTable || !resultsDivModel) { console.error('QA elements not found'); return; }
+            if (afterClickDiv) afterClickDiv.style.display = 'block';
+            const useFake = document.getElementById('qa_mode_fake')?.checked || false;
             qaBtn.disabled = true;
-            qaBtn.textContent = '⏳ Generating answer...';
-            resultsDiv.style.display = 'block';
-            resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running QA...</div>';
-            
+            qaBtn.textContent = '⏳ Generating...';
+            resultsDivTable.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
+            resultsDivModel.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
+            const restoreBtn = function() { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer'; };
             try {
-                const requestBody = {
-                    job_id: jobId,
-                    use_table_search: useTableSearch,
-                    use_fake: useFake
-                };
-                
-                console.log('📤 Sending QA request:', { use_fake: useFake, use_table_search: useTableSearch, job_id: jobId });
-                
-                // If fake file is selected, read it
+                let fakeContent = null;
                 if (useFake && qaFakeResponseFile) {
-                    const fileReader = new FileReader();
-                    fileReader.onload = async function(e) {
-                        try {
-                            const fakeContent = e.target.result;
-                            const fakeData = JSON.parse(fakeContent);
-                            
-                            requestBody.fake_response_content = fakeData;
-                            
-                            await sendQARequest(requestBody, resultsDiv, qaBtn);
-                        } catch (error) {
-                            resultsDiv.innerHTML = `
-                                <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                                    <strong>❌ Error:</strong> Failed to parse fake response file: ${error.message}
-                                </div>
-                            `;
-                            qaBtn.disabled = false;
-                            qaBtn.textContent = '💬 Generate Answer';
-                        }
-                    };
-                    fileReader.readAsText(qaFakeResponseFile);
-                    return;
+                    fakeContent = await new Promise((resolve, reject) => {
+                        const fr = new FileReader();
+                        fr.onload = () => { try { resolve(JSON.parse(fr.result)); } catch (e) { reject(e); } };
+                        fr.onerror = () => reject(new Error('Failed to read file'));
+                        fr.readAsText(qaFakeResponseFile);
+                    });
                 }
-                
-                await sendQARequest(requestBody, resultsDiv, qaBtn);
+                const bodyTable = { job_id: jobId, use_table_search: true, use_fake: useFake };
+                const bodyModel = { job_id: jobId, use_table_search: false, use_fake: useFake };
+                if (fakeContent) { bodyTable.fake_response_content = fakeContent; bodyModel.fake_response_content = fakeContent; }
+                await Promise.all([
+                    sendQARequest(bodyTable, resultsDivTable, null),
+                    sendQARequest(bodyModel, resultsDivModel, null)
+                ]);
             } catch (error) {
-                resultsDiv.innerHTML = `
-                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                        <strong>❌ Error:</strong> ${error.message}
-                    </div>
-                `;
-                qaBtn.disabled = false;
-                qaBtn.textContent = '💬 Generate Answer';
+                resultsDivTable.innerHTML = resultsDivTable.innerHTML.indexOf('❌') >= 0 ? resultsDivTable.innerHTML : '<div style="padding: 12px; color: #dc3545;">❌ ' + error.message + '</div>';
+                resultsDivModel.innerHTML = resultsDivModel.innerHTML.indexOf('❌') >= 0 ? resultsDivModel.innerHTML : '<div style="padding: 12px; color: #dc3545;">❌ ' + error.message + '</div>';
             }
+            restoreBtn();
         }
         
         async function sendQARequest(requestBody, resultsDiv, qaBtn) {
@@ -2210,8 +2107,7 @@ HTML_TEMPLATE = """
                             <strong>❌ QA Failed:</strong> ${errorMessage}
                         </div>
                     `;
-                    qaBtn.disabled = false;
-                    qaBtn.textContent = '💬 Generate Answer';
+                    if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer'; }
                     return;
                 }
                 
@@ -2226,17 +2122,14 @@ HTML_TEMPLATE = """
                         </div>
                     `;
                 }
-                
-                qaBtn.disabled = false;
-                qaBtn.textContent = '💬 Generate Answer';
+                if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
             } catch (error) {
                 resultsDiv.innerHTML = `
                     <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
                         <strong>❌ Error:</strong> ${error.message}
                     </div>
                 `;
-                qaBtn.disabled = false;
-                qaBtn.textContent = '💬 Generate Answer';
+                if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
             }
         }
         
