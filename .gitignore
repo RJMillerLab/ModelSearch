@@ -42,6 +42,9 @@ output/
 !README.md
 !docs/*.md
 
+# Backup / non-essential docs
+bak/
+
 # Data
 data/
 .env
