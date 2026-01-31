@@ -74,6 +74,27 @@ HTML_TEMPLATE = """
         .mode-input.active {
             display: block;
         }
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .form-row label {
+            margin-bottom: 0;
+            min-width: 140px;
+        }
+        .form-row .form-control {
+            flex: 1;
+            min-width: 160px;
+            padding: 6px 10px;
+            font-size: 13px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .form-row select.form-control { width: auto; max-width: 320px; }
+        .form-row input[type="number"].form-control { width: 80px; flex: none; }
         label {
             display: block;
             margin-bottom: 8px;
@@ -321,87 +342,63 @@ HTML_TEMPLATE = """
                 <img id="search-diagram" src="/static/fig/modelsearch.png" alt="ModelSearch Overview" />
             </div>
             
-            <div class="mode-selector" style="margin-top: 15px;">
-                <label style="margin-bottom: 10px;">Search Mode:</label>
-                <div class="mode-option">
-                    <input type="radio" id="mode_query" name="search_mode" value="query" checked onchange="toggleMode()">
-                    <label for="mode_query">Query → ModelCard → Search</label>
-                </div>
-                <div class="mode-option">
-                    <input type="radio" id="mode_modelid" name="search_mode" value="modelid" onchange="toggleMode()">
-                    <label for="mode_modelid">ModelID → Search (direct)</label>
-                </div>
+            <div class="form-row" style="margin-top: 15px;">
+                <label for="search_mode_select">Search Mode:</label>
+                <select id="search_mode_select" class="form-control" onchange="toggleMode()">
+                    <option value="query" selected>Query → ModelCard → Search</option>
+                    <option value="modelid">ModelID → Search (direct)</option>
+                </select>
             </div>
             
             <div class="mode-input active" id="query-input">
-                <label for="query">Query Text:</label>
-                <input type="text" id="query" placeholder="e.g., transformer model for code generation" value="transformer model for code generation">
+                <div class="form-row">
+                    <label for="query">Query (preset / fill in):</label>
+                    <select id="preset_query_select" onchange="onPresetQueryChange()" class="form-control" style="width: 200px; flex: none;">
+                        <option value="">— custom —</option>
+                    </select>
+                    <input type="text" id="query" class="form-control" placeholder="Type or pick preset" value="transformer model for code generation">
+                </div>
             </div>
             
             <div class="mode-input" id="modelid-input">
-                <label for="model_id">Model ID:</label>
-                <input type="text" id="model_id" value="Salesforce/codet5-base" placeholder="Enter HuggingFace model ID">
-                <p style="font-size: 12px; color: #666; margin-top: 5px;">
-                    Default CSV: data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv
-                </p>
-            </div>
-            
-            <label for="top_k" style="margin-top: 15px;">Top K Results (Final ModelCard Count):</label>
-            <input type="number" id="top_k" value="20" min="1" max="100" oninput="updateTableSearchKDefault()">
-                <p style="font-size: 11px; color: #666; margin-top: 3px;">
-                Both pipelines will return this many model cards (Card2Card and Card2Tab2Card)
-            </p>
-            
-            <div style="margin-top: 15px; padding: 12px; background: #e7f3ff; border-radius: 4px; border: 1px solid #b3d9ff;">
-                <label style="margin-bottom: 10px; display: block; font-weight: bold;">Card2Card Retrieval Mode:</label>
-                <div class="mode-option" style="margin-bottom: 10px;">
-                    <input type="radio" id="card2card_mode_dense" name="card2card_retrieval_mode" value="dense" checked>
-                    <label for="card2card_mode_dense">Dense (FAISS) - Semantic similarity using embeddings</label>
-                </div>
-                <div class="mode-option" style="margin-bottom: 10px;">
-                    <input type="radio" id="card2card_mode_sparse" name="card2card_retrieval_mode" value="sparse">
-                    <label for="card2card_mode_sparse">Sparse (BM25) - Keyword matching using BM25</label>
-                </div>
-                <div class="mode-option" style="margin-bottom: 10px;">
-                    <input type="radio" id="card2card_mode_hybrid" name="card2card_retrieval_mode" value="hybrid">
-                    <label for="card2card_mode_hybrid">Hybrid (BM25 + FAISS) - Combines sparse and dense retrieval</label>
-                </div>
-                <p style="font-size: 10px; color: #666; margin-top: 5px; margin-left: 26px;">
-                    Select the retrieval method for Card2Card search. Hybrid mode combines both sparse and dense results using RRF (Reciprocal Rank Fusion).
-                </p>
-            </div>
-            
-            <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="margin-bottom: 10px; display: block; font-weight: bold;">Tab2Tab Step Mode (Card2Tab2Card Intermediate Step):</label>
-                <div class="mode-option" style="margin-bottom: 10px;">
-                    <input type="radio" id="tab2tab_mode_search" name="tab2tab_mode" value="search" checked onchange="toggleTab2TabMode()">
-                    <label for="tab2tab_mode_search">Temporary Dataset Search (default)</label>
-                </div>
-                <div class="mode-option" style="margin-bottom: 10px;">
-                    <input type="radio" id="tab2tab_mode_load" name="tab2tab_mode" value="load" onchange="toggleTab2TabMode()">
-                    <label for="tab2tab_mode_load">Load from Saved JSON Results</label>
-                </div>
-                <div id="tab2tab_json_input" style="display: none; margin-top: 10px;">
-                    <label for="tab2tab_json_file" style="font-size: 12px; color: #666;">Select saved tab2tab JSON file:</label>
-                    <input type="file" id="tab2tab_json_file" accept=".json" style="margin-top: 5px; padding: 5px; width: 100%; font-size: 12px;">
-                    <p style="font-size: 10px; color: #999; margin-top: 3px;">
-                        JSON file should contain tab2tab search results (from tab2tab.py --output)
-                    </p>
+                <div class="form-row">
+                    <label for="model_id">Model ID (direct):</label>
+                    <input type="text" id="model_id" class="form-control" value="Salesforce/codet5-base" placeholder="HuggingFace model ID">
                 </div>
             </div>
             
-            <label for="table_search_k" style="margin-top: 15px;">Table Search Top K (only used when mode is "Temporary Dataset Search"):</label>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" id="table_search_k_slider" min="1" max="20" value="20" step="1" 
-                       style="flex: 1;" oninput="updateTableSearchKValue(this.value)">
-                <input type="number" id="table_search_k" value="20" min="1" max="20" 
-                       style="width: 80px;" oninput="updateTableSearchKSlider(this.value)">
+            <div class="form-row">
+                <label for="card2card_retrieval_mode_select">Card2Card Retrieval:</label>
+                <select id="card2card_retrieval_mode_select" class="form-control">
+                    <option value="dense" selected>Dense (FAISS)</option>
+                    <option value="sparse">Sparse (BM25)</option>
+                    <option value="hybrid">Hybrid (BM25 + FAISS)</option>
+                </select>
             </div>
-            <p style="font-size: 11px; color: #666; margin-top: 3px;">
-                Controls how many tables to retrieve in Card2Tab2Card search (intermediate step). 
-                Final modelcard count is still controlled by "Top K Results" above.
-                <span id="table_search_k_note" style="display: none; color: #999;"> (Disabled when loading from JSON)</span>
-            </p>
+            
+            <div class="form-row">
+                <label for="tab2tab_mode_select">Tab2Tab Step:</label>
+                <select id="tab2tab_mode_select" class="form-control" onchange="toggleTab2TabMode()">
+                    <option value="search" selected>Temporary Dataset Search</option>
+                    <option value="load">Load from JSON</option>
+                </select>
+                <div id="tab2tab_json_input" style="display: none; margin-left: 140px;">
+                    <input type="file" id="tab2tab_json_file" accept=".json" class="form-control" style="max-width: 320px;">
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <label for="top_k">Model Card Top K:</label>
+                <input type="range" id="top_k_slider" min="1" max="100" value="50" step="1" style="flex: 1; max-width: 200px;" oninput="updateTopKValue(this.value)">
+                <input type="number" id="top_k" class="form-control" value="50" min="1" max="100" oninput="updateTopKSlider(this.value)">
+            </div>
+            
+            <div class="form-row">
+                <label for="table_search_k">Table Search Top K:</label>
+                <input type="range" id="table_search_k_slider" min="1" max="20" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
+                <input type="number" id="table_search_k" class="form-control" value="10" min="1" max="20" oninput="updateTableSearchKSlider(this.value)">
+                <span id="table_search_k_note" style="display: none; font-size: 11px; color: #999;">(Disabled when load JSON)</span>
+            </div>
             
             <button id="searchBtn" onclick="startSearch()">Start Search</button>
             </div>
@@ -424,6 +421,40 @@ HTML_TEMPLATE = """
         let currentJobId = null;
         let eventSource = null;
         
+        // Preset queries (loaded from backend); index in select value
+        let presetQueriesList = [];
+        
+        async function loadPresetQueries() {
+            const sel = document.getElementById('preset_query_select');
+            if (!sel) return;
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/preset-queries');
+                const data = await response.json();
+                if (data.status === 'success' && data.queries && data.queries.length > 0) {
+                    presetQueriesList = data.queries;
+                    sel.innerHTML = '<option value="">— custom —</option>';
+                    data.queries.forEach(function(q, i) {
+                        const opt = document.createElement('option');
+                        opt.value = String(i);
+                        opt.textContent = (q.title || q.id || ('Query ' + (i + 1)));
+                        sel.appendChild(opt);
+                    });
+                }
+            } catch (e) {
+                console.warn('Preset queries load failed:', e);
+            }
+        }
+        
+        function onPresetQueryChange() {
+            const sel = document.getElementById('preset_query_select');
+            const queryInput = document.getElementById('query');
+            if (!sel || !queryInput || sel.value === '') return;
+            const idx = parseInt(sel.value, 10);
+            if (idx >= 0 && idx < presetQueriesList.length) {
+                queryInput.value = presetQueriesList[idx].query || '';
+            }
+        }
+        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', function() {
             // Ensure "Load Previous Search" is unchecked by default
@@ -438,52 +469,70 @@ HTML_TEMPLATE = """
             
             // Initialize tab2tab mode
             toggleTab2TabMode();
+            
+            loadPresetQueries();
         });
         
-        function updateTableSearchKValue(value) {
-            document.getElementById('table_search_k').value = value;
+        function updateTopKValue(value) {
+            const num = document.getElementById('top_k');
+            if (num) num.value = value;
+            updateTableSearchKDefault();
         }
-        
+        function updateTopKSlider(value) {
+            const slider = document.getElementById('top_k_slider');
+            const num = document.getElementById('top_k');
+            const v = parseInt(value, 10);
+            if (slider && num && v >= 1 && v <= 100) {
+                slider.value = v;
+                num.value = v;
+            }
+            updateTableSearchKDefault();
+        }
+        function updateTableSearchKValue(value) {
+            const num = document.getElementById('table_search_k');
+            const slider = document.getElementById('table_search_k_slider');
+            if (num) num.value = value;
+            if (slider) slider.value = value;
+        }
         function updateTableSearchKSlider(value) {
             const slider = document.getElementById('table_search_k_slider');
-            const numValue = parseInt(value);
-            if (numValue >= parseInt(slider.min) && numValue <= parseInt(slider.max)) {
-                slider.value = numValue;
+            const num = document.getElementById('table_search_k');
+            const v = parseInt(value, 10);
+            if (slider && num && v >= parseInt(slider.min) && v <= parseInt(slider.max)) {
+                slider.value = v;
+                num.value = v;
             }
         }
-        
         function updateTableSearchKDefault() {
-            // When top_k changes, suggest a default table_search_k (1.5x top_k, but at least 20, max 20)
-            const topK = parseInt(document.getElementById('top_k').value) || 20;
-            const suggestedTableSearchK = Math.min(Math.max(Math.round(topK * 1.5), 20), 20);
-            // Only update if current value is close to old default (within 5)
-            const currentTableSearchK = parseInt(document.getElementById('table_search_k').value) || 20;
-            const oldTopK = Math.floor(currentTableSearchK / 1.5);
-            if (Math.abs(currentTableSearchK - Math.round(oldTopK * 1.5)) <= 5) {
-                // User hasn't manually adjusted much, update to new default
-                const newValue = Math.min(Math.max(suggestedTableSearchK, 1), 20);
-                document.getElementById('table_search_k').value = newValue;
-                document.getElementById('table_search_k_slider').value = newValue;
+            const topK = parseInt(document.getElementById('top_k').value, 10) || 20;
+            const suggested = Math.min(Math.max(Math.round(topK * 1.5), 20), 20);
+            const current = parseInt(document.getElementById('table_search_k').value, 10) || 20;
+            const oldTopK = Math.floor(current / 1.5);
+            if (Math.abs(current - Math.round(oldTopK * 1.5)) <= 5) {
+                const newVal = Math.min(Math.max(suggested, 1), 20);
+                document.getElementById('table_search_k').value = newVal;
+                document.getElementById('table_search_k_slider').value = newVal;
             }
         }
         
         function toggleTab2TabMode() {
-            const mode = document.querySelector('input[name="tab2tab_mode"]:checked').value;
+            const modeEl = document.getElementById('tab2tab_mode_select');
+            const mode = modeEl ? modeEl.value : 'search';
             const jsonInput = document.getElementById('tab2tab_json_input');
             const tableSearchKInputs = document.getElementById('table_search_k');
             const tableSearchKSlider = document.getElementById('table_search_k_slider');
             const note = document.getElementById('table_search_k_note');
             
             if (mode === 'load') {
-                jsonInput.style.display = 'block';
-                tableSearchKInputs.disabled = true;
-                tableSearchKSlider.disabled = true;
-                note.style.display = 'inline';
+                if (jsonInput) jsonInput.style.display = 'inline-block';
+                if (tableSearchKInputs) tableSearchKInputs.disabled = true;
+                if (tableSearchKSlider) tableSearchKSlider.disabled = true;
+                if (note) note.style.display = 'inline';
             } else {
-                jsonInput.style.display = 'none';
-                tableSearchKInputs.disabled = false;
-                tableSearchKSlider.disabled = false;
-                note.style.display = 'none';
+                if (jsonInput) jsonInput.style.display = 'none';
+                if (tableSearchKInputs) tableSearchKInputs.disabled = false;
+                if (tableSearchKSlider) tableSearchKSlider.disabled = false;
+                if (note) note.style.display = 'none';
             }
         }
         
@@ -679,13 +728,13 @@ HTML_TEMPLATE = """
             
             // Continue with new search logic
             
-            const mode = document.querySelector('input[name="search_mode"]:checked').value;
+            const mode = (document.getElementById('search_mode_select') || {}).value || 'query';
             const query = document.getElementById('query').value.trim();
             const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt(document.getElementById('top_k').value);
             const tableSearchK = parseInt(document.getElementById('table_search_k').value);
-            const tab2tabMode = document.querySelector('input[name="tab2tab_mode"]:checked').value;
-            const card2cardRetrievalMode = document.querySelector('input[name="card2card_retrieval_mode"]:checked').value;
+            const tab2tabMode = (document.getElementById('tab2tab_mode_select') || {}).value || 'search';
+            const card2cardRetrievalMode = (document.getElementById('card2card_retrieval_mode_select') || {}).value || 'dense';
             
             // Validate input based on mode
             if (mode === 'query' && !query) {
@@ -823,7 +872,8 @@ HTML_TEMPLATE = """
         }
         
         function toggleMode() {
-            const mode = document.querySelector('input[name="search_mode"]:checked').value;
+            const modeEl = document.getElementById('search_mode_select');
+            const mode = modeEl ? modeEl.value : 'query';
             const queryInput = document.getElementById('query-input');
             const modelIdInput = document.getElementById('modelid-input');
             const diagramImg = document.getElementById('search-diagram');
@@ -831,17 +881,11 @@ HTML_TEMPLATE = """
             if (mode === 'query') {
                 queryInput.classList.add('active');
                 modelIdInput.classList.remove('active');
-                // Show query diagram
-                if (diagramImg) {
-                    diagramImg.src = '/static/fig/modelsearch_wquery.png';
-                }
+                if (diagramImg) diagramImg.src = '/static/fig/modelsearch_wquery.png';
             } else {
                 queryInput.classList.remove('active');
                 modelIdInput.classList.add('active');
-                // Show modelId diagram
-                if (diagramImg) {
-                    diagramImg.src = '/static/fig/modelsearch.png';
-                }
+                if (diagramImg) diagramImg.src = '/static/fig/modelsearch.png';
             }
         }
         

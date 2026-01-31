@@ -1643,6 +1643,33 @@ def search():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# Path to preset queries JSON (for debug / benchmark); relative to project root (cwd when running backend)
+PRESET_QUERIES_PATH = os.path.join("data", "preset_queries.json")
+
+
+@app.route('/api/preset-queries', methods=['GET'])
+def get_preset_queries():
+    """Return preset benchmark/debug queries from data/preset_queries.json."""
+    try:
+        path = PRESET_QUERIES_PATH
+        if not os.path.exists(path):
+            return jsonify({
+                "status": "success",
+                "queries": [],
+                "message": "Preset queries file not found; use data/preset_queries.json to add presets."
+            })
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        queries = data.get("queries", [])
+        return jsonify({
+            "status": "success",
+            "queries": queries,
+            "description": data.get("description", "")
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/saved-searches', methods=['GET'])
 def list_saved_searches():
     """List all saved search results (organized by timestamp folders)"""
