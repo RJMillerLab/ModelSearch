@@ -412,7 +412,7 @@ HTML_TEMPLATE = """
         <div id="errorMsg" class="error" style="display: none;"></div>
         
         <div id="resultsSection" class="results-section">
-            <h2>Results</h2>
+            <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; font-weight: bold;">Retrieval results</h3>
             <div id="resultsContent"></div>
         </div>
     </div>
@@ -1144,77 +1144,74 @@ HTML_TEMPLATE = """
                 </div>
             `;
             
-            // Comparison Section - Display as Table
-            if (results.comparison) {
-                html += `
-                    <div class="comparison-section" style="margin-top: 30px; padding: 20px; background: #e7f3ff; border-radius: 8px;">
-                        <h3>Comparison</h3>
-                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                            Overlap analysis between Card2Card and Card2Tab2Card search results
-                        </p>
-                        <div style="overflow-x: auto;">
-                            <table style="width: 100%; border-collapse: collapse; background: white; border-radius: 4px; overflow: hidden;">
-                                <thead>
-                                    <tr style="background: #007bff; color: white;">
-                                        <th style="padding: 10px; text-align: left; border: 1px solid #0056b3;">Search Type</th>
-                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Card2Card Count</th>
-                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Card2Tab2Card Count</th>
-                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Overlap Count</th>
-                                        <th style="padding: 10px; text-align: center; border: 1px solid #0056b3;">Overlap Ratio</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${Object.entries(results.comparison).map(([type, comp], idx) => `
-                                        <tr style="${idx % 2 === 0 ? 'background: #f8f9fa;' : 'background: white;'}">
-                                            <td style="padding: 8px; border: 1px solid #dee2e6; font-weight: 500;">${type}</td>
-                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center;">${comp.card2card_count || 0}</td>
-                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center;">${comp.card2tab2card_count || 0}</td>
-                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center; font-weight: bold; color: #28a745;">${comp.overlap_count || 0}</td>
-                                            <td style="padding: 8px; border: 1px solid #dee2e6; text-align: center; font-weight: bold;">${((comp.overlap_ratio || 0) * 100).toFixed(1)}%</td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                `;
-            }
+            // Comparison HTML: will be merged into Evaluation card
+            const comparisonHtml = results.comparison ? `
+                <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #856404;">Comparison</h4>
+                <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
+                    Overlap analysis between Card2Card and Card2Tab2Card search results
+                </p>
+                <div style="overflow-x: auto; margin-bottom: 20px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                        <thead>
+                            <tr style="background: #007bff; color: white;">
+                                <th style="padding: 8px; text-align: left; border: 1px solid #0056b3;">Search Type</th>
+                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Card2Card Count</th>
+                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Card2Tab2Card Count</th>
+                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Overlap Count</th>
+                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Overlap Ratio</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${Object.entries(results.comparison).map(([type, comp], idx) => `
+                                <tr style="${idx % 2 === 0 ? 'background: #f8f9fa;' : 'background: white;'}">
+                                    <td style="padding: 6px; border: 1px solid #dee2e6; font-weight: 500;">${type}</td>
+                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center;">${comp.card2card_count || 0}</td>
+                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center;">${comp.card2tab2card_count || 0}</td>
+                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center; font-weight: bold; color: #28a745;">${comp.overlap_count || 0}</td>
+                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center; font-weight: bold;">${((comp.overlap_ratio || 0) * 100).toFixed(1)}%</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '';
             
             // Add Integration Sections - Vertical layout (one above the other)
             html += `
                 <div style="display: flex; flex-direction: column; gap: 20px; margin-top: 30px;">
-                    <!-- First: Model Search Integration (Card2Card) -->
+                    <!-- First: Model Search Integration (Card2Card) - Max Models first, then same order as Table Search -->
                     <div class="integration-section" style="padding: 20px; background: #e7f3ff; border-radius: 8px; border: 1px solid #b3d9ff; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <h3 style="margin-top: 0;">Table Integration (from Model Search)</h3>
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                             Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.
                         </p>
                         <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_model_search_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
                         <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_model_search_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
                         <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Model Search Tables</button>
                         <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                     
-                    <!-- Second: Table Search Integration (Card2Tab2Card) -->
+                    <!-- Second: Table Search Integration (Card2Tab2Card) - Search Type first, then same order as Model Search (Integration Type, Top K Tables) -->
                     <div class="integration-section" style="padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <h3 style="margin-top: 0;">Table Integration (from Table Search)</h3>
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                             Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
                         </p>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Search Type:</label><select id="integration_search_type" class="form-control" style="max-width: 280px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex (Union+Join+Correlation)</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
                         <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
                         <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Search Type:</label><select id="integration_search_type" class="form-control" style="max-width: 280px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex (Union+Join+Correlation)</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
                         <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Tables</button>
                         <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                 </div>
             `;
             
-            // Add Evaluation Section - Always visible card
+            // Add Evaluation Section - comparison merged into same card, then evaluation
             html += `
                 <div class="evaluation-section" style="margin-top: 30px; padding: 20px; background: #fff3cd; border-radius: 8px; border: 2px solid #ffc107; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                    <h3 style="margin-top: 0; color: #856404;">📊 Evaluation on Integrated Tables</h3>
+                    ${comparisonHtml}
+                    <h3 style="margin-top: 0; color: #856404; font-size: 16px;">📊 Evaluation on Integrated Tables</h3>
                     <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                         Evaluate diversity between Table Search Integration and Model Search Integration results using LLM.
                     </p>
