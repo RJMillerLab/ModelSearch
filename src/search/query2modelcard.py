@@ -134,6 +134,22 @@ def main():
         sys.exit(1)
 
 
+def _test():
+    """Quick test when run with no args."""
+    emb_npz = "data/card2card_embeddings.npz"
+    faiss_index = "data/card2card.faiss"
+    if not os.path.isfile(emb_npz) or not os.path.isfile(faiss_index):
+        print("Test skip: index missing (need card2card_embeddings.npz, card2card.faiss)")
+        return
+    q = "For text-to-SQL, which models have the most complete and comparable benchmark results?"
+    print("Test query2modelcard (top_k=1):", q[:60] + "...")
+    r = search_query2modelcard(query=q, emb_npz=emb_npz, faiss_index=faiss_index, top_k=1, device=get_device())
+    print("Result:", r[0] if r else "none")
+
+
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) == 1:
+        _test()
+    else:
+        main()
 

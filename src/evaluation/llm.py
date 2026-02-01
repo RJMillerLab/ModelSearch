@@ -321,3 +321,14 @@ def load_fake_response(fake_response_path: Optional[str] = None) -> Dict[str, An
     except Exception as e:
         print(f"⚠️  Error loading fake response: {e}")
         return load_fake_response(None)  # Fallback to default
+
+
+if __name__ == "__main__":
+    # Quick test: serialize + fake eval
+    table1 = pd.DataFrame({"model_id": ["codet5-base", "CodeGPT-small-py"], "steps": [500000, 300000]})
+    table2 = pd.DataFrame({"model_id": ["gpt2", "bert-base"], "type": ["gen", "encoder"]})
+    s1 = serialize_table_for_prompt(table1)
+    s2 = serialize_table_for_prompt(table2)
+    print("Test evaluation: serialize length", len(s1), len(s2))
+    result = evaluate_diversity_with_llm(query="code gen", table1=table1, table2=table2, use_fake=True)
+    print("Fake eval result keys:", list(result.keys()), "diversity_score:", result.get("diversity_score"))

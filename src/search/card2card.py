@@ -604,6 +604,21 @@ def main():
         parser.print_help()
 
 
+def _test():
+    """Quick test when run with no args."""
+    emb_npz = "data/card2card_embeddings.npz"
+    faiss_index = "data/card2card.faiss"
+    if not os.path.isfile(emb_npz) or not os.path.isfile(faiss_index):
+        print("Test skip: index missing (need card2card_embeddings.npz, card2card.faiss)")
+        return
+    print("Test card2card search (dense, top_k=5)...")
+    r = search_card2card(model_id="Salesforce/codet5-base", emb_npz=emb_npz, faiss_index=faiss_index, top_k=5, retrieval_mode="dense")
+    print("Neighbors:", r[:5] if r else "none")
+
+
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) == 1:
+        _test()
+    else:
+        main()
 

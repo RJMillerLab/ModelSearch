@@ -949,3 +949,15 @@ def integrate_tables_from_model_search_results(
     
     return result
 
+
+if __name__ == "__main__":
+    # Quick test: integration from template search results
+    import os as _os
+    _root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "../.."))
+    _path = _os.path.join(_root, "data", "template", "search_results.json")
+    if not _os.path.exists(_path):
+        print("Test skip: data/template/search_results.json not found")
+    else:
+        r = integrate_tables_from_model_search_results(_path, integration_type="union", k=10, max_models=5, schema_log_path=_os.path.join(_root, "data_citationlake", "logs", "parquet_schema.log"), use_citationlake=True)
+        print("Test integration: success", r.get("success"), "stats", r.get("stats"))
+

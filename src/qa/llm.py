@@ -384,3 +384,10 @@ def answer_question_with_llm(
         print(f"Traceback:\n{error_traceback}")
         raise ValueError(f"QA failed: {str(e)}")
 
+
+if __name__ == "__main__":
+    # Quick test: QA with fake
+    df = pd.DataFrame({"model": ["GPT-4", "BERT"], "type": ["LLM", "NLP"]})
+    result = answer_question_with_llm(query="What types?", table=df, table_source="Test", use_fake=True)
+    print("Test QA: success", result.get("success"), "source", result.get("source"))
+
