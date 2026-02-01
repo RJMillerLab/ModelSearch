@@ -42,6 +42,20 @@ import pandas as pd
 from typing import Tuple, List
 
 
+def resolve_device(device: str) -> str:
+    """If device is cuda but CUDA is not available, fall back to cpu and notify."""
+    if device.lower() != 'cuda':
+        return device
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return 'cuda'
+    except Exception:
+        pass
+    print('CUDA not available; falling back to CPU.')
+    return 'cpu'
+
+
 def safe_load_csv(file_path: str) -> Tuple[str, pd.DataFrame]:
     filename = os.path.basename(file_path)
     encodings = ['utf-8', 'latin1', 'cp1252']
@@ -68,6 +82,7 @@ def filter_to_jsonl(base_path: str, mask_file: str, output_jsonl: str,
     mode: str, tr, tr_str, or None for base version
     """
     os.makedirs(os.path.dirname(output_jsonl), exist_ok=True)
+    device = resolve_device(device)
     model = SentenceTransformer(model_name, device=device)
     model.eval()
 
@@ -154,6 +169,7 @@ def encode_corpus(jsonl: str, model_name: str, batch_size: int,
     Batch encode JSONL text with SBERT, save embeddings and ids.
     """
     os.makedirs(os.path.dirname(output_npz), exist_ok=True)
+    device = resolve_device(device)
     model = SentenceTransformer(model_name, device=device)
     model.eval()
 

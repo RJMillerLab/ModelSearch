@@ -15,6 +15,10 @@ def load_json(filename: str) -> dict:
     return data
 
 def setup_openai(fname, mode='azure'):
+    """
+    Setup OpenAI client. For new OpenAI SDK (>=1.0.0), we use OpenAI client directly.
+    This function is kept for backward compatibility but doesn't set global openai attributes.
+    """
     assert mode in {'openai', 'azure'}
     load_dotenv()
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'sk-test')
@@ -22,27 +26,35 @@ def setup_openai(fname, mode='azure'):
     print(f"   API key length: {len(OPENAI_API_KEY) if OPENAI_API_KEY else 0}")
     print(f"   API key prefix: {OPENAI_API_KEY[:10] + '...' if OPENAI_API_KEY and len(OPENAI_API_KEY) > 10 and OPENAI_API_KEY != 'sk-test' else 'N/A or default'}")
     if mode == 'openai':
-        openai.api_type = "open_ai"
-        openai.api_base = "https://api.openai.com/v1"
-        openai.api_key = OPENAI_API_KEY
+        # For new OpenAI SDK, we don't set global attributes
+        # Instead, we'll use OpenAI client directly in query_openai
         secrets = None
     else:
         #openai.api_version = "2023-03-15-preview"
         secrets = load_json(fname)
-        openai.api_type = "azure"
-        openai.api_base = secrets['MS_ENDPOINT']
-        openai.api_key = secrets['MS_KEY']
     return secrets
 
 @T.retry(stop=T.stop_after_attempt(5), wait=T.wait_fixed(60), after=lambda s: logging.error(repr(s)))
 def query_openai(prompt, mode='azure', model='gpt-35-turbo', max_tokens=1200, **kwargs):
+    """
+    Query OpenAI API. Updated to use new OpenAI SDK (>=1.0.0) client-based approach.
+    """
     if mode == 'openai':
-        response = openai.chat.completions.create(model=model,
-                                             messages=[{'role': 'user', 'content': prompt}],
-                                             max_tokens=max_tokens,
-                                             **kwargs
-                                             )
+        # Use new OpenAI SDK client-based approach
+        load_dotenv()
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key or api_key == 'sk-test':
+            raise ValueError("OPENAI_API_KEY not found or invalid")
+        
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=max_tokens,
+            **kwargs
+        )
     else:
+        # Azure mode - keep original implementation
         response = openai.chat.completions.create(
             deployment_id=model,
             messages=[{'role': 'user', 'content': prompt}],
