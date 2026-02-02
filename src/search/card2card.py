@@ -9,6 +9,7 @@ Reuses functionality from baseline1 and modelsearch modules.
 import os
 import json
 import sys
+import time
 from typing import Dict, List, Optional, Tuple
 import argparse
 import pickle
@@ -563,7 +564,8 @@ def main():
     batch_parser.add_argument('--output_json', default='data/card2card_neighbors.json')
     
     args = parser.parse_args()
-    
+    start_time = time.time()
+
     if args.command == 'build-index':
         build_card_index(
             field=args.field,
@@ -600,6 +602,7 @@ def main():
             output_json=args.output_json
         )
         print(f"✅ Generated neighbors for {len(neighbors)} models")
+        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
     else:
         parser.print_help()
 

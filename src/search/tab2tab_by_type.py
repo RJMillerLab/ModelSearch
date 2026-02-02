@@ -9,6 +9,7 @@ This is similar to tab2tab but adds an extra classification step to filter resul
 
 import os
 import sys
+import time
 from typing import List, Dict, Optional, Any, Iterable, Union
 import pandas as pd
 import argparse
@@ -313,6 +314,7 @@ Then use this tool for search:
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(result_data, f, ensure_ascii=False, indent=2)
         print(f"\n✅ Results saved to {args.output}")
+        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
     
     except Exception as e:
         print(f"❌ Error: {e}")

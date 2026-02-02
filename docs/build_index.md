@@ -78,14 +78,14 @@ python -m src.search.classification --mode batch --db_path data/modellake.db --o
 
 # Part 2 — Inference & downstream
 
-After Part 1, use these for retrieval search, table search, evaluation, QA, integration.
+After Part 1, use these for retrieval search, table search, evaluation, QA, and integration. **Each script prints total runtime (e.g. `⏱️ Total time: 12.34s`) at the end**; when you redirect to logs (e.g. `> logs/xxx.log 2>&1`), the log will contain this time.
 
 ## 2.1 query2modelcard (text query → top-k model IDs)
 
 Dense retrieval only (FAISS). Uses Step-1 index.
 
 ```bash
-python -m src.search.query2modelcard --query "transformer model for code generation" --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --device cuda
+python -m src.search.query2modelcard --query "transformer model for code generation" --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --device cuda > logs/query2modelcard.log 2>&1
 ```
 
 Optional: `--output_json <path>`.
@@ -98,20 +98,20 @@ Semantic retrieval: dense (FAISS), sparse (BM25), or hybrid (RRF). Uses Step-1 i
 
 ```bash
 # dense
-python -m src.search.card2card search --model_id senseable/33x-coder --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense
+python -m src.search.card2card search --model_id senseable/33x-coder --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
 # sparse
-python -m src.search.card2card search --model_id senseable/33x-coder --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode sparse
+python -m src.search.card2card search --model_id senseable/33x-coder --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
 # hybrid
-python -m src.search.card2card search --model_id senseable/33x-coder --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf
+python -m src.search.card2card search --model_id senseable/33x-coder --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
 ```
 
-Optional: `--output_json <path>`. Batch: `python -m src.search.card2card search-batch --emb_npz ... --faiss_index ... --top_k 20 --output_json data/card2card_neighbors.json`.
+Optional: `--output_json <path>`. Batch: `python -m src.search.card2card search-batch --emb_npz ... --faiss_index ... --top_k 20 --output_json data/card2card_neighbors.json > logs/card2card_batch.log 2>&1`.
 
 ---
 
 ## 2.3 card2tab2card (model → tables → table search → model IDs)
 
-Structure/table retrieval: get model's tables, run table-to-table search (Blend), return model IDs linked to similar tables. Uses modellake.db and relationship parquet (not card2card FAISS).
+Structure/table retrieval: get model's tables, run table-to-table search (Blend), return model IDs linked to similar tables. Uses modellake.db and relationship parquet (not card2card FAISS). **Keyword search uses table headers (column names) as keywords**, same as ModelTables/Blend.
 
 **Single search type (e.g. keyword):**
 ```bash
@@ -122,7 +122,7 @@ Other `--search_type`: `single_column`, `multi_column`, `unionable`. Optional: `
 
 **All search types (single_column, keyword, unionable):**
 ```bash
-python -m src.search.card2tab2card --model_id senseable/33x-coder --mode all --query <path_to_csv> --output_folder data
+python -m src.search.card2tab2card --model_id senseable/33x-coder --mode all --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --output_folder data
 ```
 
 **By table type (requires classification JSON from 1.5):**
@@ -134,13 +134,14 @@ python -m src.search.card2tab2card --model_id <model_id> --mode by_type --classi
 
 ## 2.4 tab2tab (standalone table search; Blend_internal)
 
-Direct table-to-table search using modellake.db. Requires Blend_internal and modellake.db.
+Direct table-to-table search using modellake.db. Requires Blend_internal and modellake.db. **Keyword search uses table headers (column names) as keywords**, same as ModelTables/Blend: pass comma-separated header names to match tables that have those columns.
 
 ```bash
-python -m src.search.tab2tab --search_type keyword --query "value1,value2" --k 10 --db_path data/modellake.db --output data/tab2tab_results.json
+# keyword: comma-separated column names (headers) to match
+python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 --db_path data/modellake.db --output data/tab2tab_results.json > logs/tab2tab_keyword.log 2>&1
 ```
 
-Or `--query <path_to_csv>` for multi_column/unionable. `--list_tables` to list tables in DB.
+For single_column: `--query "val1,val2,val3"` (cell values). For multi_column/unionable: `--query <path_to_csv>`. `--list_tables` to list tables in DB.
 
 ---
 
@@ -149,7 +150,7 @@ Or `--query <path_to_csv>` for multi_column/unionable. `--list_tables` to list t
 Table search with type filtering. Run classification first (1.5) or use `--no_auto_classify` and provide `--classification_json`.
 
 ```bash
-python -m src.search.tab2tab_by_type --query <path_to_csv> --classification_json data/table_classifications.json --search_type single_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_results.json
+python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type single_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_results.json > logs/tab2tab_by_type.log 2>&1
 ```
 
 ---
@@ -190,6 +191,6 @@ Additional retrieval strategies (e.g. baseline2, baseline3 from ModelTables/src 
 | card2card sparse | `... --retrieval_mode sparse --jsonl_path data/card2card_corpus.jsonl` |
 | card2card hybrid | `... --retrieval_mode hybrid --jsonl_path data/card2card_corpus.jsonl --hybrid_method rrf` |
 | card2tab2card | `python -m src.search.card2tab2card --model_id <id> --search_type keyword --k 10` |
-| tab2tab | `python -m src.search.tab2tab --search_type keyword --query "..." --k 10 --db_path data/modellake.db` |
-| tab2tab_by_type | `python -m src.search.tab2tab_by_type --query <csv> --classification_json data/table_classifications.json --search_type single_column --k 10` |
+| tab2tab (keyword = headers) | `python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 --db_path data/modellake.db` |
+| tab2tab_by_type | `python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type single_column --k 10` |
 | Demo (evaluation, QA, integration) | `python -m src.demo.backend` + `python -m src.demo.frontend` → http://localhost:5001 |

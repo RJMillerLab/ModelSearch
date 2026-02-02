@@ -11,6 +11,7 @@ Uses CitationLake's get_from.py approach for robust parquet schema handling.
 
 import os
 import sys
+import time
 from typing import List, Set, Dict, Optional, Any
 import argparse
 import pandas as pd
@@ -1482,6 +1483,9 @@ def main():
             print(f"Found {len(results)} similar model cards for {args.model_id}:")
             for i, model_id in enumerate(results, 1):
                 print(f"  {i}. {model_id}")
+
+        elapsed = time.time() - start_time
+        print(f"\n⏱️ Total time: {elapsed:.2f}s")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

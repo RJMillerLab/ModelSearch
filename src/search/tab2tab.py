@@ -8,6 +8,7 @@ Supports reading tables from modellake.db for testing.
 
 import os
 import sys
+import time
 from typing import List, Dict, Optional, Iterable, Any
 import pandas as pd
 import numpy as np
@@ -899,7 +900,8 @@ To create modellake.db, use:
                        help='Output file to save results (JSON format)')
     
     args = parser.parse_args()
-    
+    start_time = time.time()
+
     # Update Blend_internal config with db_path BEFORE any imports
     # This must happen before _lazy_import_blend() is called
     try:
@@ -967,6 +969,7 @@ To create modellake.db, use:
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(result_data, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {args.output}")
+        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

@@ -7,6 +7,7 @@ This module provides functions for searching model cards using a text query.
 import os
 import json
 import sys
+import time
 from typing import List, Optional
 import argparse
 import numpy as np
@@ -109,7 +110,8 @@ def main():
                        help='Optional path to save results as JSON')
     
     args = parser.parse_args()
-    
+    start_time = time.time()
+
     try:
         # Auto-detect device if not specified
         device = args.device if args.device else get_device()
@@ -127,6 +129,7 @@ def main():
         print(f"Found {len(results)} model cards for query: '{args.query}'")
         for i, model_id in enumerate(results, 1):
             print(f"  {i}. {model_id}")
+        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
