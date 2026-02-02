@@ -211,6 +211,33 @@ def extract_all_table_content(html_content, table_name=None):
     # Join all content sections
     return '\n\n'.join(all_content) if all_content else ""
 
+def _resolve_readme_path(readme_path):
+    """Resolve readme_path to an existing file: handle relative paths (DATA_BASE, REPO_ROOT) and legacy absolute paths."""
+    if not readme_path or (isinstance(readme_path, str) and not readme_path.strip()):
+        return readme_path
+    if os.path.exists(readme_path):
+        return readme_path
+    data_base = os.path.abspath(os.environ.get('DATA_BASE', 'data'))
+    repo_root = os.path.abspath(os.environ.get('REPO_ROOT', '.'))
+    # Relative path (e.g. arxiv_fulltext_html_251117/xxx.html from create_raw)
+    for base in (repo_root, data_base):
+        candidate = os.path.normpath(os.path.join(base, readme_path))
+        if os.path.exists(candidate):
+            return candidate
+    # Legacy absolute path (e.g. /Users/.../CitationLake/data/arxiv_fulltext_html_251117/xxx.html)
+    if 'data/' in str(readme_path):
+        rel = str(readme_path).split('data/', 1)[-1].lstrip('/')
+        for base in (data_base, repo_root):
+            candidate = os.path.normpath(os.path.join(base, rel))
+            if os.path.exists(candidate):
+                return candidate
+        if rel.startswith('arxiv_fulltext_html'):
+            for dir_name in ('arxiv_fulltext_html', 'arxiv_fulltext_html_251117'):
+                candidate = os.path.normpath(os.path.join(repo_root, dir_name, rel.split('/', 1)[-1] if '/' in rel else rel))
+                if os.path.exists(candidate):
+                    return candidate
+    return readme_path
+
 def process_readme_content(row, tmp_dir):
     """
     Process readme content based on source type.
@@ -219,7 +246,7 @@ def process_readme_content(row, tmp_dir):
     For GitHub: read from file and process, keeping original filename
     """
     source = row['source']
-    readme_path = row['readme_path']
+    readme_path = _resolve_readme_path(row['readme_path'])
     csv_path = row['csv_path']  # Original CSV path for filename
     dedup_csv_path = row['dedup_csv_path']  # Use this for table number extraction
     

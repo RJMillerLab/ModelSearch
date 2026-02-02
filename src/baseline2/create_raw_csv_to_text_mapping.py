@@ -11,6 +11,24 @@ def to_parquet(df, output_path, **kwargs):
     return output_path
 
 
+def _html_path_to_relative(html_path):
+    """Convert absolute html_path (e.g. /Users/.../CitationLake/data/arxiv_fulltext_html_251117/xxx.html) to relative so parquet is portable."""
+    if pd.isna(html_path) or not isinstance(html_path, str):
+        return html_path
+    path = html_path.strip()
+    if not path:
+        return html_path
+    # Store path relative to "data/" so any machine can use DATA_BASE + this path
+    if "data/" in path:
+        rel = path.split("data/", 1)[-1].lstrip("/")
+        return rel.replace("\\", "/")
+    if "arxiv_fulltext_html" in path:
+        # e.g. /foo/arxiv_fulltext_html_251117/xxx.html -> arxiv_fulltext_html_251117/xxx.html
+        idx = path.find("arxiv_fulltext_html")
+        return path[idx:].replace("\\", "/")
+    return path
+
+
 def load_mappings():
     """
     Load all mapping files and return a list of (csv_path, readme_path, source)
@@ -135,7 +153,7 @@ def load_mappings():
                                     csv_path = csv_path.replace('tables_output/', f'tables_output_v2{suffix}/')
                                 records.append({
                                     'csv_path': csv_path,
-                                    'readme_path': row['html_path'],
+                                    'readme_path': _html_path_to_relative(row['html_path']),
                                     'source': 'arxiv'
                                 })
                                 arxiv_count += 1
