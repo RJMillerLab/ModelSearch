@@ -152,7 +152,8 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
         )
         
         if result.returncode != 0:
-            print(f"Warning: tab2know inference failed: {result.stderr}")
+            err_msg = result.stderr.strip() if result.stderr else result.stdout.strip() if result.stdout else "(no message)"
+            print(f"Warning: tab2know inference failed (returncode={result.returncode}): {err_msg[:500]}")
             return "unknown"
         
         # Read the result JSONL file
@@ -523,7 +524,7 @@ def main():
     parser.add_argument('--tableid', type=int, default=None,
                        help='Table ID from database (for single mode with database)')
     parser.add_argument('--db_path', default='data_citationlake/modellake.db',
-                       help='Path to modellake.db (for batch mode or single mode with tableid)')
+                       help='Path to modellake.db. Use the same path as create_index_duckdb (e.g. data/modellake.db).')
     parser.add_argument('--index_table', default='modellake_index',
                        help='Name of the index table')
     parser.add_argument('--output_json', default='data/table_classifications.json',
@@ -531,7 +532,7 @@ def main():
     parser.add_argument('--limit', type=int, default=None,
                        help='Limit number of tables to classify (batch mode only)')
     parser.add_argument('--method', choices=['tab2know', 'heuristic', 'ml'], default='tab2know',
-                       help='Classification method (default: tab2know)')
+                       help='Classification method. Use heuristic if tab2know is not set up (e.g. missing models on server).')
     
     args = parser.parse_args()
     
