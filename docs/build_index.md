@@ -188,16 +188,31 @@ If ModelTables is elsewhere, replace `../ModelTables` with the correct path (e.g
 
 **Dependencies:** pyserini and Java/JDK for baseline2; baseline3 also needs dense index from baseline1.
 
+**Expected output:** get_metadata produces `data/tmp/corpus/collection.jsonl` (e.g. ~41k docs). sparse_search produces `data/tmp/baseline2_sparse_results_<TAG>.json` (e.g. ~33k queries). Many "Could not find table file for XXXXX_tableN" warnings are normal when some arXiv CSVs are missing (path mismatch, e.g. `tables_output` vs `tables_output_v2_251117`); those queries are skipped. **Huggingface mapping:** If `data/processed/hugging_deduped_mapping.json` (or `hugging_deduped_mapping_v2_251117.json`) is missing, the script skips Huggingface and uses GitHub + arXiv only; corpus and sparse search still run.
+
 ### Baseline2: Sparse search (BM25)
 
+Commands below match **ModelTables/docs/scripts.md** Section 7 (Baseline2). Two entry points: `get_metadata.sh` then `sparse_search.sh` (the latter runs: build Lucene index → create queries → BM25 search → postprocess).
+
 ```bash
-# Get metadata: csv→readme mapping, then corpus data/tmp/corpus/collection.jsonl
+ln -s /u1/z6dong/Repo/ModelTables/data/tmp/ data/
+ln -s /u1/z6dong/Repo/ModelTables/data/analysis/ data/
+ln -s /u1/z6dong/Repo/ModelTables/data/processed/ data/
+ln -s /u1/z6dong/Repo/ModelTables/data/deduped/ data/
+ln -s /u1/z6dong/Repo/ModelTables/arxiv_fulltext_html ./
+ln -s /u1/z6dong/Repo/ModelTables/data/downloaded_github_readmes data/
+ln -s /u1/z6dong/Repo/ModelTables/data/downloaded_github_readmes_251117 ./
+ln -s /u1/z6dong/Repo/ModelTables/data/arxiv_fulltext_html_251117 ./
+
+# 1) Get metadata: csv→readme mapping, then corpus data/tmp/corpus/collection.jsonl
 TAG=251117 bash src/baseline2/get_metadata.sh > logs/baseline2_get_metadata_251117.log 2>&1
-# Build Pyserini index and run sparse search
+# 2) Build Pyserini index + create queries + search + postprocess (all-in-one)
 TAG=251117 bash src/baseline2/sparse_search.sh > logs/baseline2_sparse_search_251117.log 2>&1
 ```
 
-Output: `data/tmp/baseline2_sparse_results_251117.json` (and `data/tmp/search_result_251117.json`).
+Output: `data/tmp/baseline2_sparse_results_251117.json` (and `data/tmp/search_result_251117.json`). For Starmie evaluation metrics, see ModelTables Section 6: `TAG=251117 bash scripts/step3_processmetrics_all.sh <index>` (run from ModelTables repo).
+
+**Java (for baseline2):** Pyserini needs Java to build the Lucene index and run search. Set `JAVA_HOME` and have `javac` on PATH before running baseline2; e.g. `conda install -c conda-forge openjdk`.
 
 ### Baseline3: Hybrid (sparse + dense)
 
@@ -215,7 +230,7 @@ python -m src.baseline1.table_retrieval_pipeline build_faiss \
 TAG=251117 python src/baseline2/search_with_pyserini_hybrid.py \
   --sparse-index data/tmp/index_251117 --dense-index data/tmp/index_dense_251117 \
   --queries data/tmp/queries_table.tsv --mapping data/tmp/queries_table_mapping.json \
-  --k 11 --alpha 0.45 --device cpu > logs/baseline3_hybrid_search_251117.log 2>&1
+  --k 11 --alpha 0.45 --device cuda > logs/baseline3_hybrid_search_251117.log 2>&1
 ```
 
 Option B — sparse-first then hybrid rerank (see `src/baseline3/hybrid_search.sh`):

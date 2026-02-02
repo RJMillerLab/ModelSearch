@@ -38,6 +38,17 @@ from pyserini.search.lucene import LuceneSearcher
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+# Lucene BooleanQuery maxClauseCount=1024; keep query terms under that.
+MAX_QUERY_TERMS = 1000
+
+
+def truncate_query(text: str, max_terms: int = MAX_QUERY_TERMS) -> str:
+    """Truncate query to at most max_terms to avoid TooManyClauses in Lucene."""
+    toks = re.findall(r"\w+", text)
+    if len(toks) <= max_terms:
+        return text
+    return " ".join(toks[:max_terms])
+
 
 def load_queries(tsv_file: str):
     qs = {}
@@ -68,11 +79,30 @@ def main():
                     help="Path to ID mapping JSON file. If not specified, uses queries_table_mapping.json or queries_table_<TAG>_mapping.json if TAG env var is set.")
     ap.add_argument("--k", type=int, default=11)
     ap.add_argument("--alpha", type=float, default=0.45)
-    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--device", default="cpu",
+                    help="Device for dense encoder: cpu, cuda, or auto (cuda if available else cpu).")
     ap.add_argument("--output", type=str, default=None,
                     help="Output JSON file path. If not specified, uses search_result_hybrid.json or search_result_hybrid_<TAG>.json if TAG env var is set.")
     args = ap.parse_args()
-    
+
+    # Resolve device: auto → cuda if available else cpu; cuda → fallback to cpu if not available
+    device = args.device.lower()
+    if device == "auto" or device == "cuda":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+            else:
+                if args.device.lower() == "cuda":
+                    print("Warning: --device cuda requested but CUDA not available, using cpu.")
+                device = "cpu"
+        except Exception:
+            if args.device.lower() == "cuda":
+                print("Warning: --device cuda requested but torch/CUDA check failed, using cpu.")
+            device = "cpu"
+    args.device = device
+    print(f"[init] device = {args.device}")
+
     # Support TAG environment variable for versioning
     tag = os.environ.get('TAG', '')
     suffix = f"_{tag}" if tag else ""
@@ -142,15 +172,12 @@ def main():
 
     results = {}
     total = len(queries)
-    max_terms = 1024
-    token_pat = re.compile(r"\w+")
 
     for i, (qid, text) in enumerate(queries.items(), 1):
         if i % 500 == 0 or i == total:
             print(f"[{i}/{total}] {qid}")
 
-        toks = token_pat.findall(text)
-        query_txt = " ".join(toks[:max_terms]) if len(toks) > max_terms else text
+        query_txt = truncate_query(text)
 
         try:
             hits = hybrid.search(query_txt, k=args.k, alpha=args.alpha)
@@ -159,7 +186,7 @@ def main():
             print(f"  !! Error for {qid}: {title}, logged to {debug_log}")
             with open(debug_log, "a", encoding="utf-8") as df:
                 df.write(f"=== Error for QID={qid} ===\n")
-                df.write(f"Original tokens: {len(toks)}, used: {len(token_pat.findall(query_txt))}\n")
+                df.write(f"Original tokens: {len(re.findall(r'\w+', text))}, used: {len(query_txt.split())}\n")
                 df.write("Query snippet: " + query_txt[:200] + "…\n")
                 traceback.print_exc(file=df)
             continue

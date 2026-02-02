@@ -3,6 +3,16 @@ import json
 import argparse
 import os
 
+# Lucene BooleanQuery has maxClauseCount=1024 by default; long table-as-query hits this.
+MAX_QUERY_TERMS = 1024
+
+def truncate_query(text, max_terms=MAX_QUERY_TERMS):
+    """Truncate query to at most max_terms to avoid TooManyClauses in Lucene."""
+    terms = text.split()
+    if len(terms) <= max_terms:
+        return text
+    return " ".join(terms[:max_terms])
+
 def load_id_mapping(mapping_file):
     """Load ID mapping from JSON file."""
     with open(mapping_file, 'r', encoding='utf-8') as f:
@@ -102,7 +112,8 @@ def main():
     for i, (qid, text) in enumerate(queries.items(), 1):
         print(f"Searching for query {qid} ({i}/{total})...")
         try:
-            hits = searcher.search(text, k=args.hits)  # Use user-specified hits
+            query_text = truncate_query(text)
+            hits = searcher.search(query_text, k=args.hits)  # Use user-specified hits
             
             # Store results with original IDs
             original_id = id_mapping[qid]
