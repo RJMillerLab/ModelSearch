@@ -115,19 +115,19 @@ Structure/table retrieval: get model's tables, run table-to-table search (Blend)
 
 **Single search type (e.g. keyword):**
 ```bash
-python -m src.search.card2tab2card --model_id senseable/33x-coder --search_type keyword --k 10
+python -m src.search.card2tab2card --model_id senseable/33x-coder --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
 ```
 
 Other `--search_type`: `single_column`, `multi_column`, `unionable`. Optional: `--query <csv_path>` for multi_column/unionable; `--output_json data/card2tab2card_results.json`, `--db_path data/modellake.db`.
 
 **All search types (single_column, keyword, unionable):**
 ```bash
-python -m src.search.card2tab2card --model_id senseable/33x-coder --mode all --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --output_folder data
+python -m src.search.card2tab2card --model_id senseable/33x-coder --mode all --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --output_folder data > logs/card2tab2card_all.log 2>&1
 ```
 
 **By table type (requires classification JSON from 1.5):**
 ```bash
-python -m src.search.card2tab2card --model_id <model_id> --mode by_type --classification_json data/table_classifications.json
+python -m src.search.card2tab2card --model_id senseable/33x-coder--mode by_type --classification_json data/table_classifications.json > logs/card2tab2card_by_type.log 2>&1
 ```
 
 ---
@@ -168,9 +168,63 @@ Then open http://localhost:5001. The demo wires query2modelcard, card2card, card
 
 ---
 
-## 2.7 baseline2 / baseline3 (sparse, hybrid; from ModelTables)
+## 2.7 baseline2 / baseline3 (table retrieval: sparse, hybrid; copied from ModelTables)
 
-Additional retrieval strategies (e.g. baseline2, baseline3 from ModelTables/src — sparse/hybrid variants) can be copied and tested later; after testing, rename and organize under this repo. For now, card2card search already provides sparse and hybrid (see 2.2).
+**Note:** card2card (2.2) already provides sparse/hybrid for **model-card** retrieval. Baseline2/baseline3 here are **table retrieval** baselines (BM25 sparse, hybrid sparse+dense) for the Starmie-style evaluation pipeline. They are copied from ModelTables; full workflow is in **ModelTables/docs/scripts.md** (Section 7).
+
+### Copy baseline2 and baseline3 from ModelTables
+
+Run from **ModelSearchDemo** repo root. Use the path to your ModelTables repo (e.g. sibling `../ModelTables` or absolute path).
+
+```bash
+# From ModelSearchDemo repo root; ModelTables as sibling repo
+cp -r ../ModelTables/src/baseline2 src/
+cp -r ../ModelTables/src/baseline3 src/
+```
+
+If ModelTables is elsewhere, replace `../ModelTables` with the correct path (e.g. `/path/to/ModelTables`). This repo already provides `to_parquet` in `src/utils` for baseline2 compatibility.
+
+**Data requirement:** Baseline2/3 expect ModelTables-style processed data under `data/` (e.g. `data/processed/` with parquet and `deduped_github_csvs*`, `deduped_hugging_csvs*`, etc.). If your data lives under `data_citationlake/`, either symlink `ln -s /path/to/ModelTables/data data` when layout matches, or set `TAG` and ensure `data/processed/`, `data/analysis/` exist. **TAG** env (e.g. `TAG=251117`) is used for versioned paths.
+
+**Dependencies:** pyserini and Java/JDK for baseline2; baseline3 also needs dense index from baseline1.
+
+### Baseline2: Sparse search (BM25)
+
+```bash
+# Get metadata: csv→readme mapping, then corpus data/tmp/corpus/collection.jsonl
+TAG=251117 bash src/baseline2/get_metadata.sh > logs/baseline2_get_metadata_251117.log 2>&1
+# Build Pyserini index and run sparse search
+TAG=251117 bash src/baseline2/sparse_search.sh > logs/baseline2_sparse_search_251117.log 2>&1
+```
+
+Output: `data/tmp/baseline2_sparse_results_251117.json` (and `data/tmp/search_result_251117.json`).
+
+### Baseline3: Hybrid (sparse + dense)
+
+Option A — use Pyserini hybrid (single script):
+
+```bash
+# Prerequisite: sparse index from baseline2 (data/tmp/index_251117), and dense index:
+mkdir -p data/tmp/index_dense_251117
+python -m src.baseline1.table_retrieval_pipeline encode \
+  --jsonl data/tmp/corpus/collection.jsonl --model_name sentence-transformers/all-MiniLM-L6-v2 \
+  --batch_size 256 --output_npz data/tmp/index_dense_251117/embeddings.npz --device cuda
+python -m src.baseline1.table_retrieval_pipeline build_faiss \
+  --emb_npz data/tmp/index_dense_251117/embeddings.npz --output_index data/tmp/index_dense_251117/index.faiss
+
+TAG=251117 python src/baseline2/search_with_pyserini_hybrid.py \
+  --sparse-index data/tmp/index_251117 --dense-index data/tmp/index_dense_251117 \
+  --queries data/tmp/queries_table.tsv --mapping data/tmp/queries_table_mapping.json \
+  --k 11 --alpha 0.45 --device cpu > logs/baseline3_hybrid_search_251117.log 2>&1
+```
+
+Option B — sparse-first then hybrid rerank (see `src/baseline3/hybrid_search.sh`):
+
+```bash
+TAG=251117 bash src/baseline3/hybrid_search.sh > logs/baseline3_hybrid_251117.log 2>&1
+```
+
+Postprocess hybrid results if needed (same as baseline2): `python src/baseline2/postprocess.py --input ... --output data/tmp/baseline3_hybrid_results_251117.json --top1-list ...`.
 
 ---
 
@@ -183,6 +237,7 @@ Additional retrieval strategies (e.g. baseline2, baseline3 from ModelTables/src 
 | Modelcard index (3 steps) | build_modelcard_jsonl → table_retrieval_pipeline encode → table_retrieval_pipeline build_faiss |
 | Push to servers | `./scripts/push_index_to_servers.sh` |
 | Blend setup | clone/symlink `src/Blend_internal`; optional `ln -s ... data_citationlake` |
+| Copy baseline2/3 from ModelTables | `cp -r ../ModelTables/src/baseline2 src/` and `cp -r ../ModelTables/src/baseline3 src/` |
 | DuckDB table index | `python -m src.Blend_internal.scripts.create_index_duckdb --db_path ... --data_glob ... --table modellake_index` |
 | Table classification | `python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json` |
 | **Part 2** | |
@@ -193,4 +248,8 @@ Additional retrieval strategies (e.g. baseline2, baseline3 from ModelTables/src 
 | card2tab2card | `python -m src.search.card2tab2card --model_id <id> --search_type keyword --k 10` |
 | tab2tab (keyword = headers) | `python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 --db_path data/modellake.db` |
 | tab2tab_by_type | `python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type single_column --k 10` |
+| baseline2 (sparse table retrieval) | `TAG=251117 bash src/baseline2/get_metadata.sh` then `bash src/baseline2/sparse_search.sh` |
+| baseline3 (hybrid table retrieval) | Build dense index (baseline1 encode + build_faiss), then `python src/baseline2/search_with_pyserini_hybrid.py ...` or `bash src/baseline3/hybrid_search.sh` |
 | Demo (evaluation, QA, integration) | `python -m src.demo.backend` + `python -m src.demo.frontend` → http://localhost:5001 |
+
+**Reference:** Full data pipeline and baseline commands (including baseline1 unified, Starmie steps): **ModelTables/docs/scripts.md**.

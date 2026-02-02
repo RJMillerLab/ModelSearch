@@ -5,6 +5,15 @@ import pandas as pd
 import os
 
 
+def to_parquet(df: pd.DataFrame, output_path: str, **kwargs):
+    """
+    Save DataFrame to Parquet. Compatible with ModelTables baseline2/baseline3.
+    Uses pandas .to_parquet() (default compression).
+    """
+    df.to_parquet(output_path, index=False, **kwargs)
+    return output_path
+
+
 def load_combined_data(data_type, file_path="data/raw", columns=[]):
     """
     Load combined parquet files for modelcard or datasetcard.
