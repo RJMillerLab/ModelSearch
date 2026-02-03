@@ -262,6 +262,7 @@ Then use this tool for search:
     args = parser.parse_args()
     
     try:
+        start_time = time.time()
         # Parse query based on search type
         query = None
         if args.search_type == 'single_column':

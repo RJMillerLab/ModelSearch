@@ -186,7 +186,7 @@ If ModelTables is elsewhere, replace `../ModelTables` with the correct path (e.g
 
 **Data requirement:** Baseline2/3 expect ModelTables-style processed data under `data/` (e.g. `data/processed/` with parquet and `deduped_github_csvs*`, `deduped_hugging_csvs*`, etc.). If your data lives under `data_citationlake/`, either symlink `ln -s /path/to/ModelTables/data data` when layout matches, or set `TAG` and ensure `data/processed/`, `data/analysis/` exist. **TAG** env (e.g. `TAG=251117`) is used for versioned paths.
 
-**Dependencies:** pyserini and Java/JDK for baseline2; baseline3 also needs dense index from baseline1. **One conda env is enough:** install pyserini and Java (e.g. `conda install -c conda-forge openjdk`) in the same env as faiss/torch (e.g. faiss_gpu_env); no need for separate pyserini or hybrid envs.
+**Dependencies:** pyserini and Java/JDK for baseline2; baseline3 also needs dense index from baseline1.
 
 **Expected output:** get_metadata produces `data/tmp/corpus/collection.jsonl` (e.g. ~41k docs). sparse_search produces `data/tmp/baseline2_sparse_results_<TAG>.json` (e.g. ~33k queries). Many "Could not find table file for XXXXX_tableN" warnings are normal when some arXiv CSVs are missing (path mismatch, e.g. `tables_output` vs `tables_output_v2_251117`); those queries are skipped. **Huggingface mapping:** If `data/processed/hugging_deduped_mapping.json` (or `hugging_deduped_mapping_v2_251117.json`) is missing, the script skips Huggingface and uses GitHub + arXiv only; corpus and sparse search still run.
 
@@ -268,3 +268,19 @@ Postprocess hybrid results if needed (same as baseline2): `python src/baseline2/
 | Demo (evaluation, QA, integration) | `python -m src.demo.backend` + `python -m src.demo.frontend` → http://localhost:5001 |
 
 **Reference:** Full data pipeline and baseline commands (including baseline1 unified, Starmie steps): **ModelTables/docs/scripts.md**.
+
+---
+
+## Performance & logs (from `logs/`)
+
+| Component | Typical duration (from logs) | Bottleneck / note |
+|-----------|-------------------------------|--------------------|
+| **query2modelcard** | ~10 s | Embedding query (SentenceTransformer) + FAISS search; first run loads model. |
+| **card2card** (dense / sparse / hybrid) | Seconds per mode | Dense: FAISS + optional encode; sparse: BM25 (Pyserini); hybrid: both + RRF. CLI now prints `⏱️ Total time`. Demo runs all 3 modes **in parallel** (ThreadPoolExecutor). |
+| **card2tab2card** (single / all / by_type) | Varies by search type | Blend_internal tab search + DuckDB + parquet lookup. Demo runs Card2Card and all Card2Tab2Card search types **in parallel**; logs stream via SSE. |
+| **tab2tab** (keyword) | &lt;1 s | DuckDB only; very fast. |
+| **tab2tab_by_type** | Depends on classification + filter | Classification (tab2know or heuristic) can be slow; search itself is fast. |
+| **baseline2** (sparse_search.sh) | Lucene index ~7 min (47k docs); then create queries + BM25 | Indexing is one-time; BM25 search scale with #queries. |
+| **baseline3** (hybrid) | Requires dense index path | Ensure `data/tmp/index_dense_<TAG>/` exists (from baseline1 encode + Pyserini index). |
+
+CLI scripts print `⏱️ Total time` at exit when run to completion. Redirect to a file (e.g. `> logs/xxx.log 2>&1`) to keep timings. Demo backend logs with timestamps and streams them via `/api/logs/<job_id>`.

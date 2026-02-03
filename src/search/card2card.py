@@ -594,6 +594,7 @@ def main():
         print(f"Found {len(neighbors)} neighbors for {args.model_id} (mode: {args.retrieval_mode})")
         for i, neighbor in enumerate(neighbors, 1):
             print(f"  {i}. {neighbor}")
+        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
     elif args.command == 'search-batch':
         neighbors = search_card2card_batch(
             emb_npz=args.emb_npz,

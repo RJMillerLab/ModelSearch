@@ -1288,6 +1288,7 @@ def main():
     args = parser.parse_args()
     
     try:
+        start_time = time.time()
         # If mode=all, run all three search types
         if args.mode == 'all':
             print(f"\n{'='*60}")

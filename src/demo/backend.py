@@ -260,49 +260,50 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         # Step 3: Run Card2Card and Card2Tab2Card in parallel
         logger.log("Step 3: Running Card2Card and Card2Tab2Card pipelines in parallel...")
         
+        def run_one_card2card_mode(mode):
+            """Run Card2Card for one retrieval mode (used in parallel)."""
+            retrieval_mode_display = {
+                "sparse": "sparse (BM25)",
+                "dense": "dense (FAISS)",
+                "hybrid": "hybrid (BM25 + FAISS)"
+            }.get(mode, mode)
+            logger.log(f"  [Card2Card-{mode.upper()}] Starting {retrieval_mode_display} semantic search...")
+            try:
+                expanded_topk = max(top_k * 2, top_k + 5)
+                logger.log(f"  ℹ️  [Card2Card-{mode.upper()}] Using expanded top_k: {expanded_topk} (requested: {top_k})")
+                results = search_card2card(
+                    model_id=model_id,
+                    emb_npz=DEFAULT_EMB_NPZ,
+                    faiss_index=DEFAULT_FAISS_INDEX,
+                    top_k=expanded_topk,
+                    output_json=None,
+                    retrieval_mode=mode,
+                    jsonl_path=DEFAULT_JSONL,
+                    hybrid_method="rrf"
+                )
+                final_results = results[:top_k]
+                logger.log(f"  ✅ [Card2Card-{mode.upper()}] Found {len(results)} results (returning top {len(final_results)})")
+                return (mode, final_results)
+            except Exception as e:
+                logger.log(f"  ❌ [Card2Card-{mode.upper()}] Error: {str(e)}")
+                import traceback
+                logger.log(f"  Traceback: {traceback.format_exc()}")
+                return (mode, {"error": str(e)})
+
         def run_card2card_all_modes():
-            """Run Card2Card pipeline for all retrieval modes"""
+            """Run Card2Card pipeline for all retrieval modes in parallel."""
             all_results = {}
             retrieval_modes = ["dense", "sparse", "hybrid"]
-            
-            for mode in retrieval_modes:
-                retrieval_mode_display = {
-                    "sparse": "sparse (BM25)",
-                    "dense": "dense (FAISS)",
-                    "hybrid": "hybrid (BM25 + FAISS)"
-                }.get(mode, mode)
-                logger.log(f"  [Card2Card-{mode.upper()}] Starting {retrieval_mode_display} semantic search...")
-                try:
-                    # Increase topk slightly to get more results (e.g., topk=3 -> 5-10 results)
-                    # Use max(top_k * 2, top_k + 5) to ensure we get more results
-                    expanded_topk = max(top_k * 2, top_k + 5)
-                    logger.log(f"  ℹ️  [Card2Card-{mode.upper()}] Using expanded top_k: {expanded_topk} (requested: {top_k})")
-                    results = search_card2card(
-                        model_id=model_id,
-                        emb_npz=DEFAULT_EMB_NPZ,
-                        faiss_index=DEFAULT_FAISS_INDEX,
-                        top_k=expanded_topk,
-                        output_json=None,
-                        retrieval_mode=mode,
-                        jsonl_path=DEFAULT_JSONL,
-                        hybrid_method="rrf"  # Default to RRF for hybrid
-                    )
-                    # Limit to requested top_k for final results
-                    final_results = results[:top_k]
-                    all_results[mode] = final_results
-                    logger.log(f"  ✅ [Card2Card-{mode.upper()}] Found {len(results)} results (returning top {len(final_results)})")
-                except Exception as e:
-                    logger.log(f"  ❌ [Card2Card-{mode.upper()}] Error: {str(e)}")
-                    import traceback
-                    logger.log(f"  Traceback: {traceback.format_exc()}")
-                    all_results[mode] = {"error": str(e)}
-            
-            # Return the selected mode's results as primary, plus all modes
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = {executor.submit(run_one_card2card_mode, m): m for m in retrieval_modes}
+                for future in as_completed(futures):
+                    mode, result = future.result()
+                    all_results[mode] = result
+
             primary_results = all_results.get(card2card_retrieval_mode, all_results.get("dense", []))
             if isinstance(primary_results, dict) and "error" in primary_results:
-                # If primary failed, try to use dense as fallback
                 primary_results = all_results.get("dense", [])
-            
+
             return {
                 "primary": primary_results if not isinstance(primary_results, dict) else [],
                 "all_modes": all_results
