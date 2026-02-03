@@ -224,12 +224,20 @@ python -m src.demo.frontend
 
 Access the web interface at `http://localhost:5001`
 
-## Key Libraries
+## Key libraries & acknowledgments
 
-- **FAISS**: Dense vector similarity search
-- **rank-bm25**: Sparse retrieval (BM25)
-- **sentence-transformers**: Text embeddings
-- **Blend_internal**: Table-to-table search
-- **OpenAI API**: LLM calls for evaluation/QA
-- **tenacity**: API retry handling
-- **Flask**: Web framework
+We use the following libraries and borrowed components (with install needs):
+
+| Component | Role | Link |
+|-----------|------|------|
+| **FAISS** | Dense vector similarity search | [faiss](https://github.com/facebookresearch/faiss) |
+| **rank-bm25** | Sparse retrieval (BM25) for card2card | PyPI: `rank-bm25` |
+| **sentence-transformers** | Text embeddings | [sentence-transformers](https://github.com/UKPLab/sentence-transformers) |
+| **Pyserini** | BM25 (Lucene) + hybrid for **table retrieval** baselines (baseline2/3); requires **Java/JDK** | [Pyserini](https://github.com/castorini/pyserini) |
+| **ModelTables** | Data pipeline, baseline2/3 scripts (get_metadata, sparse_search, search_with_pyserini_hybrid), Starmie-style evaluation | [ModelTables](https://github.com/RJMillerLab/ModelTables) |
+| **Blend** | Original table-to-table search design | [Blend](https://github.com/LUH-DBS/Blend) |
+| **Blend_internal** | Blend reimplementation adapted for ModelTables; used for card2tab2card & tab2tab | [Blend_internal](https://github.com/DoraDong-2023/Blend_internal) |
+| **OpenAI API** | LLM calls for evaluation/QA | openai |
+| **Flask** | Web framework for demo | flask |
+
+**Install:** Core deps: `pip install -r requirements.txt`. Table search: clone/symlink [Blend_internal](https://github.com/DoraDong-2023/Blend_internal) (see Installation above). Baseline2/3: install **pyserini** and **Java** in the same env (e.g. `conda install -c conda-forge openjdk`). One env (e.g. faiss_gpu_env + pyserini + Java) can run dense, sparse, and hybrid; see `docs/build_index.md`.

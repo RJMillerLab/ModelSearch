@@ -186,7 +186,7 @@ If ModelTables is elsewhere, replace `../ModelTables` with the correct path (e.g
 
 **Data requirement:** Baseline2/3 expect ModelTables-style processed data under `data/` (e.g. `data/processed/` with parquet and `deduped_github_csvs*`, `deduped_hugging_csvs*`, etc.). If your data lives under `data_citationlake/`, either symlink `ln -s /path/to/ModelTables/data data` when layout matches, or set `TAG` and ensure `data/processed/`, `data/analysis/` exist. **TAG** env (e.g. `TAG=251117`) is used for versioned paths.
 
-**Dependencies:** pyserini and Java/JDK for baseline2; baseline3 also needs dense index from baseline1.
+**Dependencies:** pyserini and Java/JDK for baseline2; baseline3 also needs dense index from baseline1. **One conda env is enough:** install pyserini and Java (e.g. `conda install -c conda-forge openjdk`) in the same env as faiss/torch (e.g. faiss_gpu_env); no need for separate pyserini or hybrid envs.
 
 **Expected output:** get_metadata produces `data/tmp/corpus/collection.jsonl` (e.g. ~41k docs). sparse_search produces `data/tmp/baseline2_sparse_results_<TAG>.json` (e.g. ~33k queries). Many "Could not find table file for XXXXX_tableN" warnings are normal when some arXiv CSVs are missing (path mismatch, e.g. `tables_output` vs `tables_output_v2_251117`); those queries are skipped. **Huggingface mapping:** If `data/processed/hugging_deduped_mapping.json` (or `hugging_deduped_mapping_v2_251117.json`) is missing, the script skips Huggingface and uses GitHub + arXiv only; corpus and sparse search still run.
 
