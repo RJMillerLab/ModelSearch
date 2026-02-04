@@ -180,12 +180,19 @@ def search_table2table_by_type(
     matching_tableids = get_tables_by_classification(query_classification, classifications)
     print(f"✅ Found {len(matching_tableids)} tables with classification '{query_classification}'")
     
+    # When query is "unknown" (e.g. tab2know failed) and no tables have "unknown", fallback to unfiltered search
+    skip_type_filter = False
     if not matching_tableids:
-        print(f"⚠️  No tables found with classification '{query_classification}'")
-        print(f"   Returning empty results")
-        return []
+        if query_classification == "unknown":
+            print(f"⚠️  No tables with classification 'unknown'; falling back to unfiltered search")
+            skip_type_filter = True
+            matching_tableids = list(classifications.keys())  # allow any table for filtering step
+        else:
+            print(f"⚠️  No tables found with classification '{query_classification}'")
+            print(f"   Returning empty results")
+            return []
     
-    # Step 4: Run tab2tab search (we'll filter results afterward)
+    # Step 4: Run tab2tab search (we'll filter results afterward unless skip_type_filter)
     print(f"\n🔍 Step 4: Running table search...")
     print(f"   Search type: {search_type}")
     print(f"   Top K: {k}")
@@ -204,17 +211,17 @@ def search_table2table_by_type(
     
     print(f"✅ Found {len(all_results)} candidate tables")
     
-    # Step 5: Filter results to only include tables with matching classification
+    # Step 5: Filter results by classification (unless we fell back to unfiltered)
     print(f"\n📊 Step 5: Filtering results by classification...")
-    filtered_results = [tid for tid in all_results if tid in matching_tableids]
+    if skip_type_filter:
+        final_results = all_results[:k]
+        print(f"✅ Using unfiltered results (query was 'unknown'): {len(final_results)} tables")
+    else:
+        filtered_results = [tid for tid in all_results if tid in matching_tableids]
+        final_results = filtered_results[:k]
+        print(f"✅ Filtered to {len(final_results)} tables with matching classification")
     
-    # If we don't have enough results, we could expand the search
-    # For now, just return what we have (up to k)
-    final_results = filtered_results[:k]
-    
-    print(f"✅ Filtered to {len(final_results)} tables with matching classification")
-    
-    if len(final_results) < k:
+    if len(final_results) < k and not skip_type_filter:
         print(f"⚠️  Only found {len(final_results)} results (requested {k})")
         print(f"   This may be because there are few tables with classification '{query_classification}'")
     

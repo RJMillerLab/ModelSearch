@@ -98,11 +98,11 @@ Semantic retrieval: dense (FAISS), sparse (BM25), or hybrid (RRF). Uses Step-1 i
 
 ```bash
 # dense
-python -m src.search.card2card search --model_id senseable/33x-coder --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
 # sparse
-python -m src.search.card2card search --model_id senseable/33x-coder --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
 # hybrid
-python -m src.search.card2card search --model_id senseable/33x-coder --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
 ```
 
 Optional: `--output_json <path>`. Batch: `python -m src.search.card2card search-batch --emb_npz ... --faiss_index ... --top_k 20 --output_json data/card2card_neighbors.json > logs/card2card_batch.log 2>&1`.
@@ -115,19 +115,19 @@ Structure/table retrieval: get model's tables, run table-to-table search (Blend)
 
 **Single search type (e.g. keyword):**
 ```bash
-python -m src.search.card2tab2card --model_id senseable/33x-coder --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
 ```
 
 Other `--search_type`: `single_column`, `multi_column`, `unionable`. Optional: `--query <csv_path>` for multi_column/unionable; `--output_json data/card2tab2card_results.json`, `--db_path data/modellake.db`.
 
 **All search types (single_column, keyword, unionable):**
 ```bash
-python -m src.search.card2tab2card --model_id senseable/33x-coder --mode all --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --output_folder data > logs/card2tab2card_all.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --output_folder data > logs/card2tab2card_all.log 2>&1
 ```
 
 **By table type (requires classification JSON from 1.5):**
 ```bash
-python -m src.search.card2tab2card --model_id senseable/33x-coder--mode by_type --classification_json data/table_classifications.json > logs/card2tab2card_by_type.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type --classification_json data/table_classifications.json > logs/card2tab2card_by_type.log 2>&1
 ```
 
 ---

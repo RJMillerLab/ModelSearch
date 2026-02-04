@@ -36,7 +36,8 @@ try:
         classify_table,
         classify_table_from_db,
         classify_datalake_batch,
-        load_classifications
+        load_classifications,
+        get_known_classes
     )
     
     from .tab2tab_by_type import (
@@ -70,7 +71,8 @@ except ImportError:
         classify_table,
         classify_table_from_db,
         classify_datalake_batch,
-        load_classifications
+        load_classifications,
+        get_known_classes
     )
     
     from src.search.tab2tab_by_type import (
@@ -129,4 +131,5 @@ __all__ = [
     'classify_table_from_db',
     'classify_datalake_batch',
     'load_classifications',
+    'get_known_classes',
 ]

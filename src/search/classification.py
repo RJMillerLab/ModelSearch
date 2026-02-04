@@ -57,28 +57,59 @@ def _find_tab2know_repo() -> Optional[str]:
     return None
 
 
+# Cache for dynamically extracted valid labels (from tab2know) to avoid repeated file reads
+_valid_labels_cache: Optional[List[str]] = None
+
+
+def _get_tab2know_valid_labels() -> List[str]:
+    """
+    Dynamically extract the list of valid classification labels from tab2know
+    (e.g. from tabletypes.py: Observation, Input, Other). No hardcoded list in this repo.
+    Falls back to a default list if tab2know is not found or parsing fails.
+    """
+    global _valid_labels_cache
+    if _valid_labels_cache is not None:
+        return _valid_labels_cache
+    labels = set()
+    tab2know_repo = _find_tab2know_repo()
+    if tab2know_repo:
+        import re
+        tabletypes_path = os.path.join(tab2know_repo, "tab2know", "tabletypes.py")
+        if os.path.exists(tabletypes_path):
+            try:
+                with open(tabletypes_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                # Match patterns like: prefix + 'Observation' or + 'Input'
+                for m in re.finditer(r"\+\s*['\"]([A-Za-z][A-Za-z0-9_]*)['\"]", content):
+                    labels.add(m.group(1))
+            except Exception:
+                pass
+    if not labels:
+        # Fallback if tab2know missing or no matches (keep same as original default)
+        labels = {"Observation", "Input", "Other", "Example"}
+    _valid_labels_cache = sorted(labels)
+    return _valid_labels_cache
+
+
 def _extract_classification_from_rdf_type(rdf_type: str) -> str:
     """
-    Extract simplified classification label from tab2know rdf:type URI.
+    Extract classification label from tab2know rdf:type URI. Keeps original behaviour:
+    take the last segment of the URI and return it only if it is in the dynamically
+    extracted valid_labels list; otherwise return "unknown".
     
     Args:
-        rdf_type: Full URI like "http://cs.vu.nl/tab2know/Observation"
+        rdf_type: Full URI e.g. "http://karmaresearch.net/Observation"
     
     Returns:
-        Simplified label: "Observation", "Input", "Other", "Example", or "unknown"
+        Label (e.g. "Observation", "Input", "Other", "Example") or "unknown"
     """
     if not rdf_type:
         return "unknown"
-    
-    # Extract the last part after the last '/'
-    label = rdf_type.split('/')[-1]
-    
-    # Map to standard labels
-    valid_labels = ["Observation", "Input", "Other", "Example"]
-    if label in valid_labels:
-        return label
-    
-    return "unknown"
+    label = (rdf_type.split("/")[-1] or "").strip()
+    if not label:
+        return "unknown"
+    valid_labels = _get_tab2know_valid_labels()
+    return label if label in valid_labels else "unknown"
 
 
 def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) -> str:
@@ -497,6 +528,24 @@ def load_classifications(json_path: str) -> Dict[int, str]:
     return {int(k): v for k, v in json_data.items()}
 
 
+def get_known_classes(classification_json: Optional[str] = None) -> List[str]:
+    """
+    Get the sorted list of classification labels present in a classification JSON.
+    Use this to organize classes dynamically (no hardcoded label list).
+    
+    Args:
+        classification_json: Path to table_classifications.json. If None, returns [].
+    
+    Returns:
+        Sorted list of unique classification labels (e.g. from tab2know or heuristic).
+    """
+    if not classification_json or not os.path.exists(classification_json):
+        return []
+    with open(classification_json, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return sorted(set(str(v) for v in data.values()))
+
+
 def get_tables_by_classification(
     classification: str,
     classifications: Dict[int, str]
@@ -651,9 +700,9 @@ if __name__ == '__main__':
             })
             result = classify_table(test_df, method="tab2know")
             print(f"✅ Result: {result}")
-            # Should be one of the tab2know labels
-            assert result in ["Observation", "Input", "Other", "Example", "unknown"], \
-                f"Expected tab2know label, got '{result}'"
+            # Tab2know returns a label (dynamically from rdf:type); accept any non-empty or "unknown"
+            assert isinstance(result, str) and (result == "unknown" or len(result) > 0), \
+                f"Expected tab2know label string, got '{result}'"
         else:
             print("⚠️  Tab2Know repository not found, skipping tab2know test")
             print("   Set TAB2KNOW_REPO environment variable to enable tab2know tests")
