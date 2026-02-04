@@ -1,6 +1,6 @@
 import os, sys, csv, json
 
-BASE = "http://karmaresearch.net/"
+BASE = "http://cs.vu.nl/tab2know/"
 
 
 def get_pdffigures_meta(fname):

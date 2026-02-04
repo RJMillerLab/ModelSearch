@@ -31,7 +31,7 @@ def convert(metadatastr, reader_func):
     csvw = g.ns['csvw']
     rdf = g.ns['rdf']
     dc = g.ns['dc']
-    karma = rdflib.Namespace('http://karmaresearch.net/')
+    karma = rdflib.Namespace('http://cs.vu.nl/tab2know/')
 
     for table_node, _, name_node in g.triples((None, csvw.url, None)):
 

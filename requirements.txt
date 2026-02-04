@@ -9,14 +9,18 @@ sentence-transformers>=2.2.0
 torch>=1.12.0
 transformers>=4.21.0
 
-# FAISS for similarity search (choose one)
-# For CPU:
-faiss-cpu>=1.7.4
-# For GPU (uncomment if using GPU):
-# faiss-gpu>=1.7.4
-
 # Sparse retrieval (BM25)
 rank-bm25>=0.2.2
+
+# Table classification (tab2know, used by tab2tab_by_type / card2tab2card by_type)
+argh>=0.26.2
+dpath>=2.0.0
+requests>=2.28.0
+networkx>=2.8
+rdflib>=6.0.0
+scipy>=1.9.0
+scikit-learn>=1.0.0
+sklearn-hierarchical-classification>=0.1.0
 
 # OpenAI API and retry handling
 openai>=1.0.0

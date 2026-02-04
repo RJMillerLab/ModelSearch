@@ -47,7 +47,8 @@ try:
         classify_table_from_db,
         classify_datalake_batch,
         load_classifications,
-        get_tables_by_classification
+        get_tables_by_classification,
+        infer_classification_method,
     )
 except (ImportError, ModuleNotFoundError):
     # If import fails, use lazy import
@@ -60,6 +61,7 @@ except (ImportError, ModuleNotFoundError):
     classify_datalake_batch = lambda *args, **kwargs: _lazy_classification_import('classify_datalake_batch')(*args, **kwargs)
     load_classifications = lambda *args, **kwargs: _lazy_classification_import('load_classifications')(*args, **kwargs)
     get_tables_by_classification = lambda *args, **kwargs: _lazy_classification_import('get_tables_by_classification')(*args, **kwargs)
+    infer_classification_method = lambda *args, **kwargs: _lazy_classification_import('infer_classification_method')(*args, **kwargs)
 
 
 def search_table2table_by_type(
@@ -106,17 +108,24 @@ def search_table2table_by_type(
     print(f"🔍 Table-to-Table Search by Type")
     print(f"{'='*60}")
     
+    # Use same classification method as the batch that produced classification_json (avoids "unknown" mismatch)
+    if classification_json and os.path.exists(classification_json):
+        query_method = infer_classification_method(classification_json)
+        print(f"   Using classification method: {query_method} (inferred from JSON)")
+    else:
+        query_method = "tab2know"
+    
     # Step 1: Classify the query table
     print(f"\n📊 Step 1: Classifying query table...")
     query_classification = None
     
     # If query is a DataFrame or path to CSV, classify it
     if isinstance(query, pd.DataFrame):
-        query_classification = classify_table(query)
+        query_classification = classify_table(query, method=query_method)
         print(f"✅ Query classification: {query_classification}")
     elif isinstance(query, str) and os.path.exists(query):
         # It's a file path
-        query_classification = classify_table(query)
+        query_classification = classify_table(query, method=query_method)
         print(f"✅ Query classification: {query_classification}")
         # Load the query for search
         query = pd.read_csv(query)
@@ -125,7 +134,7 @@ def search_table2table_by_type(
         if isinstance(query, list) and len(query) > 0:
             # For single_column/keyword, create a simple DataFrame to classify
             sample_df = pd.DataFrame({query[0] if isinstance(query[0], str) else 'value': query[:10]})
-            query_classification = classify_table(sample_df)
+            query_classification = classify_table(sample_df, method=query_method)
             print(f"✅ Inferred query classification: {query_classification}")
         else:
             print(f"⚠️  Could not auto-classify query, using 'mixed' as default")
@@ -180,11 +189,11 @@ def search_table2table_by_type(
     matching_tableids = get_tables_by_classification(query_classification, classifications)
     print(f"✅ Found {len(matching_tableids)} tables with classification '{query_classification}'")
     
-    # When query is "unknown" (e.g. tab2know failed) and no tables have "unknown", fallback to unfiltered search
+    # When query is "Other" (tab2know UNK label) and no tables have "Other", fallback to unfiltered search
     skip_type_filter = False
     if not matching_tableids:
-        if query_classification == "unknown":
-            print(f"⚠️  No tables with classification 'unknown'; falling back to unfiltered search")
+        if query_classification == "Other":
+            print(f"⚠️  No tables with classification 'Other'; falling back to unfiltered search")
             skip_type_filter = True
             matching_tableids = list(classifications.keys())  # allow any table for filtering step
         else:
@@ -197,10 +206,22 @@ def search_table2table_by_type(
     print(f"   Search type: {search_type}")
     print(f"   Top K: {k}")
     
+    # Convert DataFrame to the format tab2tab expects for each search_type
+    search_query = query
+    if isinstance(query, pd.DataFrame):
+        if search_type == "single_column":
+            # tab2tab expects iterable of values (e.g. first column)
+            col = query.iloc[:, 0]
+            search_query = col.astype(str).tolist()
+        elif search_type == "keyword":
+            # tab2tab expects list of strings (column names)
+            search_query = [str(c) for c in query.columns]
+        # multi_column, unionable, etc.: DataFrame is OK as-is
+    
     # Run the normal search (lazy import)
     search_table2table = _get_search_table2table()
     all_results = search_table2table(
-        query=query,
+        query=search_query,
         search_type=search_type,
         k=k * 3,  # Get more results to account for filtering
         db_path=db_path,

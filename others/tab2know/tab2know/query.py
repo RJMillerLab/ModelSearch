@@ -53,8 +53,8 @@ def get_table_test(basedir, annotationdir):
 #     X, y = get_column_test(basedir, annotationdir)
 
 #     X['label'] = y
-#     tp_test = X.loc[(X['label'] == 'http://karmaresearch.net/Dataset') |
-#                     (X['label'] == 'http://karmaresearch.net/Metric')  |
-#                     (X['label'] == 'http://karmaresearch.net/Method')  ]
+#     tp_test = X.loc[(X['label'] == 'http://cs.vu.nl/tab2know/Dataset') |
+#                     (X['label'] == 'http://cs.vu.nl/tab2know/Metric')  |
+#                     (X['label'] == 'http://cs.vu.nl/tab2know/Method')  ]
 
 #     return tp_test.iloc[:, :-1], tp_test['label']

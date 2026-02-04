@@ -8,7 +8,7 @@ class KeyWordMatcher:
 
     def transform(self, meta, rows, verbose=False, **kwargs):
         t = None
-        prefix = 'http://karmaresearch.net/'
+        prefix = 'http://cs.vu.nl/tab2know/'
 
         caption = meta['dc:title'].lower()
 

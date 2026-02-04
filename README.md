@@ -185,13 +185,24 @@ Perform model ID reranking by:
 pip install -r requirements.txt
 ```
 
-### 2. Clone Blend_internal (Required for Table Search)
+### 2. Special installation (FAISS, Pyserini)
+
+- **FAISS** (dense similarity search for card2card / query2modelcard): not in `requirements.txt`; install separately.  
+  - CPU: `pip install faiss-cpu`  
+  - GPU: `pip install faiss-gpu`  
+  - Docs: [faiss](https://github.com/facebookresearch/faiss)
+
+- **Pyserini** (sparse/hybrid table retrieval baselines, baseline2/3): requires **Java/JDK**.  
+  - Install: `pip install pyserini` and e.g. `conda install -c conda-forge openjdk`  
+  - Docs: [Pyserini](https://github.com/castorini/pyserini)
+
+### 3. Clone Blend_internal (Required for Table Search)
 
 ```bash
 git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
 ```
 
-### 3. Set Up Environment Variables
+### 4. Set Up Environment Variables
 
 Create `.env` file with:
 ```

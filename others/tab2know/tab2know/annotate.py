@@ -17,13 +17,13 @@ labelquery_types = {
         'default-query': 'select ?table where {  }',
         'path': 'rdf:type',
         'eval_path': 'rdf:type',
-        'UNK': 'http://karmaresearch.net/Other',
+        'UNK': 'http://cs.vu.nl/tab2know/Other',
     },
     'column-property': {
         'default-query': 'select ?table ?colnr where {  }',
         'path': 'tableSchema/columns/{colnr}/propertyUrl',
         'eval_path': 'tableSchema/columns/*/propertyUrl',
-        'UNK': 'http://karmaresearch.net/Other',
+        'UNK': 'http://cs.vu.nl/tab2know/Other',
     },
 }
 
@@ -60,7 +60,7 @@ def get_annotations(basedir, annotationdir):
         for row in df.to_dict('rows'):
             if row['Table Type'] is not None:
                 yield (os.path.basename(row['Source']), 'rdf:type',
-                       'http://karmaresearch.net/%s' %
+                       'http://cs.vu.nl/tab2know/%s' %
                        id_type[int(float(row['Table Type']))])
 
     # Column properties

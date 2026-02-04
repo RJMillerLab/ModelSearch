@@ -1,16 +1,26 @@
 """
 Table Classification Module
 
-This module provides functionality to classify tables based on their content and structure.
-Classification can be done on a single table or in batch on a local datalake.
+Classify tables by type for filtering search (e.g. tab2tab_by_type). Two flows:
 
-The classification is used to filter search results to only search within tables of the same type.
+-------- Train (batch): build table_classifications.json --------
+  classify_datalake_batch(db_path, method=..., output_json="data/table_classifications.json")
+  - For each table: find CSV -> classify_table(csv_path, method) -> get label.
+  - If CSV not found: we do NOT assign a fallback label. We raise FileNotFoundError with tableid and
+    filename so you can fix the path or data. No fake labels.
+  - If classify_table raises: we re-raise (no silent fallback). Fix the cause and re-run.
+  => Every table must have a findable CSV and a successful classification; otherwise the batch fails.
 
-Classification labels (from tab2know):
-- Observation: Performance/result tables (most common)
-- Input: Configuration/input tables
-- Other: Other types of tables
-- Example: Example tables
+-------- Predict (single table, e.g. query table at search time) --------
+  classify_table(table, method=...)
+  - method="tab2know": run tab2know inference; parse rdf:type from output -> label (Observation/Input/Other/Example).
+  - method="heuristic": use column types/ratios -> label (numerical/categorical/mixed/...).
+  - Predict must always return a valid label. If tab2know inference fails (subprocess error, no output,
+    timeout, parse error), we RAISE an error — we do not silently return a fallback. Caller must fix
+    environment (e.g. install deps, fix models path) so that every predict returns a real label.
+
+Labels (tab2know): Observation, Input, Other, Example. Other is the schema's "uncertain" bucket (UNK).
+Labels (heuristic): numerical, categorical, mixed, id_like, empty, single_numerical, single_categorical.
 """
 
 import os
@@ -57,6 +67,10 @@ def _find_tab2know_repo() -> Optional[str]:
     return None
 
 
+# tab2know uses UNK = 'http://cs.vu.nl/tab2know/Other' (annotate.labelquery_types['table-type']['UNK']).
+# So "Other" is the proper label for uncertain/fallback; we never use "unknown" as an error code.
+TAB2KNOW_UNK_LABEL = "Other"
+
 # Cache for dynamically extracted valid labels (from tab2know) to avoid repeated file reads
 _valid_labels_cache: Optional[List[str]] = None
 
@@ -93,23 +107,17 @@ def _get_tab2know_valid_labels() -> List[str]:
 
 def _extract_classification_from_rdf_type(rdf_type: str) -> str:
     """
-    Extract classification label from tab2know rdf:type URI. Keeps original behaviour:
-    take the last segment of the URI and return it only if it is in the dynamically
-    extracted valid_labels list; otherwise return "unknown".
-    
-    Args:
-        rdf_type: Full URI e.g. "http://karmaresearch.net/Observation"
-    
-    Returns:
-        Label (e.g. "Observation", "Input", "Other", "Example") or "unknown"
+    Extract classification label from tab2know rdf:type URI. Aligned with tab2know:
+    annotate.labelquery_types['table-type']['UNK'] = 'http://cs.vu.nl/tab2know/Other',
+    so uncertain/fallback is the label "Other", not "unknown".
     """
     if not rdf_type:
-        return "unknown"
+        return TAB2KNOW_UNK_LABEL
     label = (rdf_type.split("/")[-1] or "").strip()
     if not label:
-        return "unknown"
+        return TAB2KNOW_UNK_LABEL
     valid_labels = _get_tab2know_valid_labels()
-    return label if label in valid_labels else "unknown"
+    return label if label in valid_labels else TAB2KNOW_UNK_LABEL
 
 
 def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) -> str:
@@ -121,7 +129,10 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
         tab2know_repo: Path to Tab2Know repository (auto-detected if None)
     
     Returns:
-        Classification label: "Observation", "Input", "Other", "Example", or "unknown"
+        Classification label: "Observation", "Input", "Other", "Example".
+    Raises:
+        RuntimeError: if tab2know inference fails (returncode != 0, no output, timeout, parse error).
+        Predict must always yield a label; we do not return a fallback.
     """
     if tab2know_repo is None:
         tab2know_repo = _find_tab2know_repo()
@@ -183,13 +194,16 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
         )
         
         if result.returncode != 0:
-            err_msg = result.stderr.strip() if result.stderr else result.stdout.strip() if result.stdout else "(no message)"
-            print(f"Warning: tab2know inference failed (returncode={result.returncode}): {err_msg[:500]}")
-            return "unknown"
+            err_msg = result.stderr.strip() if result.stderr else result.stdout.strip() or "(no message)"
+            raise RuntimeError(
+                f"tab2know inference failed (returncode={result.returncode}). "
+                f"Predict must return a label; fix the environment and retry. Stderr: {err_msg[:500]}"
+            )
         
-        # Read the result JSONL file
         if not os.path.exists(output_jsonl):
-            return "unknown"
+            raise RuntimeError(
+                "tab2know produced no output file. Predict must return a label; check run_inference.py and modeldir."
+            )
         
         with open(output_jsonl, 'r', encoding='utf-8') as f:
             for line in f:
@@ -202,14 +216,18 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
                     except json.JSONDecodeError:
                         continue
         
-        return "unknown"
+        raise RuntimeError(
+            "tab2know output had no valid rdf:type. Predict must return a label; check inference output."
+        )
     
     except subprocess.TimeoutExpired:
-        print("Warning: tab2know inference timed out")
-        return "unknown"
+        raise RuntimeError("tab2know inference timed out. Predict must return a label; increase timeout or simplify input.")
+    except RuntimeError:
+        raise
     except Exception as e:
-        print(f"Warning: Error running tab2know inference: {e}")
-        return "unknown"
+        raise RuntimeError(
+            f"tab2know inference error: {e}. Predict must return a label; fix the environment and retry."
+        ) from e
     finally:
         # Clean up temp directory
         try:
@@ -231,7 +249,7 @@ def classify_table(
     
     Returns:
         Classification label (string):
-        - For tab2know: "Observation", "Input", "Other", "Example", or "unknown"
+        - For tab2know: "Observation", "Input", "Other", "Example". On inference failure we raise (no silent fallback).
         - For heuristic: "numerical", "categorical", "mixed", "id_like", "empty", etc.
     """
     # Load table if path is provided
@@ -373,7 +391,7 @@ def classify_table_from_db(
             type_result = con.execute(type_query, [tableid]).fetchone()
             if type_result:
                 return type_result[0]  # Use table_type as classification
-            return "unknown"
+            return TAB2KNOW_UNK_LABEL
     finally:
         con.close()
 
@@ -470,19 +488,20 @@ def classify_datalake_batch(
             if i % 100 == 0:
                 print(f"   Progress: {i}/{total_tables} tables classified...")
             
+            csv_path = _find_csv_file(filename)
+            if not csv_path or not os.path.exists(csv_path):
+                msg = (
+                    f"CSV not found for tableid={tableid}, filename={filename}. "
+                    "Refusing to assign a fallback label; fix the path or data and re-run."
+                )
+                print(f"\n❌ {msg}")
+                raise FileNotFoundError(msg)
             try:
-                # Try to find and classify the actual CSV
-                csv_path = _find_csv_file(filename)
-                
-                if csv_path and os.path.exists(csv_path):
-                    classification = classify_table(csv_path, method=method)
-                    classifications[tableid] = classification
-                else:
-                    # Fallback: use table_type from database
-                    classifications[tableid] = table_type if table_type else "unknown"
+                classification = classify_table(csv_path, method=method)
+                classifications[tableid] = classification
             except Exception as e:
-                print(f"   ⚠️  Error classifying table {tableid} ({filename}): {e}")
-                classifications[tableid] = "unknown"
+                print(f"\n❌ Error classifying tableid={tableid}, filename={filename}: {e}")
+                raise
         
         print(f"\n✅ Classified {len(classifications)} tables")
         
@@ -544,6 +563,33 @@ def get_known_classes(classification_json: Optional[str] = None) -> List[str]:
     with open(classification_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
     return sorted(set(str(v) for v in data.values()))
+
+
+# Labels produced by heuristic (so we can infer that batch used heuristic)
+_HEURISTIC_LABELS = frozenset({
+    "numerical", "categorical", "mixed", "id_like", "empty",
+    "single_numerical", "single_categorical",
+})
+
+
+def infer_classification_method(classification_json: Optional[str] = None) -> str:
+    """
+    Infer which method was used to generate the classification JSON (heuristic vs tab2know),
+    so query-time classification uses the same method as the batch.
+    
+    - If the JSON contains heuristic labels (numerical, categorical, mixed, ...), return "heuristic".
+    - Otherwise (e.g. Observation, Input, Other, Example) return "tab2know".
+    
+    Args:
+        classification_json: Path to table_classifications.json.
+    
+    Returns:
+        "heuristic" or "tab2know"
+    """
+    classes = get_known_classes(classification_json)
+    if any(c in _HEURISTIC_LABELS for c in classes):
+        return "heuristic"
+    return "tab2know"
 
 
 def get_tables_by_classification(
@@ -686,23 +732,25 @@ if __name__ == '__main__':
         print(f"✅ Result: {result}")
         assert result == "empty", f"Expected 'empty', got '{result}'"
         
-        # Test 5: Test tab2know classification (if available)
+        # Test 5: Test tab2know classification (if available and inference succeeds)
         print("\n[Test 5] Test tab2know classification (if available)")
         print("-" * 60)
         tab2know_repo = _find_tab2know_repo()
         if tab2know_repo:
             print(f"✅ Tab2Know repository found: {tab2know_repo}")
-            # Create a simple test CSV
             test_df = pd.DataFrame({
                 'Method': ['A', 'B', 'C'],
                 'Accuracy': [0.95, 0.92, 0.88],
                 'F1': [0.94, 0.91, 0.87]
             })
-            result = classify_table(test_df, method="tab2know")
-            print(f"✅ Result: {result}")
-            # Tab2know returns a label (dynamically from rdf:type); accept any non-empty or "unknown"
-            assert isinstance(result, str) and (result == "unknown" or len(result) > 0), \
-                f"Expected tab2know label string, got '{result}'"
+            try:
+                result = classify_table(test_df, method="tab2know")
+                print(f"✅ Result: {result}")
+                assert isinstance(result, str) and len(result) > 0, f"Expected tab2know label, got '{result}'"
+                assert result in _get_tab2know_valid_labels(), f"Expected label from tab2know set, got '{result}'"
+            except RuntimeError as e:
+                print(f"⚠️  tab2know inference failed (predict raises on failure): {e}")
+                print("   Fix environment (deps, models) so predict returns a label; skipping assert.")
         else:
             print("⚠️  Tab2Know repository not found, skipping tab2know test")
             print("   Set TAB2KNOW_REPO environment variable to enable tab2know tests")

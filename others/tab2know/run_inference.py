@@ -192,10 +192,10 @@ def main():
     input_dir = args.input_dir
     
     def build_cmd(run_input_dir: str) -> str:
-        # Ensure using absolute path for modeldir
+        # Use same interpreter as this process (avoid "python: command not found" when only python3 exists)
         modeldir_abs = args.modeldir if os.path.isabs(args.modeldir) else str(repo_root / args.modeldir)
         parts = [
-            "python", "-u", str(repo_root / "tab2know" / "main.py"), "run",
+            sys.executable, "-u", str(repo_root / "tab2know" / "main.py"), "run",
             run_input_dir,
             "--modeldir", modeldir_abs,
             "--type-model", args.type_model,
