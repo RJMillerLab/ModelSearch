@@ -10,9 +10,10 @@ This is similar to tab2tab but adds an extra classification step to filter resul
 import os
 import sys
 import time
-from typing import List, Dict, Optional, Any, Iterable, Union
+from typing import List, Dict, Optional, Any, Iterable, Union, Set
 import pandas as pd
 import argparse
+import duckdb
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
@@ -40,28 +41,57 @@ def _get_classification_module():
         spec.loader.exec_module(_classification_module)
     return _classification_module
 
-# For backward compatibility, try to import normally but fall back to lazy import
-try:
-    from src.search.classification import (
-        classify_table,
-        classify_table_from_db,
-        classify_datalake_batch,
-        load_classifications,
-        get_tables_by_classification,
-        infer_classification_method,
+from src.search.classification import (
+    classify_table,
+    classify_table_from_db,
+    classify_datalake_batch,
+    load_classifications,
+    get_tables_by_classification,
+    infer_classification_method,
+)
+
+
+def _search_restricted_to_tables_by_header_terms(
+    db_path: str,
+    query_terms: List[str],
+    table_ids: Set[int],
+    limit: Optional[int] = None,
+    index_table: str = "modellake_index",
+) -> List[int]:
+    """
+    Search by header-match only within the given table IDs (DuckDB).
+    Labels and types come from classification JSON only; no hardcoded labels.
+    Matches headers (rowid=-1) tokenized column against query terms.
+    Returns all matching (or up to limit), ordered by match count. No extra ranking.
+    """
+    if not query_terms or not table_ids:
+        return []
+    terms_safe = [str(t).replace("'", "''")[:200] for t in query_terms[:50]]
+    ids_list = list(table_ids)[:50000]
+    ids_sql = ",".join(str(int(i)) for i in ids_list)
+    like_conds = " OR ".join(
+        f"LOWER(tokenized) LIKE LOWER('%' || '{k}' || '%')" for k in terms_safe
     )
-except (ImportError, ModuleNotFoundError):
-    # If import fails, use lazy import
-    def _lazy_classification_import(name):
-        mod = _get_classification_module()
-        return getattr(mod, name)
-    
-    classify_table = lambda *args, **kwargs: _lazy_classification_import('classify_table')(*args, **kwargs)
-    classify_table_from_db = lambda *args, **kwargs: _lazy_classification_import('classify_table_from_db')(*args, **kwargs)
-    classify_datalake_batch = lambda *args, **kwargs: _lazy_classification_import('classify_datalake_batch')(*args, **kwargs)
-    load_classifications = lambda *args, **kwargs: _lazy_classification_import('load_classifications')(*args, **kwargs)
-    get_tables_by_classification = lambda *args, **kwargs: _lazy_classification_import('get_tables_by_classification')(*args, **kwargs)
-    infer_classification_method = lambda *args, **kwargs: _lazy_classification_import('infer_classification_method')(*args, **kwargs)
+    if not like_conds:
+        return []
+    limit_clause = f" LIMIT {limit}" if limit is not None else ""
+    query_sql = f"""
+        SELECT tableid, COUNT(*) AS cnt
+        FROM {index_table}
+        WHERE rowid = -1 AND tableid IN ({ids_sql}) AND ({like_conds})
+        GROUP BY tableid
+        ORDER BY cnt DESC
+        {limit_clause}
+    """
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        try:
+            rows = con.execute(query_sql).fetchall()
+            return [int(r[0]) for r in rows]
+        finally:
+            con.close()
+    except Exception:
+        return []
 
 
 def search_table2table_by_type(
@@ -189,17 +219,12 @@ def search_table2table_by_type(
     matching_tableids = get_tables_by_classification(query_classification, classifications)
     print(f"✅ Found {len(matching_tableids)} tables with classification '{query_classification}'")
     
-    # When query is "Other" (tab2know UNK label) and no tables have "Other", fallback to unfiltered search
+    # When no tables in JSON have this classification, fall back to unfiltered (no label names hardcoded)
     skip_type_filter = False
     if not matching_tableids:
-        if query_classification == "Other":
-            print(f"⚠️  No tables with classification 'Other'; falling back to unfiltered search")
-            skip_type_filter = True
-            matching_tableids = list(classifications.keys())  # allow any table for filtering step
-        else:
-            print(f"⚠️  No tables found with classification '{query_classification}'")
-            print(f"   Returning empty results")
-            return []
+        print(f"⚠️  No tables with classification '{query_classification}' in JSON; falling back to unfiltered search")
+        skip_type_filter = True
+        matching_tableids = list(classifications.keys())
     
     # Step 4: Run tab2tab search (we'll filter results afterward unless skip_type_filter)
     print(f"\n🔍 Step 4: Running table search...")
@@ -223,14 +248,52 @@ def search_table2table_by_type(
     all_results = search_table2table(
         query=search_query,
         search_type=search_type,
-        k=k * 3,  # Get more results to account for filtering
+        k=k * 20,  # Get more candidates so after type-filter we have enough
         db_path=db_path,
         target=target,
         source_column=source_column,
         target_column=target_column
     )
     
+    # If single_column returned 0, it means no tables have overlapping cell values.
+    # Fall back to keyword search (column names) so we still get same-type tables with similar schema.
+    if len(all_results) == 0 and search_type == "single_column" and isinstance(query, pd.DataFrame):
+        keyword_query = [str(c) for c in query.columns]
+        if keyword_query:
+            print(f"   single_column found no tables with overlapping values; trying keyword (column names)")
+            all_results = search_table2table(
+                query=keyword_query,
+                search_type="keyword",
+                k=k * 20,
+                db_path=db_path,
+            )
+    if len(all_results) == 0 and search_type == "single_column":
+        print(f"   Tip: single_column matches on cell values. Try --search_type keyword to match on column headers.")
+    
     print(f"✅ Found {len(all_results)} candidate tables")
+    
+    # ---- Debug before Step 5: ID types + label distribution of candidates ----
+    all_results_int = [int(tid) for tid in all_results]
+    if len(all_results_int) > 0 and classifications:
+        sample_raw = all_results[:3]
+        print(f"\n   [Step5-debug] Candidate ID types: {[type(t).__name__ for t in sample_raw]}")
+        # Classification dict keys: int (from load_classifications) or str (raw JSON)
+        sample_keys = list(classifications.keys())[:3]
+        print(f"   [Step5-debug] Classification keys sample (type): {[type(x).__name__ for x in sample_keys]}, e.g. {sample_keys}")
+        # Lookup: by int vs by str
+        found_by_int = sum(1 for tid in all_results_int if tid in classifications)
+        found_by_str = sum(1 for tid in all_results_int if str(tid) in classifications)
+        print(f"   [Step5-debug] Candidates in classification dict: by int key {found_by_int}/{len(all_results_int)}, by str key {found_by_str}/{len(all_results_int)}")
+        # Label distribution of the N candidates (use int key; if missing try str)
+        from collections import Counter
+        labels_of_candidates = []
+        for tid in all_results_int:
+            lab = classifications.get(tid) or classifications.get(str(tid))
+            labels_of_candidates.append(lab if lab else "__missing__")
+        dist = Counter(labels_of_candidates)
+        print(f"   [Step5-debug] Label distribution of {len(all_results_int)} candidates: {dict(dist.most_common())}")
+        if dist.get("__missing__", 0) > 0:
+            print(f"   [Step5-debug] Missing: sample IDs not in classification: {[tid for tid in all_results_int if classifications.get(tid) is None and classifications.get(str(tid)) is None][:5]}")
     
     # Step 5: Filter results by classification (unless we fell back to unfiltered)
     print(f"\n📊 Step 5: Filtering results by classification...")
@@ -238,8 +301,31 @@ def search_table2table_by_type(
         final_results = all_results[:k]
         print(f"✅ Using unfiltered results (query was 'unknown'): {len(final_results)} tables")
     else:
-        filtered_results = [tid for tid in all_results if tid in matching_tableids]
+        # Matching: support both int and str keys (JSON has str keys; load_classifications converts to int)
+        matching_set_int = set(int(x) for x in matching_tableids)
+        matching_set_str = set(str(x) for x in matching_tableids)
+        if len(all_results_int) > 0:
+            sample_all = all_results_int[:5]
+            sample_matching = sorted(matching_set_int)[:5]
+            print(f"   Debug: sample candidate IDs: {sample_all}, sample matching IDs: {sample_matching}")
+            overlap_int = sum(1 for tid in all_results_int if tid in matching_set_int)
+            overlap_str = sum(1 for tid in all_results_int if str(tid) in matching_set_str)
+            print(f"   Debug: in matching set (int): {overlap_int}/{len(all_results_int)}, (str): {overlap_str}/{len(all_results_int)} ({len(matching_set_int)} total)")
+        filtered_results = [
+            tid for tid in all_results_int
+            if tid in matching_set_int or str(tid) in matching_set_str
+        ]
         final_results = filtered_results[:k]
+        # When global top-N has 0 of this type: search only within same-type tables (DuckDB). Type from JSON only.
+        has_string_list_query = isinstance(search_query, list) and search_query and all(isinstance(x, str) for x in search_query)
+        if len(final_results) == 0 and has_string_list_query:
+            print(f"   Fallback: search within {len(matching_set_int)} tables of type '{query_classification}' (from JSON), return all matches")
+            final_results = _search_restricted_to_tables_by_header_terms(
+                db_path or "data/modellake.db",
+                search_query,
+                matching_set_int,
+                limit=None,
+            )
         print(f"✅ Filtered to {len(final_results)} tables with matching classification")
     
     if len(final_results) < k and not skip_type_filter:
