@@ -4,6 +4,17 @@ Two parts: **Part 1** = index building and preparation (run once; build from scr
 
 ---
 
+## Train vs Predict (table classification / tab2know)
+
+| Phase | Step | What it does |
+|-------|------|--------------|
+| **Train** | **1.4 Table classification** | Batch: for every table in `modellake.db`, find CSV → classify → write one label per table to `data/table_classifications.json`. Use `--method tab2know` or `--method heuristic`. Run once; produces the JSON. |
+| **Predict** | **2.3 card2tab2card by_type**, **2.5 tab2tab_by_type** | At query time: classify the **query table** (one table), then filter search using `data/table_classifications.json`. If the JSON was built with tab2know, we infer method and use tab2know for the query table; if built with heuristic, we use heuristic. |
+
+So: **1.4 = train** (build the label file). **2.3 by_type / 2.5 = predict** (classify the query table and use the label file). Re-running **1.4** is what you do to (re)build or switch tab2know vs heuristic; 2.3/2.5 just use the existing JSON and match the same method for the query table.
+
+---
+
 # Part 1 — Preparation & index building
 
 ## 1.1 Modelcard index (Step 1: query→modelcard retrieval)
@@ -71,6 +82,38 @@ Pre-compute table classifications so you can filter by type. **Use the same `--d
 ```bash
 python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json
 # If tab2know fails (missing models/deps on server):
+python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json --method heuristic
+```
+
+### Commands: without tab2know vs with tab2know
+
+| Step | Without tab2know (heuristic) | With tab2know |
+|------|-----------------------------|---------------|
+| **1.4** Build classification JSON | `python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json --method heuristic` | `python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json` (default is tab2know) |
+| **2.3** card2tab2card by_type | Same command; uses heuristic for query table because JSON was built with heuristic. | Same command; uses tab2know for query table because JSON was built with tab2know. |
+| **2.5** tab2tab_by_type | `python -m src.search.tab2tab_by_type ... --classification_json data/table_classifications.json ...` (query table classified with heuristic) | Same; query table classified with tab2know when JSON is tab2know-built. |
+
+So the only difference is **how you run 1.4**: add `--method heuristic` to avoid tab2know (no models/deps); omit it to use tab2know. Steps 2.3 and 2.5 auto-detect from the JSON which method to use for the query table.
+
+### Commands to re-run (in order)
+
+**With tab2know:**
+
+```bash
+# 1.1 Modelcard index (one-step)
+python -m src.search.card2card build-index --field card --raw_dir data_citationlake/raw --output_npz data/card2card_embeddings.npz --output_index data/card2card.faiss
+
+# 1.3 DuckDB table index
+python -m src.Blend_internal.scripts.create_index_duckdb --db_path data/modellake.db --data_glob "data_citationlake/processed/deduped_github_csvs/*.csv" --data_glob "data_citationlake/processed/deduped_hugging_csvs/*.csv" --data_glob "data_citationlake/processed/tables_output/*.csv" --table modellake_index
+
+# 1.4 Table classification (tab2know)
+python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json
+```
+
+**Without tab2know (heuristic):** same as above but replace 1.4 with:
+
+```bash
+# 1.4 Table classification (heuristic)
 python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json --method heuristic
 ```
 
