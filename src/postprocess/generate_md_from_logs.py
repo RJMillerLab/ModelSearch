@@ -2,9 +2,10 @@
 """
 Generate markdown files from all log files in logs/ directory.
 
-For each log file: extract query and search results (from result JSON when present,
-else from log text), then write md/<log_basename>.md with table comparison and
-optional integrated table CSV under md/<log_basename>_materials/csv_integrated/.
+Outputs:
+- logs/ — input (search run logs).
+- md/<log_basename>.md — one md per log. Model-search (card2card, card2tab2card, query2modelcard): models first (primary), related tables second. Table-search (tab2tab*): tables only.
+- md/<log_basename>_materials/csv_integrated/integrated.csv — integrated table for that log (full path in the md).
 
 Why some logs "fail" (no result JSON path in log):
 - card2card_* / query2modelcard: often run without --output_json, so no "Results saved to" line.
@@ -24,6 +25,8 @@ from typing import List, Dict, Optional, Any
 
 import pandas as pd
 import duckdb
+
+from .pipeline import is_model_search_log
 
 # Repo root (this file is in src/postprocess/)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -320,21 +323,26 @@ def generate_markdown_from_log(
         if p.exists():
             classifications = load_classifications(str(p))
 
-    # Use absolute paths in md
+    # Use shared pipeline type: model-search = models first, then tables; table-search = tables only
+    is_model_search = is_model_search_log(log_name)
+
     json_path_str = str(Path(json_path).resolve()) if json_path else ""
 
     lines = [
         f"# Search Results: {log_name}\n",
         f"**Query:** `{query}`\n",
         f"**Result JSON (full path):** `{json_path_str}`\n",
-        f"**Total tables:** {len(table_ids)}\n",
     ]
-    if model_ids:
-        lines.append(f"**Total models:** {len(model_ids)}\n")
+    if is_model_search:
+        lines.append(f"**Total models (primary):** {len(model_ids)}\n")
+        lines.append(f"**Related tables (secondary):** {len(table_ids)}\n")
+    else:
+        lines.append(f"**Total tables:** {len(table_ids)}\n")
     lines.append("---\n")
 
+    # Model-search: models first, then related tables.
     if model_ids:
-        lines.append("\n## Model IDs\n\n")
+        lines.append("\n## Model IDs (primary)\n\n")
         for i, mid in enumerate(model_ids[:20], 1):
             lines.append(f"{i}. `{mid}`\n")
         if len(model_ids) > 20:
@@ -342,7 +350,8 @@ def generate_markdown_from_log(
         lines.append("\n---\n")
 
     if table_ids:
-        lines.append("\n## Tables\n\n")
+        section_title = "\n## Related tables (secondary)\n\n" if is_model_search else "\n## Tables\n\n"
+        lines.append(section_title)
         db_abs = str(_resolve(db_path))
         for i, tableid in enumerate(table_ids[:50], 1):
             meta = get_table_metadata(tableid, db_abs)
