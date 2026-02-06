@@ -116,10 +116,7 @@ def _run_integration_and_save(
 ) -> Optional[str]:
     """Run table integration when possible; save CSV to md/<log_name>_materials/csv_integrated/integrated.csv. Returns full path or None."""
     try:
-        from src.integration.table_integration import (
-            integrate_tables_from_search_results,
-            integrate_tables,
-        )
+        from src.integration.table_integration import integrate_tables
     except Exception as e:
         print(f"  (Integration skip: {e})")
         return None
@@ -130,22 +127,19 @@ def _run_integration_and_save(
 
     db_abs = str(_resolve(db_path))
 
-    # Prefer card2tab2card-style JSON (has intermediate.retrieved_table_filenames)
-    if result_data.get("intermediate", {}).get("retrieved_table_filenames") and result_json_path and os.path.exists(result_json_path):
-        search_type = "keyword"
-        if "keyword" in log_name:
-            search_type = "keyword"
-        elif "unionable" in log_name:
-            search_type = "unionable"
-        elif "single_column" in log_name or "singlecol" in log_name:
-            search_type = "single_column"
-        res = integrate_tables_from_search_results(
-            search_results_json=result_json_path,
-            search_type=search_type,
-            integration_type=integration_type,
-            k=integration_k,
-            db_path=db_abs,
-        )
+    # Card2tab2card-style: resolve filenames with same dirs as postprocess (avoids "Table not found" on server)
+    intermediate = result_data.get("intermediate", {})
+    retrieved = intermediate.get("retrieved_table_filenames") or []
+    if retrieved:
+        paths = []
+        for fname in retrieved[:integration_k]:
+            full = _find_csv_file(fname)
+            if full:
+                paths.append(full)
+        if paths:
+            res = integrate_tables(paths, integration_type=integration_type, k=integration_k, db_path=db_abs)
+        else:
+            res = {}
     elif table_ids:
         # Build table paths from table_ids (tab2tab-style results)
         paths = []
@@ -173,6 +167,9 @@ def _run_integration_and_save(
 
 
 # ---- extraction from log file ----
+
+# Log basenames to skip (not search-result logs)
+_SKIP_LOG_STEMS = frozenset({"backend", "frontend"})
 
 # Fallback result JSON paths when log does not contain "Results saved to ..."
 # (e.g. card2card/query2modelcard run without --output_json; multi_column may crash before save)
@@ -427,7 +424,8 @@ def main():
         if not logs_dir.exists():
             print(f"Logs directory not found: {logs_dir}")
             return
-        log_files = sorted(logs_dir.glob("*.log"))
+        all_logs = sorted(logs_dir.glob("*.log"))
+        log_files = [f for f in all_logs if f.stem not in _SKIP_LOG_STEMS]
 
     if not log_files:
         print("No log files found")
