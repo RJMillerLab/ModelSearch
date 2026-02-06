@@ -28,20 +28,9 @@ def load_classifications(json_path: str) -> Dict[int, str]:
 
 
 def _find_csv_file(filename: str) -> Optional[str]:
-    """Find CSV file by basename in common data dirs."""
-    basename = os.path.basename(filename)
-    for d in [
-        "data_citationlake/processed/deduped_hugging_csvs",
-        "data_citationlake/processed/deduped_github_csvs",
-        "data_citationlake/processed/tables_output",
-        "data/raw",
-    ]:
-        p = _REPO_ROOT / d / basename
-        if p.exists():
-            return str(p)
-    if os.path.exists(filename):
-        return filename
-    return None
+    """Find CSV file by basename (uses pipeline.csv_search_dirs: data_citationlake, ModelTables, data/raw)."""
+    from .pipeline import find_csv_file
+    return find_csv_file(filename)
 
 
 def load_relationship_parquet(parquet_path: str) -> pd.DataFrame:

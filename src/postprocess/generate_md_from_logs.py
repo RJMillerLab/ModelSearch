@@ -26,7 +26,7 @@ from typing import List, Dict, Optional, Any
 import pandas as pd
 import duckdb
 
-from .pipeline import is_model_search_log
+from .pipeline import is_model_search_log, find_csv_file
 
 # Repo root (this file is in src/postprocess/)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -45,19 +45,7 @@ def load_classifications(json_path: str) -> Dict[int, str]:
 
 
 def _find_csv_file(filename: str) -> Optional[str]:
-    basename = os.path.basename(filename)
-    for d in [
-        "data_citationlake/processed/deduped_hugging_csvs",
-        "data_citationlake/processed/deduped_github_csvs",
-        "data_citationlake/processed/tables_output",
-        "data/raw",
-    ]:
-        p = _REPO_ROOT / d / basename
-        if p.exists():
-            return str(p)
-    if os.path.exists(filename):
-        return filename
-    return None
+    return find_csv_file(filename)
 
 
 def get_table_metadata(
@@ -455,8 +443,12 @@ def main():
             failed.append(str(log_file))
 
     print(f"\nGenerated: {len(generated)} | Failed: {len(failed)}")
-    for f in failed:
-        print(f"  - {f}")
+    if failed:
+        for f in failed:
+            print(f"  - {f}")
+    print("\nWhat this means:")
+    print("  - Generated = one md file written per log (see output_dir, e.g. md/*.md)")
+    print("  - Failed = log has no 'Results saved to ... .json' line (and no fallback file); skip or run that search with --output_json to get a result file")
 
 
 if __name__ == "__main__":
