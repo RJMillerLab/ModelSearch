@@ -34,6 +34,7 @@ ENV/
 
 # Output files
 output/
+md/
 *.npz
 *.faiss
 *.jsonl
