@@ -447,7 +447,8 @@ Then use this tool for search:
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(result_data, f, ensure_ascii=False, indent=2)
         print(f"\n✅ Results saved to {args.output}")
-        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
+        from src.utils import get_device
+        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {get_device()})")
     
     except Exception as e:
         print(f"❌ Error: {e}")

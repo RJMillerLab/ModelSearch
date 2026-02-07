@@ -1486,7 +1486,12 @@ def main():
                 print(f"  {i}. {model_id}")
 
         elapsed = time.time() - start_time
-        print(f"\n⏱️ Total time: {elapsed:.2f}s")
+        try:
+            from src.utils import get_device
+            dev = get_device()
+        except Exception:
+            dev = "cpu"
+        print(f"\nTotal time: {elapsed:.2f}s (device: {dev})")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

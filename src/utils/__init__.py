@@ -5,6 +5,17 @@ import pandas as pd
 import os
 
 
+def get_device() -> str:
+    """Auto-detect device: cuda if available, else cpu."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
 def load_combined_data(data_type, file_path="data/raw", columns=[]):
     """
     Load combined parquet files for modelcard or datasetcard.

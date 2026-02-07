@@ -25,7 +25,7 @@ def process_meta(meta,
                  column_model=None,
                  indent=None):
     name = meta['url']
-    # 使用灵活的CSV目录查找
+    # Resolve CSV path via flexible directory lookup
     import flexible_collect
     csv_dir = flexible_collect.find_csv_directory(basedir)
     fname = os.path.join(csv_dir, name)
@@ -71,7 +71,7 @@ def run(
     set_verbosity(verbose)
 
     def read_rows(name):
-        # 使用灵活的CSV目录查找
+        # Resolve CSV path via flexible directory lookup
         import flexible_collect
         csv_dir = flexible_collect.find_csv_directory(basedir)
         fname = os.path.join(csv_dir, name)
@@ -155,7 +155,7 @@ def eval(basedir: 'Directory of PDF extractions',
     set_verbosity(verbose)
 
     def read_rows(name):
-        # 使用灵活的CSV目录查找
+        # Resolve CSV path via flexible directory lookup
         import flexible_collect
         csv_dir = flexible_collect.find_csv_directory(basedir)
         fname = os.path.join(csv_dir, name)
@@ -420,7 +420,7 @@ def labeltrain(
         }
 
     def read_rows(name):
-        # 使用灵活的CSV目录查找
+        # Resolve CSV path via flexible directory lookup
         import flexible_collect
         csv_dir = flexible_collect.find_csv_directory(basedir)
         fname = os.path.join(csv_dir, name)

@@ -29,15 +29,22 @@ from src.baseline1.table_retrieval_pipeline import (
     search_neighbors
 )
 
-# Try to import CitationLake's load_combined_data
+# Try to import CitationLake's load_combined_data and get_device
 try:
-    from src.utils import load_combined_data as citationlake_load_combined_data
+    from src.utils import load_combined_data as citationlake_load_combined_data, get_device
     USE_CITATIONLAKE_UTILS = True
 except ImportError:
-    # Fallback to local version
     from src.utils import load_combined_data
     USE_CITATIONLAKE_UTILS = False
     citationlake_load_combined_data = None
+    def get_device() -> str:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception:
+            pass
+        return "cpu"
 
 
 def build_jsonl_from_citationlake_raw(raw_dir: str, field: str, output_jsonl: str) -> None:
@@ -162,12 +169,11 @@ def _load_corpus_for_bm25(jsonl_path: str) -> Tuple[List[str], List[str]]:
     Returns:
         (model_ids, texts): List of model IDs and corresponding texts
     """
-    model_ids = []
-    texts = []
-    
     if not os.path.exists(jsonl_path):
         raise FileNotFoundError(f"Corpus file not found: {jsonl_path}")
-    
+    t0 = time.time()
+    model_ids = []
+    texts = []
     with open(jsonl_path, 'r', encoding='utf-8') as f:
         for line in f:
             if not line.strip():
@@ -175,7 +181,7 @@ def _load_corpus_for_bm25(jsonl_path: str) -> Tuple[List[str], List[str]]:
             doc = json.loads(line)
             model_ids.append(doc['id'])
             texts.append(doc['contents'])
-    
+    print(f"  [timing] load jsonl: {time.time() - t0:.2f}s ({len(model_ids)} docs)")
     return model_ids, texts
 
 
@@ -206,9 +212,13 @@ def _get_bm25_index(jsonl_path: str = "data/card2card_corpus.jsonl"):
     # Load corpus
     model_ids, texts = _load_corpus_for_bm25(jsonl_path)
     
-    # Build BM25 index
+    # Build BM25 index (tokenize + BM25Okapi)
+    t0 = time.time()
     tokenized_texts = [_tokenize(text) for text in texts]
+    print(f"  [timing] tokenize corpus: {time.time() - t0:.2f}s")
+    t0 = time.time()
     bm25_index = BM25Okapi(tokenized_texts)
+    print(f"  [timing] build BM25 index: {time.time() - t0:.2f}s")
     
     # Cache the result
     _bm25_cache = (bm25_index, model_ids, texts)
@@ -239,18 +249,13 @@ def _sparse_search_bm25(
     query_text = texts[query_idx]
     tokenized_query = _tokenize(query_text)
     
-    # Get BM25 scores
+    # Get BM25 scores (scores every doc in corpus)
+    t0 = time.time()
     scores = bm25_index.get_scores(tokenized_query)
-    
-    # Create list of (model_id, score) pairs
     results = [(model_ids[i], float(scores[i])) for i in range(len(model_ids))]
-    
-    # Sort by score descending
     results.sort(key=lambda x: x[1], reverse=True)
-    
-    # Exclude query model itself and return top_k
     filtered_results = [(mid, score) for mid, score in results if mid != query_model_id][:top_k]
-    
+    print(f"  [timing] BM25 get_scores + sort: {time.time() - t0:.2f}s")
     return filtered_results
 
 
@@ -374,48 +379,58 @@ def search_card2card(
     results = []
     
     if retrieval_mode == "dense":
-        # Original dense retrieval
+        # Dense retrieval (FAISS only)
+        print("  [timing] dense retrieval (per-step):")
+        t0 = time.time()
         data = np.load(emb_npz)
         ids = data['ids'].tolist()
-        
+        print(f"  [timing] load npz: {time.time() - t0:.2f}s")
         try:
             query_idx = ids.index(model_id)
         except ValueError:
             raise ValueError(f"Model ID '{model_id}' not found in corpus")
-        
+        t0 = time.time()
         index = faiss.read_index(faiss_index)
+        print(f"  [timing] load FAISS index: {time.time() - t0:.2f}s")
+        t0 = time.time()
         embs = data['embeddings']
         query_emb = embs[query_idx:query_idx+1]
         D, I = index.search(query_emb, top_k + 1)
-        
+        print(f"  [timing] FAISS search: {time.time() - t0:.2f}s")
         neighbor_indices = [i for i in I[0] if i != query_idx][:top_k]
         results = [ids[i] for i in neighbor_indices]
         
     elif retrieval_mode == "sparse":
-        # Sparse retrieval using BM25
+        # Sparse retrieval (load jsonl + BM25)
+        print("  [timing] sparse retrieval (per-step):")
+        t0 = time.time()
         bm25_index, model_ids, texts = _get_bm25_index(jsonl_path)
+        print(f"  [timing] get_bm25_index total: {time.time() - t0:.2f}s")
         sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k)
         results = [mid for mid, _ in sparse_results]
         
     elif retrieval_mode == "hybrid":
-        # Hybrid retrieval: combine sparse and dense
+        # Hybrid: sparse then dense then combine
+        print("  [timing] hybrid retrieval (per-step):")
+        t0 = time.time()
         bm25_index, model_ids, texts = _get_bm25_index(jsonl_path)
-        
-        # Perform both searches
+        print(f"  [timing] get_bm25_index total: {time.time() - t0:.2f}s")
         sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k * 2)
-        
-        # Load embeddings for dense search
+        print(f"  [timing] sparse branch total: {time.time() - t0:.2f}s")
+        t0 = time.time()
         data = np.load(emb_npz)
         ids = data['ids'].tolist()
+        print(f"  [timing] load npz: {time.time() - t0:.2f}s")
         try:
             query_idx = ids.index(model_id)
         except ValueError:
             raise ValueError(f"Model ID '{model_id}' not found in embeddings")
-        
+        t0 = time.time()
         index = faiss.read_index(faiss_index)
         embs = data['embeddings']
         query_emb = embs[query_idx:query_idx+1]
         D, I = index.search(query_emb, top_k * 2 + 1)
+        print(f"  [timing] load FAISS + search: {time.time() - t0:.2f}s")
         
         dense_results = []
         for i, score in zip(I[0], D[0]):
@@ -423,7 +438,7 @@ def search_card2card(
                 dense_results.append((ids[i], float(-score)))
         dense_results.sort(key=lambda x: x[1], reverse=True)
         dense_results = dense_results[:top_k * 2]
-        
+        t0 = time.time()
         # Combine results
         if hybrid_method == "rrf":
             combined_results = _reciprocal_rank_fusion(sparse_results, dense_results)
@@ -450,7 +465,7 @@ def search_card2card(
             combined_results = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
         else:
             raise ValueError(f"Invalid hybrid_method: {hybrid_method}. Must be 'rrf' or 'weighted'")
-        
+        print(f"  [timing] hybrid combine: {time.time() - t0:.2f}s")
         results = [mid for mid, _ in combined_results[:top_k]]
     
     # Save if requested
@@ -536,7 +551,8 @@ def main():
     build_parser.add_argument('--batch_size', type=int, default=256)
     build_parser.add_argument('--output_npz', default='data/card2card_embeddings.npz')
     build_parser.add_argument('--output_index', default='data/card2card.faiss')
-    build_parser.add_argument('--device', default='cuda')
+    build_parser.add_argument('--device', default=None,
+                              help='Device (cuda or cpu). Auto-detects if not set.')
     
     # Search single command
     search_parser = subparsers.add_parser('search', help='Search for similar model cards')
@@ -565,6 +581,7 @@ def main():
     
     args = parser.parse_args()
     start_time = time.time()
+    device = getattr(args, 'device', None) or get_device()
 
     if args.command == 'build-index':
         build_card_index(
@@ -576,8 +593,9 @@ def main():
             batch_size=args.batch_size,
             output_npz=args.output_npz,
             output_index=args.output_index,
-            device=args.device
+            device=device
         )
+        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
     elif args.command == 'search':
         neighbors = search_card2card(
             model_id=args.model_id,
@@ -594,7 +612,7 @@ def main():
         print(f"Found {len(neighbors)} neighbors for {args.model_id} (mode: {args.retrieval_mode})")
         for i, neighbor in enumerate(neighbors, 1):
             print(f"  {i}. {neighbor}")
-        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
+        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
     elif args.command == 'search-batch':
         neighbors = search_card2card_batch(
             emb_npz=args.emb_npz,
@@ -603,7 +621,7 @@ def main():
             output_json=args.output_json
         )
         print(f"✅ Generated neighbors for {len(neighbors)} models")
-        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
+        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
     else:
         parser.print_help()
 

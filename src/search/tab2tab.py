@@ -969,7 +969,12 @@ To create modellake.db, use:
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(result_data, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {args.output}")
-        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
+        try:
+            from src.utils import get_device
+            dev = get_device()
+        except Exception:
+            dev = "cpu"
+        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {dev})")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

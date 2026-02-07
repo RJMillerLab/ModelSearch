@@ -129,7 +129,7 @@ def main():
         print(f"Found {len(results)} model cards for query: '{args.query}'")
         for i, model_id in enumerate(results, 1):
             print(f"  {i}. {model_id}")
-        print(f"\n⏱️ Total time: {time.time() - start_time:.2f}s")
+        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

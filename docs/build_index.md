@@ -69,12 +69,14 @@ python -m src.search.query2modelcard --query "transformer model for code generat
 
 ## 2.2 card2card (dense, sparse, hybrid)
 
+**Why sparse/hybrid are slow:** Sparse (BM25) and hybrid load the **entire** `card2card_corpus.jsonl`, tokenize every document, build a BM25 index in memory, and score **all** documents per query (no prebuilt sparse index). Dense uses a prebuilt FAISS index (index lookup only), so it is fast. For many cards, prefer dense or prebuild a sparse index elsewhere if you need sparse/hybrid speed. **Per-step timings:** card2card prints `[timing]` lines (load jsonl, tokenize, build BM25, get_scores, load npz, load FAISS, etc.) so you can see where time goes; grep logs for `[timing]` to debug.
+
 ```bash
-# dense
+# dense (fast: FAISS lookup only)
 python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
-# sparse
+# sparse (slow: load full jsonl, BM25 over all docs)
 python -m src.search.card2card search --model_id google-bert/bert-base-uncased --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
-# hybrid
+# hybrid (slow: same as sparse plus dense)
 python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
 ```
 
@@ -118,8 +120,10 @@ python -m src.search.tab2tab_by_type --query 3690 --classification_json data/tab
 # multi_column
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type multi_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
 # unionable
-python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1 
 ```
+
+If **multi_column** fails with `Scalar Function with name to_bitstring does not exist`: DuckDB version mismatch. In **Blend_internal** edit `src/Blend_internal/src/Operators/Seekers/MultiColumnOverlap.py` and replace `TO_BITSTRING(super_key)` with `to_binary(super_key)` (or the bitstring function your DuckDB provides). Then re-run.
 
 ## 2.6 Generate table comparison markdown (src/postprocess)
 
@@ -187,21 +191,19 @@ Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
 |----------|----------------|------|
 | query2modelcard.log | 12.92 | |
 | card2card_dense.log | 17.58 | |
-| card2card_sparse.log | 956.34 | sparse over jsonl |
-| card2card_hybrid.log | 894.18 | dense + sparse |
+| card2card_sparse.log | 956.34 | loads full jsonl, BM25 over all docs |
+| card2card_hybrid.log | 894.18 | same + dense; both scan full corpus |
 | card2tab2card_keyword.log | 225.81 | |
 | card2tab2card_by_type.log | 336.92 | |
 | card2tab2card_all.log | 551.34 | All 3 search types |
 | tab2tab_keyword.log | 0.12 | |
 | tab2tab_by_type.log | 0.21 | |
-| tab2tab_by_type_keyword.log | **0.22** | was 0.52 → shortened |
-| tab2tab_by_type_single_column.log | **0.29** | was 0.51 → shortened |
-| tab2tab_by_type_unionable.log | — | failed: query CSV not found |
-| tab2tab_by_type_multi_column.log | — | failed: query CSV not found |
+| tab2tab_by_type_keyword.log | 0.47 | |
+| tab2tab_by_type_single_column.log | 0.35 | |
+| tab2tab_by_type_unionable.log | 0.60 | |
+| tab2tab_by_type_multi_column.log | — | DuckDB to_bitstring error; fix in Blend_internal (see 2.5) |
 
-**tab2tab_by_type 加速:** keyword 0.52→0.22s, single_column 0.51→0.29s（显式传 `--classification_json`、无 fallback 后只读 JSON）. unionable / multi_column 因 `data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv` 不存在而报错，需在跑的那台机器上改 query 路径或保证该文件存在。
-
-`grep -h "Total time" logs/*.log` 可刷新耗时。
+Run `grep -h "Total time" logs/*.log` to refresh.
 
 ---
 
