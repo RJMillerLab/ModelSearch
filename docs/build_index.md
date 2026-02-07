@@ -8,7 +8,8 @@
 
 | Phase | What | When |
 |-------|------|------|
-| **Preprocessing (run once)** | **Build modelcard index** — encode cards → `.npz` + `.faiss` (and optional `.jsonl` for sparse). | Before any query2modelcard or card2card search. |
+| **Preprocessing (run once)** | **Build modelcard index** — encode full corpus → `.npz` + `.faiss`; optional `.jsonl`. | Before query2modelcard / card2card. |
+| | **Build sparse index** — BM25 over full corpus → `data/card2card_bm25.pkl` (1.1b). | Before card2card sparse/hybrid; inference then only loads it. |
 | | **Blend + data** — clone/symlink Blend_internal and data dirs. | Once per env. |
 | | **DuckDB table index** — `create_index_duckdb` → `data/modellake.db` with `modellake_index`. | Before card2tab2card, tab2tab, tab2tab_by_type. |
 | | **Table classification (batch)** — `classification --mode batch` → `data/table_classifications.json`. Uses **tab2know inference** per table (tab2know’s own “training” is in TabKnow repo; we only run its pretrained type/column models here). | Once; required only for **by_type** flows (card2tab2card by_type, tab2tab_by_type). |
@@ -22,7 +23,7 @@
 
 # Part 1 — Must run (in order)
 
-## 1.1 Modelcard index
+## 1.1 Modelcard index (dense)
 
 ```bash
 # one-step (recommended)
@@ -31,6 +32,14 @@ python -m src.search.card2card build-index --field card --raw_dir data_citationl
 ```
 
 Optional 3-step (baseline1): `build_modelcard_jsonl` → `table_retrieval_pipeline encode` → `table_retrieval_pipeline build_faiss`.
+
+## 1.1b Sparse index (for card2card sparse/hybrid)
+
+Run after 1.1 so that inference **only loads** the prebuilt BM25 file (no jsonl load/tokenize/build at request time).
+
+```bash
+python -m src.search.card2card build-sparse-index --jsonl_path data/card2card_corpus.jsonl --output_bm25 data/card2card_bm25.pkl
+```
 
 ## 1.2 Blend + data
 
@@ -69,15 +78,15 @@ python -m src.search.query2modelcard --query "transformer model for code generat
 
 ## 2.2 card2card (dense, sparse, hybrid)
 
-**Why sparse/hybrid are slow:** Sparse (BM25) and hybrid load the **entire** `card2card_corpus.jsonl`, tokenize every document, build a BM25 index in memory, and score **all** documents per query (no prebuilt sparse index). Dense uses a prebuilt FAISS index (index lookup only), so it is fast. For many cards, prefer dense or prebuild a sparse index elsewhere if you need sparse/hybrid speed. **Per-step timings:** card2card prints `[timing]` lines (load jsonl, tokenize, build BM25, get_scores, load npz, load FAISS, etc.) so you can see where time goes; grep logs for `[timing]` to debug.
+**Fixed (Part 1):** Run `build-sparse-index` (1.1b) once to save `data/card2card_bm25.pkl`. Then inference with `--bm25_index_path data/card2card_bm25.pkl` **only loads** that file (no jsonl load/tokenize/build). Dense already uses only prebuilt FAISS+npz. **Per-step timings:** card2card prints `[timing]` lines; grep logs for `[timing]` to debug.
 
 ```bash
 # dense (fast: FAISS lookup only)
 python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
-# sparse (slow: load full jsonl, BM25 over all docs)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
-# hybrid (slow: same as sparse plus dense)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --jsonl_path data/card2card_corpus.jsonl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
+# sparse (use prebuilt BM25 from 1.1b so inference only loads, no rebuild)
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --bm25_index_path data/card2card_bm25.pkl --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
+# hybrid (same: prebuilt BM25 + FAISS)
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --bm25_index_path data/card2card_bm25.pkl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
 ```
 
 ## 2.3 card2tab2card (keyword, all, by_type)
@@ -169,6 +178,7 @@ cp -r ../ModelTables/src/baseline3 src/
 | Part 1 | |
 |--------|---|
 | Modelcard index | card2card build-index (or baseline1 3 steps) |
+| Sparse index (card2card) | card2card build-sparse-index --jsonl_path ... --output_bm25 data/card2card_bm25.pkl |
 | Blend | clone/symlink src/Blend_internal |
 | DuckDB index | create_index_duckdb --db_path data/modellake.db --data_glob ... |
 | Table classification | classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json (or --method heuristic) |
@@ -185,25 +195,23 @@ Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
 
 ---
 
-# Log timings (from logs/*.log)
+# Log timings (from logs/*.log, latest run)
 
-| Log file | Total time (s) | Note |
-|----------|----------------|------|
-| query2modelcard.log | 12.92 | |
-| card2card_dense.log | 17.58 | |
-| card2card_sparse.log | 956.34 | loads full jsonl, BM25 over all docs |
-| card2card_hybrid.log | 894.18 | same + dense; both scan full corpus |
-| card2tab2card_keyword.log | 225.81 | |
-| card2tab2card_by_type.log | 336.92 | |
-| card2tab2card_all.log | 551.34 | All 3 search types |
-| tab2tab_keyword.log | 0.12 | |
-| tab2tab_by_type.log | 0.21 | |
-| tab2tab_by_type_keyword.log | 0.47 | |
-| tab2tab_by_type_single_column.log | 0.35 | |
-| tab2tab_by_type_unionable.log | 0.60 | |
-| tab2tab_by_type_multi_column.log | — | DuckDB to_bitstring error; fix in Blend_internal (see 2.5) |
+| Log file | Total time (s) | Device | Note |
+|----------|----------------|--------|------|
+| query2modelcard.log | 10.09 | cuda | |
+| card2card_dense.log | 11.11 | cuda | load npz 1.7s, FAISS 1.3s, search 7.7s |
+| card2card_sparse.log | 728.44 | cuda | see breakdown below |
+| card2card_hybrid.log | 752.79 | cuda | sparse-dominated; dense ~10s |
+| tab2tab_keyword.log | 0.11 | cpu | |
+| tab2tab_single_column.log | 0.09 | cpu | |
+| tab2tab_by_type.log | 0.21 | — | (re-run to get device in line) |
+| card2tab2card_* / tab2tab_by_type_* | (see prior rows if present) | | |
+| tab2tab_by_type_multi_column.log | — | | DuckDB to_bitstring; fix in Blend_internal (2.5) |
 
-Run `grep -h "Total time" logs/*.log` to refresh.
+**Sparse (728s) per-step breakdown (1.1M docs):** load jsonl 22.7s, tokenize 57.2s, build BM25 102.6s, **get_scores + sort 539s** (main cost). Hybrid: same sparse branch ~742s then load npz + FAISS ~10s.
+
+Run `grep -h "Total time\|\[timing\]" logs/*.log` to refresh.
 
 ---
 

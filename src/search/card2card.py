@@ -157,6 +157,35 @@ def build_card_index(
     print(f"✅ Card index built: {output_index}")
 
 
+def build_sparse_index(
+    jsonl_path: str = "data/card2card_corpus.jsonl",
+    output_bm25: str = "data/card2card_bm25.pkl",
+) -> None:
+    """
+    Build BM25 index from corpus JSONL and save to disk (Part 1).
+    Inference (sparse/hybrid) can then load this file instead of rebuilding from jsonl.
+    """
+    try:
+        from rank_bm25 import BM25Okapi
+    except ImportError:
+        raise ImportError("rank-bm25 not installed. Please install it with: pip install rank-bm25")
+    if not os.path.exists(jsonl_path):
+        raise FileNotFoundError(f"Corpus file not found: {jsonl_path}")
+    print("Building sparse (BM25) index from corpus...")
+    t0 = time.time()
+    model_ids, texts = _load_corpus_for_bm25(jsonl_path)
+    t1 = time.time()
+    tokenized_texts = [_tokenize(t) for t in texts]
+    print(f"  tokenize: {time.time() - t1:.2f}s")
+    t1 = time.time()
+    bm25_index = BM25Okapi(tokenized_texts)
+    print(f"  build BM25: {time.time() - t1:.2f}s")
+    os.makedirs(os.path.dirname(output_bm25) or ".", exist_ok=True)
+    with open(output_bm25, "wb") as f:
+        pickle.dump((bm25_index, model_ids, texts), f)
+    print(f"✅ Sparse index saved: {output_bm25} (Total: {time.time() - t0:.2f}s)")
+
+
 # Global cache for BM25 index and corpus
 _bm25_cache: Optional[Tuple[object, List[str], List[str]]] = None
 _bm25_cache_jsonl: Optional[str] = None
@@ -190,40 +219,43 @@ def _tokenize(text: str) -> List[str]:
     return text.lower().split()
 
 
-def _get_bm25_index(jsonl_path: str = "data/card2card_corpus.jsonl"):
+def _get_bm25_index(
+    jsonl_path: str = "data/card2card_corpus.jsonl",
+    bm25_index_path: Optional[str] = None,
+) -> Tuple[object, List[str], List[str]]:
     """
-    Get or build BM25 index. Uses global cache to avoid rebuilding.
-    
-    Returns:
-        (bm25_index, model_ids, texts): BM25 index and corpus data
+    Get BM25 index: load from prebuilt file if given and exists, else build from jsonl.
+    Uses global cache so each path is only loaded/built once per process.
     """
     global _bm25_cache, _bm25_cache_jsonl
-    
-    # Check if cache is valid
-    if _bm25_cache is not None and _bm25_cache_jsonl == jsonl_path:
+    cache_key = bm25_index_path or jsonl_path
+
+    if _bm25_cache is not None and _bm25_cache_jsonl == cache_key:
         return _bm25_cache
-    
-    # Import rank_bm25
+
+    # Prebuilt: load from disk (inference only loads, no corpus indexing)
+    if bm25_index_path and os.path.exists(bm25_index_path):
+        t0 = time.time()
+        with open(bm25_index_path, "rb") as f:
+            _bm25_cache = pickle.load(f)
+        print(f"  [timing] load prebuilt BM25 index: {time.time() - t0:.2f}s")
+        _bm25_cache_jsonl = cache_key
+        return _bm25_cache
+
+    # Build from jsonl (no prebuilt file)
     try:
         from rank_bm25 import BM25Okapi
     except ImportError:
         raise ImportError("rank-bm25 not installed. Please install it with: pip install rank-bm25")
-    
-    # Load corpus
     model_ids, texts = _load_corpus_for_bm25(jsonl_path)
-    
-    # Build BM25 index (tokenize + BM25Okapi)
     t0 = time.time()
     tokenized_texts = [_tokenize(text) for text in texts]
     print(f"  [timing] tokenize corpus: {time.time() - t0:.2f}s")
     t0 = time.time()
     bm25_index = BM25Okapi(tokenized_texts)
     print(f"  [timing] build BM25 index: {time.time() - t0:.2f}s")
-    
-    # Cache the result
     _bm25_cache = (bm25_index, model_ids, texts)
-    _bm25_cache_jsonl = jsonl_path
-    
+    _bm25_cache_jsonl = cache_key
     return _bm25_cache
 
 
@@ -348,6 +380,7 @@ def search_card2card(
     output_json: Optional[str] = None,
     retrieval_mode: str = "dense",
     jsonl_path: str = "data/card2card_corpus.jsonl",
+    bm25_index_path: Optional[str] = None,
     hybrid_method: str = "rrf",
     sparse_weight: float = 0.5,
     dense_weight: float = 0.5
@@ -362,7 +395,8 @@ def search_card2card(
         top_k: Number of neighbors to return
         output_json: Optional path to save results as JSON
         retrieval_mode: Retrieval mode - "sparse", "dense", or "hybrid"
-        jsonl_path: Path to corpus JSONL file (required for sparse/hybrid)
+        jsonl_path: Path to corpus JSONL (used only if bm25_index_path not set)
+        bm25_index_path: Path to prebuilt BM25 pickle (Part 1); if set, inference only loads it
         hybrid_method: Hybrid combination method - "rrf" or "weighted"
         sparse_weight: Weight for sparse scores (for weighted method)
         dense_weight: Weight for dense scores (for weighted method)
@@ -401,10 +435,10 @@ def search_card2card(
         results = [ids[i] for i in neighbor_indices]
         
     elif retrieval_mode == "sparse":
-        # Sparse retrieval (load jsonl + BM25)
+        # Sparse: load prebuilt BM25 if given, else build from jsonl
         print("  [timing] sparse retrieval (per-step):")
         t0 = time.time()
-        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path)
+        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path, bm25_index_path=bm25_index_path)
         print(f"  [timing] get_bm25_index total: {time.time() - t0:.2f}s")
         sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k)
         results = [mid for mid, _ in sparse_results]
@@ -413,7 +447,7 @@ def search_card2card(
         # Hybrid: sparse then dense then combine
         print("  [timing] hybrid retrieval (per-step):")
         t0 = time.time()
-        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path)
+        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path, bm25_index_path=bm25_index_path)
         print(f"  [timing] get_bm25_index total: {time.time() - t0:.2f}s")
         sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k * 2)
         print(f"  [timing] sparse branch total: {time.time() - t0:.2f}s")
@@ -553,6 +587,11 @@ def main():
     build_parser.add_argument('--output_index', default='data/card2card.faiss')
     build_parser.add_argument('--device', default=None,
                               help='Device (cuda or cpu). Auto-detects if not set.')
+
+    # Build sparse index (Part 1): save BM25 so inference only loads
+    sparse_build_parser = subparsers.add_parser('build-sparse-index', help='Build and save BM25 index from jsonl (Part 1)')
+    sparse_build_parser.add_argument('--jsonl_path', default='data/card2card_corpus.jsonl', help='Corpus JSONL')
+    sparse_build_parser.add_argument('--output_bm25', default='data/card2card_bm25.pkl', help='Output pickle path')
     
     # Search single command
     search_parser = subparsers.add_parser('search', help='Search for similar model cards')
@@ -564,7 +603,9 @@ def main():
     search_parser.add_argument('--retrieval_mode', choices=['sparse', 'dense', 'hybrid'], default='dense',
                               help='Retrieval mode: sparse (BM25), dense (FAISS), or hybrid')
     search_parser.add_argument('--jsonl_path', default='data/card2card_corpus.jsonl',
-                              help='Path to corpus JSONL file (required for sparse/hybrid)')
+                              help='Corpus JSONL (used only if --bm25_index_path not set)')
+    search_parser.add_argument('--bm25_index_path', default='data/card2card_bm25.pkl',
+                              help='Prebuilt BM25 pickle from Part 1; inference only loads (no rebuild)')
     search_parser.add_argument('--hybrid_method', choices=['rrf', 'weighted'], default='rrf',
                               help='Hybrid combination method: rrf or weighted')
     search_parser.add_argument('--sparse_weight', type=float, default=0.5,
@@ -596,6 +637,12 @@ def main():
             device=device
         )
         print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
+    elif args.command == 'build-sparse-index':
+        build_sparse_index(
+            jsonl_path=args.jsonl_path,
+            output_bm25=args.output_bm25,
+        )
+        print(f"\nTotal time: {time.time() - start_time:.2f}s")
     elif args.command == 'search':
         neighbors = search_card2card(
             model_id=args.model_id,
@@ -605,6 +652,7 @@ def main():
             output_json=args.output_json,
             retrieval_mode=args.retrieval_mode,
             jsonl_path=args.jsonl_path,
+            bm25_index_path=getattr(args, 'bm25_index_path', None),
             hybrid_method=args.hybrid_method,
             sparse_weight=args.sparse_weight,
             dense_weight=args.dense_weight
