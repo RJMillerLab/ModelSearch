@@ -108,17 +108,17 @@ python -m src.search.tab2tab --search_type unionable --query data_citationlake/p
 
 ## 2.5 tab2tab_by_type (test all modes; needs 1.4)
 
-Same modes as tab2tab, filtered by table type.
+Same modes as tab2tab, filtered by table type. **--query** = table ID (from modellake.db) or CSV path. Table ID: load from db (filename → same resolve as elsewhere) so one source, no local path needed.
 
 ```bash
-# keyword
-python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type keyword --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_keyword_results.json > logs/tab2tab_by_type_keyword.log 2>&1
-# single_column (often 0; falls back to keyword)
-python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type single_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_single_column_results.json > logs/tab2tab_by_type_single_column.log 2>&1
+# keyword (table ID or path)
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type keyword --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_keyword_results.json > logs/tab2tab_by_type_keyword.log 2>&1
+# single_column
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type single_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_single_column_results.json > logs/tab2tab_by_type_single_column.log 2>&1
 # multi_column
-python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type multi_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type multi_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
 # unionable
-python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type unionable --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1
 ```
 
 ## 2.6 Generate table comparison markdown (src/postprocess)
@@ -181,24 +181,27 @@ Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
 
 ---
 
-# Log timings (from logs/*.log, one run)
+# Log timings (from logs/*.log)
 
 | Log file | Total time (s) | Note |
 |----------|----------------|------|
 | query2modelcard.log | 12.92 | |
 | card2card_dense.log | 17.58 | |
-| card2card_sparse.log | 956.34 | Slow: sparse over jsonl |
-| card2card_hybrid.log | 894.18 | Slow: dense + sparse |
+| card2card_sparse.log | 956.34 | sparse over jsonl |
+| card2card_hybrid.log | 894.18 | dense + sparse |
 | card2tab2card_keyword.log | 225.81 | |
 | card2tab2card_by_type.log | 336.92 | |
 | card2tab2card_all.log | 551.34 | All 3 search types |
 | tab2tab_keyword.log | 0.12 | |
-| tab2tab_by_type.log | 0.21 | single_column (with classification_json) |
-| tab2tab_by_type_keyword.log | 0.52 | |
-| tab2tab_by_type_single_column.log | 0.51 | |
-| tab2tab_by_type_unionable.log | 0.55 | |
+| tab2tab_by_type.log | 0.21 | |
+| tab2tab_by_type_keyword.log | **0.22** | was 0.52 → shortened |
+| tab2tab_by_type_single_column.log | **0.29** | was 0.51 → shortened |
+| tab2tab_by_type_unionable.log | — | failed: query CSV not found |
+| tab2tab_by_type_multi_column.log | — | failed: query CSV not found |
 
-Re-run `grep -h "Total time" logs/*.log` to refresh after new runs.
+**tab2tab_by_type 加速:** keyword 0.52→0.22s, single_column 0.51→0.29s（显式传 `--classification_json`、无 fallback 后只读 JSON）. unionable / multi_column 因 `data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv` 不存在而报错，需在跑的那台机器上改 query 路径或保证该文件存在。
+
+`grep -h "Total time" logs/*.log` 可刷新耗时。
 
 ---
 

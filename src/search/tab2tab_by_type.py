@@ -48,6 +48,27 @@ from src.search.classification import (
     get_tables_by_classification,
     infer_classification_method,
 )
+from src.postprocess.pipeline import find_csv_file
+
+
+def _load_query_from_tableid(tableid: int, db_path: str, index_table: str = "modellake_index") -> Optional[pd.DataFrame]:
+    """Load query table from modellake.db by table ID (same source as rest: db -> filename -> resolve path -> read CSV)."""
+    if not os.path.exists(db_path):
+        return None
+    con = duckdb.connect(db_path, read_only=True)
+    try:
+        row = con.execute(
+            f"SELECT DISTINCT filename FROM {index_table} WHERE tableid = ? AND rowid = -1 LIMIT 1",
+            [tableid]
+        ).fetchone()
+        if not row:
+            return None
+        csv_path = find_csv_file(row[0])
+        if not csv_path or not os.path.exists(csv_path):
+            return None
+        return pd.read_csv(csv_path)
+    finally:
+        con.close()
 
 
 def _search_restricted_to_tables_by_header_terms(
@@ -353,30 +374,51 @@ Then use this tool for search:
     
     try:
         start_time = time.time()
-        # Parse query based on search type
+        # Parse query: table ID (from modellake) or path/values. Same source as rest: db -> filename -> resolve -> read.
         query = None
+        def _query_as_tableid(s: str):
+            s = s.strip()
+            return int(s) if s.isdigit() else None
+
         if args.search_type == 'single_column':
-            if os.path.exists(args.query):
-                # It's a CSV file
-                query = pd.read_csv(args.query)
-            else:
-                # Comma-separated values
-                query = [x.strip() for x in args.query.split(',')]
+            tid = _query_as_tableid(args.query)
+            if tid is not None:
+                query = _load_query_from_tableid(tid, args.db_path)
+            if query is None:
+                if os.path.exists(args.query):
+                    query = pd.read_csv(args.query)
+                else:
+                    query = [x.strip() for x in args.query.split(',')]
         elif args.search_type == 'multi_column':
-            query = pd.read_csv(args.query)
+            tid = _query_as_tableid(args.query)
+            if tid is not None:
+                query = _load_query_from_tableid(tid, args.db_path)
+            if query is None:
+                query = pd.read_csv(args.query)
         elif args.search_type == 'unionable':
-            query = pd.read_csv(args.query)
+            tid = _query_as_tableid(args.query)
+            if tid is not None:
+                query = _load_query_from_tableid(tid, args.db_path)
+            if query is None:
+                query = pd.read_csv(args.query)
         elif args.search_type == 'keyword':
-            if os.path.exists(args.query):
-                # CSV file - use headers as keywords
-                df = pd.read_csv(args.query, nrows=0)
-                query = [str(col).lower().strip() for col in df.columns]
-            else:
-                # Comma-separated keywords
-                query = [x.strip() for x in args.query.split(',')]
+            tid = _query_as_tableid(args.query)
+            if tid is not None:
+                df = _load_query_from_tableid(tid, args.db_path)
+                if df is not None:
+                    query = [str(col).lower().strip() for col in df.columns]
+            if query is None:
+                if os.path.exists(args.query):
+                    df = pd.read_csv(args.query, nrows=0)
+                    query = [str(col).lower().strip() for col in df.columns]
+                else:
+                    query = [x.strip() for x in args.query.split(',')]
         else:
-            # For other types, assume CSV file
-            query = pd.read_csv(args.query)
+            tid = _query_as_tableid(args.query)
+            if tid is not None:
+                query = _load_query_from_tableid(tid, args.db_path)
+            if query is None:
+                query = pd.read_csv(args.query)
         
         # Perform search
         results = search_table2table_by_type(
