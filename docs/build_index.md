@@ -4,6 +4,22 @@
 
 ---
 
+# Preprocessing vs inference (what to run once vs per query)
+
+| Phase | What | When |
+|-------|------|------|
+| **Preprocessing (run once)** | **Build modelcard index** — encode cards → `.npz` + `.faiss` (and optional `.jsonl` for sparse). | Before any query2modelcard or card2card search. |
+| | **Blend + data** — clone/symlink Blend_internal and data dirs. | Once per env. |
+| | **DuckDB table index** — `create_index_duckdb` → `data/modellake.db` with `modellake_index`. | Before card2tab2card, tab2tab, tab2tab_by_type. |
+| | **Table classification (batch)** — `classification --mode batch` → `data/table_classifications.json`. Uses **tab2know inference** per table (tab2know’s own “training” is in TabKnow repo; we only run its pretrained type/column models here). | Once; required only for **by_type** flows (card2tab2card by_type, tab2tab_by_type). |
+| | **Baseline2** — mapping scripts + pyserini Lucene index (`data/tmp/index`). | Before baseline2 search. |
+| | **Baseline3** — build dense index. | Before baseline3 hybrid search. |
+| **Inference (per query / serving)** | query2modelcard, card2card search, card2tab2card, tab2tab, tab2tab_by_type, demo backend, generate_md_from_logs. | They **only load** prebuilt artifacts (faiss, npz, jsonl, modellake.db, table_classifications.json). No index build, no batch classification. |
+
+**Making inference fast:** Run Part 1 once (all steps you need for your flows). Then Part 2 is just loading those artifacts and running retrieval. Do **not** run build-index or classification batch at request time; keep them as one-off preprocessing.
+
+---
+
 # Part 1 — Must run (in order)
 
 ## 1.1 Modelcard index
@@ -32,12 +48,12 @@ python -m src.Blend_internal.scripts.create_index_duckdb --db_path data/modellak
 
 ## 1.4 Table classification (optional; for by_type flows)
 
-**IMPORTANT:** Use the **same `--db_path`** for classification (1.4) and card2tab2card/tab2tab_by_type (2.3/2.5). Different db_path = different table IDs = 0 filtered results.
+Train vs inference = explicit arg only, no fallback. Train = run below with `--mode batch`. Inference = run 2.3 by_type / 2.5 with `--classification_json data/table_classifications.json`. Same `--db_path` for 1.4 and 2.3/2.5.
 
 ```bash
-# tab2know (default)
+# train (full datalake)
 python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json
-# heuristic if tab2know fails on server
+# heuristic if tab2know fails
 python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json --method heuristic
 ```
 
@@ -92,12 +108,12 @@ python -m src.search.tab2tab --search_type unionable --query data_citationlake/p
 
 ## 2.5 tab2tab_by_type (test all modes; needs 1.4)
 
-Same modes as tab2tab, with results filtered to same table type as query.
+Same modes as tab2tab, filtered by table type.
 
 ```bash
 # keyword
 python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type keyword --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_keyword_results.json > logs/tab2tab_by_type_keyword.log 2>&1
-# single_column (often 0; falls back to keyword in code)
+# single_column (often 0; falls back to keyword)
 python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type single_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_single_column_results.json > logs/tab2tab_by_type_single_column.log 2>&1
 # multi_column
 python -m src.search.tab2tab_by_type --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --classification_json data/table_classifications.json --search_type multi_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
@@ -119,7 +135,7 @@ python -m src.postprocess.generate_md_from_logs --logs_dir logs --output_dir md 
 python -m src.postprocess.generate_md_from_logs --log_file logs/card2tab2card_by_type.log --output_dir md
 ```
 
-Output: table metadata, classification (if available), CSV preview, column info. Table IDs are read from result JSON when present, else from log lines `N. Table ID: <id>`.
+**Outputs:** `logs/` (input); `md/<log_basename>.md` (one per log); `md/<log_basename>_materials/csv_integrated/integrated.csv` when integration finds CSVs. **Generated** = md file written for that log; **Failed** = no result JSON path in log (run that search with `--output_json` to fix). Pipeline: model-search = models first, then tables; table-search = tables only.
 
 ## 2.7 Demo (evaluation, QA, integration)
 
@@ -161,4 +177,34 @@ cp -r ../ModelTables/src/baseline3 src/
 | Generate table MD | `python -m src.postprocess.generate_table_md` (--table_ids / --model_id); `generate_md_from_logs` for logs → md/ |
 | Demo | backend + frontend → http://localhost:5001 |
 
-Scripts print `⏱️ Total time` at exit; redirect to `logs/*.log` to keep timings.
+Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
+
+---
+
+# Log timings (from logs/*.log, one run)
+
+| Log file | Total time (s) | Note |
+|----------|----------------|------|
+| query2modelcard.log | 12.92 | |
+| card2card_dense.log | 17.58 | |
+| card2card_sparse.log | 956.34 | Slow: sparse over jsonl |
+| card2card_hybrid.log | 894.18 | Slow: dense + sparse |
+| card2tab2card_keyword.log | 225.81 | |
+| card2tab2card_by_type.log | 336.92 | |
+| card2tab2card_all.log | 551.34 | All 3 search types |
+| tab2tab_keyword.log | 0.12 | |
+| tab2tab_by_type.log | 0.21 | single_column (with classification_json) |
+| tab2tab_by_type_keyword.log | 0.52 | |
+| tab2tab_by_type_single_column.log | 0.51 | |
+| tab2tab_by_type_unionable.log | 0.55 | |
+
+Re-run `grep -h "Total time" logs/*.log` to refresh after new runs.
+
+---
+
+# Inference fast checklist
+
+1. **Run Part 1 once** (modelcard index, Blend, DuckDB index; table classification only if you use by_type).
+2. **Do not** call `build-index` or `classification --mode batch` during serving or per-query scripts.
+3. Inference scripts only **load** prebuilt files: `emb_npz`, `faiss_index`, `jsonl`, `modellake.db`, `table_classifications.json`.
+4. For tab2know: batch classification (Part 1.4) runs tab2know **inference** per table and writes JSON; at query time we only `load_classifications(json)`. Tab2know’s own model training lives in TabKnow_internal (separate repo).

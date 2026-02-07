@@ -44,7 +44,6 @@ def _get_classification_module():
 from src.search.classification import (
     classify_table,
     classify_table_from_db,
-    classify_datalake_batch,
     load_classifications,
     get_tables_by_classification,
     infer_classification_method,
@@ -176,42 +175,19 @@ def search_table2table_by_type(
     if not query_classification:
         query_classification = "mixed"
     
-    # Step 2: Load classifications for all tables in datalake
+    # Step 2: Load classifications for all tables in datalake (inference: use precomputed JSON only)
     print(f"\n📊 Step 2: Loading table classifications...")
-    
+    if classification_json is None:
+        classification_json = "data/table_classifications.json"
     if classifications is None:
-        if classification_json and os.path.exists(classification_json):
-            print(f"   Loading from: {classification_json}")
-            classifications = load_classifications(classification_json)
-        else:
-            # Need to compute classifications - this requires db_path
-            if db_path is None:
-                db_path = "data_citationlake/modellake.db"
-            
-            if not os.path.exists(db_path):
-                raise FileNotFoundError(
-                    f"Database not found: {db_path}\n"
-                    "Please either:\n"
-                    "  1. Provide --classification_json with pre-computed classifications, or\n"
-                    "  2. Ensure db_path points to a valid modellake.db"
-                )
-            
-            print(f"   Computing classifications from database: {db_path}")
-            print(f"   (This may take a while for large datalakes...)")
-            
-            # Compute classifications (this is expensive, so we save it)
-            temp_json = classification_json or "data/table_classifications_temp.json"
-            classifications = classify_datalake_batch(
-                db_path=db_path,
-                output_json=temp_json
+        if not os.path.exists(classification_json):
+            raise FileNotFoundError(
+                f"Classification file not found: {classification_json}\n"
+                "Run Part 1.4 (train / batch) first:\n"
+                "  python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json"
             )
-            
-            if classification_json and temp_json != classification_json:
-                # Move temp file to requested location
-                import shutil
-                shutil.move(temp_json, classification_json)
-                print(f"   ✅ Saved classifications to: {classification_json}")
-    
+        print(f"   Loading from: {classification_json}")
+        classifications = load_classifications(classification_json)
     print(f"✅ Loaded classifications for {len(classifications)} tables")
     
     # Step 3: Filter to tables with same classification
