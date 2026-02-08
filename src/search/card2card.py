@@ -419,9 +419,13 @@ def search_card2card(
         results = [ids[i] for i in neighbor_indices]
         
     elif retrieval_mode == "sparse":
+        print(f"  [sparse] sparse_index_path={sparse_index_path}", flush=True)
         if not sparse_index_path or not os.path.isdir(sparse_index_path):
-            raise ValueError("Sparse mode requires --sparse_index_path to a Pyserini Lucene index (run build-sparse-index first)")
-        print("  [timing] sparse retrieval (per-step):")
+            raise ValueError(
+                "Sparse mode requires --sparse_index_path to a Pyserini Lucene index directory (run build-sparse-index first). "
+                f"Got: {sparse_index_path!r}"
+            )
+        print("  [timing] sparse retrieval (per-step):", flush=True)
         t0 = time.time()
         searcher, index_reader = _get_pyserini_searcher_and_reader(sparse_index_path)
         print(f"  [timing] load sparse index total (load, not inference): {time.time() - t0:.2f}s")
@@ -647,6 +651,10 @@ def main():
         )
         print(f"\nTotal time: {time.time() - start_time:.2f}s")
     elif args.command == 'search':
+        # Log mode and sparse path so redirects always capture something
+        rm = getattr(args, 'retrieval_mode', 'dense')
+        sip = getattr(args, 'sparse_index_path', None)
+        print(f"card2card search retrieval_mode={rm} sparse_index_path={sip}", flush=True)
         model_ids_file = getattr(args, 'model_ids_file', None)
         if model_ids_file:
             with open(model_ids_file, 'r', encoding='utf-8') as f:
