@@ -9,7 +9,7 @@
 | Phase | What | When |
 |-------|------|------|
 | **Preprocessing (run once)** | **Build modelcard index** — encode full corpus → `.npz` + `.faiss`; optional `.jsonl`. | Before query2modelcard / card2card. |
-| | **Build sparse index** — BM25 over full corpus → `data/card2card_bm25.pkl` (1.1b). | Before card2card sparse/hybrid; inference then only loads it. |
+| | **Build sparse index** — Pyserini Lucene BM25 → `data/card2card_sparse_index` (1.1b). | Train once; inference then only loads index. |
 | | **Blend + data** — clone/symlink Blend_internal and data dirs. | Once per env. |
 | | **DuckDB table index** — `create_index_duckdb` → `data/modellake.db` with `modellake_index`. | Before card2tab2card, tab2tab, tab2tab_by_type. |
 | | **Table classification (batch)** — `classification --mode batch` → `data/table_classifications.json`. Uses **tab2know inference** per table (tab2know’s own “training” is in TabKnow repo; we only run its pretrained type/column models here). | Once; required only for **by_type** flows (card2tab2card by_type, tab2tab_by_type). |
@@ -35,11 +35,17 @@ Optional 3-step (baseline1): `build_modelcard_jsonl` → `table_retrieval_pipeli
 
 ## 1.1b Sparse index (for card2card sparse/hybrid)
 
-Run after 1.1 so that inference **only loads** the prebuilt BM25 file (no jsonl load/tokenize/build at request time).
+Uses **Pyserini** (Lucene BM25), same as ModelTables baseline2. **Train** = build Lucene index once. **Inference** = load index + search only (top-k, no full corpus scan).
+
+**Train (run once):**
 
 ```bash
-python -m src.search.card2card build-sparse-index --jsonl_path data/card2card_corpus.jsonl --output_bm25 data/card2card_bm25.pkl
+python -m src.search.card2card build-sparse-index --jsonl_path data/card2card_corpus.jsonl --corpus_dir data/card2card_sparse_corpus --output_index data/card2card_sparse_index
 ```
+
+This copies the JSONL into `corpus_dir` and runs `pyserini.index.lucene` (JsonCollection, DefaultLuceneDocumentGenerator, --storeRaw). Output is a Lucene index directory at `output_index`.
+
+**Inference (per query):** Load the index with `LuceneSearcher(index_path)`, `set_bm25()`; get query document text from the index (`doc_raw`/`doc_contents`); truncate query if needed; `searcher.search(query_text, k=top_k+1)`. No corpus re-read, no re-indexing. Sparse and hybrid both use this path when `--sparse_index_path` points to the built index.
 
 ## 1.2 Blend + data
 
@@ -78,15 +84,15 @@ python -m src.search.query2modelcard --query "transformer model for code generat
 
 ## 2.2 card2card (dense, sparse, hybrid)
 
-**Fixed (Part 1):** Run `build-sparse-index` (1.1b) once to save `data/card2card_bm25.pkl`. Then inference with `--bm25_index_path data/card2card_bm25.pkl` **only loads** that file (no jsonl load/tokenize/build). Dense already uses only prebuilt FAISS+npz. **Per-step timings:** card2card prints `[timing]` lines; grep logs for `[timing]` to debug.
+**Train vs inference:** Part 1 (1.1, 1.1b) = train: build modelcard index and sparse Lucene index. Part 2 = inference: only load those artifacts and run retrieval. Sparse uses Pyserini (same as ModelTables baseline2); pass `--sparse_index_path data/card2card_sparse_index` after running build-sparse-index.
 
 ```bash
-# dense (fast: FAISS lookup only)
+# dense (FAISS only)
 python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
-# sparse (use prebuilt BM25 from 1.1b so inference only loads, no rebuild)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --bm25_index_path data/card2card_bm25.pkl --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
-# hybrid (same: prebuilt BM25 + FAISS)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --bm25_index_path data/card2card_bm25.pkl --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
+# sparse (Pyserini Lucene index from 1.1b)
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --sparse_index_path data/card2card_sparse_index --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
+# hybrid (sparse + FAISS)
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --sparse_index_path data/card2card_sparse_index --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
 ```
 
 ## 2.3 card2tab2card (keyword, all, by_type)
@@ -178,7 +184,7 @@ cp -r ../ModelTables/src/baseline3 src/
 | Part 1 | |
 |--------|---|
 | Modelcard index | card2card build-index (or baseline1 3 steps) |
-| Sparse index (card2card) | card2card build-sparse-index --jsonl_path ... --output_bm25 data/card2card_bm25.pkl |
+| Sparse index (card2card) | card2card build-sparse-index --jsonl_path ... --output_index data/card2card_sparse_index |
 | Blend | clone/symlink src/Blend_internal |
 | DuckDB index | create_index_duckdb --db_path data/modellake.db --data_glob ... |
 | Table classification | classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json (or --method heuristic) |
@@ -197,21 +203,23 @@ Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
 
 # Log timings (from logs/*.log, latest run)
 
-| Log file | Total time (s) | Device | Note |
-|----------|----------------|--------|------|
-| query2modelcard.log | 10.09 | cuda | |
-| card2card_dense.log | 11.11 | cuda | load npz 1.7s, FAISS 1.3s, search 7.7s |
-| card2card_sparse.log | 728.44 | cuda | see breakdown below |
-| card2card_hybrid.log | 752.79 | cuda | sparse-dominated; dense ~10s |
-| tab2tab_keyword.log | 0.11 | cpu | |
-| tab2tab_single_column.log | 0.09 | cpu | |
-| tab2tab_by_type.log | 0.21 | — | (re-run to get device in line) |
-| card2tab2card_* / tab2tab_by_type_* | (see prior rows if present) | | |
-| tab2tab_by_type_multi_column.log | — | | DuckDB to_bitstring; fix in Blend_internal (2.5) |
+**Inference time:** Use the line `[timing] inference (min)` in logs. Load time (sparse index, npz, FAISS) is not counted. With **Pyserini** sparse, inference is get query text + BM25 top-k search (fast); older rank_bm25 sparse scored all docs (~630s).
 
-**Sparse (728s) per-step breakdown (1.1M docs):** load jsonl 22.7s, tokenize 57.2s, build BM25 102.6s, **get_scores + sort 539s** (main cost). Hybrid: same sparse branch ~742s then load npz + FAISS ~10s.
+| Log file | Total (s) | Inference (min) | Device | Note |
+|----------|-----------|-----------------|--------|------|
+| query2modelcard.log | 10.09 | — | cuda | |
+| card2card_dense.log | 11.11 | ~7.7 | cuda | FAISS search only |
+| card2card_sparse.log | (re-run) | — | — | Pyserini: load index + top-k search |
+| card2card_hybrid.log | (re-run) | — | — | sparse + FAISS + combine |
+| tab2tab_keyword.log | 0.11 | — | cpu | |
+| tab2tab_single_column.log | 0.09 | — | cpu | |
+| tab2tab_by_type.log | 0.21 | — | — | (script may print ⏱️ Total time without device) |
+| card2tab2card_* / tab2tab_by_type_* | (see prior rows if present) | | | |
+| tab2tab_by_type_multi_column.log | — | — | | DuckDB to_bitstring; fix in Blend_internal (2.5) |
 
-Run `grep -h "Total time\|\[timing\]" logs/*.log` to refresh.
+**Sparse (Pyserini):** inference = get query text + truncate + BM25 search (top-k only). **Hybrid:** same sparse step, then load npz/FAISS, FAISS search, combine. Re-run sparse/hybrid after building the Lucene index (1.1b) and refresh timings.
+
+Run `grep -h "Total time\|inference (min)\|\[timing\]" logs/*.log` to refresh.
 
 ---
 

@@ -12,7 +12,6 @@ import sys
 import time
 from typing import Dict, List, Optional, Tuple
 import argparse
-import pickle
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
@@ -157,138 +156,123 @@ def build_card_index(
     print(f"✅ Card index built: {output_index}")
 
 
+# Pyserini sparse: same logic as ModelTables baseline2 (Lucene BM25, top-k retrieval).
+# Train = build Lucene index once. Inference = load index + search only.
+MAX_QUERY_TERMS = 1024  # Lucene BooleanQuery maxClauseCount; long query truncation
+
+
+def _truncate_query_pyserini(text: str, max_terms: int = MAX_QUERY_TERMS) -> str:
+    """Truncate query to at most max_terms to avoid TooManyClauses in Lucene (same as ModelTables)."""
+    if not text:
+        return ""
+    terms = text.split()
+    if len(terms) <= max_terms:
+        return text
+    return " ".join(terms[:max_terms])
+
+
 def build_sparse_index(
     jsonl_path: str = "data/card2card_corpus.jsonl",
-    output_bm25: str = "data/card2card_bm25.pkl",
+    corpus_dir: str = "data/card2card_sparse_corpus",
+    output_index: str = "data/card2card_sparse_index",
+    threads: int = 1,
 ) -> None:
     """
-    Build BM25 index from corpus JSONL and save to disk (Part 1).
-    Inference (sparse/hybrid) can then load this file instead of rebuilding from jsonl.
+    Train: build Pyserini Lucene index from corpus JSONL (same as ModelTables baseline2).
+    Writes corpus into corpus_dir and runs pyserini.index.lucene. Inference then uses output_index only.
     """
-    try:
-        from rank_bm25 import BM25Okapi
-    except ImportError:
-        raise ImportError("rank-bm25 not installed. Please install it with: pip install rank-bm25")
+    import subprocess
+    import shutil
     if not os.path.exists(jsonl_path):
         raise FileNotFoundError(f"Corpus file not found: {jsonl_path}")
-    print("Building sparse (BM25) index from corpus...")
+    os.makedirs(corpus_dir, exist_ok=True)
+    corpus_jsonl = os.path.join(corpus_dir, "corpus.jsonl")
+    print(f"Copying corpus to {corpus_jsonl} for Pyserini JsonCollection...")
+    shutil.copy2(jsonl_path, corpus_jsonl)
+    print("Building Lucene index (BM25, same as ModelTables baseline2)...")
     t0 = time.time()
-    model_ids, texts = _load_corpus_for_bm25(jsonl_path)
-    t1 = time.time()
-    tokenized_texts = [_tokenize(t) for t in texts]
-    print(f"  tokenize: {time.time() - t1:.2f}s")
-    t1 = time.time()
-    bm25_index = BM25Okapi(tokenized_texts)
-    print(f"  build BM25: {time.time() - t1:.2f}s")
-    os.makedirs(os.path.dirname(output_bm25) or ".", exist_ok=True)
-    with open(output_bm25, "wb") as f:
-        pickle.dump((bm25_index, model_ids, texts), f)
-    print(f"✅ Sparse index saved: {output_bm25} (Total: {time.time() - t0:.2f}s)")
+    cmd = [
+        sys.executable, "-m", "pyserini.index.lucene",
+        "--collection", "JsonCollection",
+        "--input", os.path.abspath(corpus_dir),
+        "--index", os.path.abspath(output_index),
+        "--generator", "DefaultLuceneDocumentGenerator",
+        "--threads", str(threads),
+        "--storePositions", "--storeDocvectors", "--storeRaw",
+    ]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError(f"pyserini.index.lucene failed: {out.stderr or out.stdout}")
+    print(f"✅ Sparse index saved: {output_index} (Total: {time.time() - t0:.2f}s)")
 
 
-# Global cache for BM25 index and corpus
-_bm25_cache: Optional[Tuple[object, List[str], List[str]]] = None
-_bm25_cache_jsonl: Optional[str] = None
+# Cache for Pyserini searcher and index reader (inference: load once per process)
+_pyserini_cache: Optional[Tuple[object, object, str]] = None  # (searcher, index_reader, index_path)
 
 
-def _load_corpus_for_bm25(jsonl_path: str) -> Tuple[List[str], List[str]]:
-    """
-    Load corpus from JSONL file for BM25 indexing.
-    
-    Returns:
-        (model_ids, texts): List of model IDs and corresponding texts
-    """
-    if not os.path.exists(jsonl_path):
-        raise FileNotFoundError(f"Corpus file not found: {jsonl_path}")
-    t0 = time.time()
-    model_ids = []
-    texts = []
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if not line.strip():
-                continue
-            doc = json.loads(line)
-            model_ids.append(doc['id'])
-            texts.append(doc['contents'])
-    print(f"  [timing] load jsonl: {time.time() - t0:.2f}s ({len(model_ids)} docs)")
-    return model_ids, texts
-
-
-def _tokenize(text: str) -> List[str]:
-    """Simple tokenizer for BM25. Split by whitespace and convert to lowercase."""
-    return text.lower().split()
-
-
-def _get_bm25_index(
-    jsonl_path: str = "data/card2card_corpus.jsonl",
-    bm25_index_path: Optional[str] = None,
-) -> Tuple[object, List[str], List[str]]:
-    """
-    Get BM25 index: load from prebuilt file if given and exists, else build from jsonl.
-    Uses global cache so each path is only loaded/built once per process.
-    """
-    global _bm25_cache, _bm25_cache_jsonl
-    cache_key = bm25_index_path or jsonl_path
-
-    if _bm25_cache is not None and _bm25_cache_jsonl == cache_key:
-        return _bm25_cache
-
-    # Prebuilt: load from disk (inference only loads, no corpus indexing)
-    if bm25_index_path and os.path.exists(bm25_index_path):
-        t0 = time.time()
-        with open(bm25_index_path, "rb") as f:
-            _bm25_cache = pickle.load(f)
-        print(f"  [timing] load prebuilt BM25 index: {time.time() - t0:.2f}s")
-        _bm25_cache_jsonl = cache_key
-        return _bm25_cache
-
-    # Build from jsonl (no prebuilt file)
+def _get_pyserini_searcher_and_reader(index_path: str) -> Tuple[object, object]:
+    """Inference: load Lucene searcher and index reader (cached by index_path)."""
+    global _pyserini_cache
+    if _pyserini_cache is not None and _pyserini_cache[2] == index_path:
+        return _pyserini_cache[0], _pyserini_cache[1]
     try:
-        from rank_bm25 import BM25Okapi
+        from pyserini.search.lucene import LuceneSearcher
+        from pyserini.index.lucene import LuceneIndexReader
     except ImportError:
-        raise ImportError("rank-bm25 not installed. Please install it with: pip install rank-bm25")
-    model_ids, texts = _load_corpus_for_bm25(jsonl_path)
+        raise ImportError("pyserini not installed. Install with: pip install pyserini")
     t0 = time.time()
-    tokenized_texts = [_tokenize(text) for text in texts]
-    print(f"  [timing] tokenize corpus: {time.time() - t0:.2f}s")
-    t0 = time.time()
-    bm25_index = BM25Okapi(tokenized_texts)
-    print(f"  [timing] build BM25 index: {time.time() - t0:.2f}s")
-    _bm25_cache = (bm25_index, model_ids, texts)
-    _bm25_cache_jsonl = cache_key
-    return _bm25_cache
+    searcher = LuceneSearcher(index_path)
+    searcher.set_bm25()
+    index_reader = LuceneIndexReader(index_path)
+    print(f"  [timing] load sparse index (not inference): {time.time() - t0:.2f}s")
+    _pyserini_cache = (searcher, index_reader, index_path)
+    return searcher, index_reader
 
 
-def _sparse_search_bm25(
+def _get_query_text_from_index(index_reader, model_id: str) -> str:
+    """Get document contents for model_id from the index (for use as query text)."""
+    if hasattr(index_reader, "doc_raw"):
+        raw = index_reader.doc_raw(model_id)
+        if raw:
+            try:
+                doc = json.loads(raw)
+                return doc.get("contents", raw)
+            except Exception:
+                return raw
+    if hasattr(index_reader, "doc_contents"):
+        contents = index_reader.doc_contents(model_id)
+        if contents:
+            return contents
+    if hasattr(index_reader, "doc"):
+        doc = index_reader.doc(model_id)
+        if doc is not None:
+            c = getattr(doc, "contents", None)
+            r = getattr(doc, "raw", None)
+            out = (c() if callable(c) else c) or (r() if callable(r) else r)
+            if out:
+                return out
+    raise ValueError(f"Model ID '{model_id}' not found in sparse index (build with --storeRaw)")
+
+
+def _sparse_search_pyserini(
     query_model_id: str,
-    model_ids: List[str],
-    texts: List[str],
-    bm25_index,
-    top_k: int = 20
+    searcher,
+    index_reader,
+    top_k: int = 20,
 ) -> List[Tuple[str, float]]:
     """
-    Perform sparse retrieval using BM25.
-    
-    Returns:
-        List of (model_id, score) tuples, sorted by score descending
+    Inference: get query text from index, run BM25 search (top-k only), return (docid, score) list.
+    Same logic as ModelTables search_with_pyserini.py.
     """
-    # Find query text
-    try:
-        query_idx = model_ids.index(query_model_id)
-    except ValueError:
-        raise ValueError(f"Model ID '{query_model_id}' not found in corpus")
-    
-    query_text = texts[query_idx]
-    tokenized_query = _tokenize(query_text)
-    
-    # Get BM25 scores (scores every doc in corpus)
     t0 = time.time()
-    scores = bm25_index.get_scores(tokenized_query)
-    results = [(model_ids[i], float(scores[i])) for i in range(len(model_ids))]
-    results.sort(key=lambda x: x[1], reverse=True)
-    filtered_results = [(mid, score) for mid, score in results if mid != query_model_id][:top_k]
-    print(f"  [timing] BM25 get_scores + sort: {time.time() - t0:.2f}s")
-    return filtered_results
+    query_text = _get_query_text_from_index(index_reader, query_model_id)
+    query_text = _truncate_query_pyserini(query_text)
+    print(f"  [timing] sparse: get query text + truncate: {time.time() - t0:.2f}s")
+    t0 = time.time()
+    hits = searcher.search(query_text, k=top_k + 1)
+    results = [(h.docid, float(h.score)) for h in hits if h.docid != query_model_id][:top_k]
+    print(f"  [timing] sparse: BM25 search (top-k): {time.time() - t0:.2f}s")
+    return results
 
 
 def _dense_search_faiss(
@@ -379,8 +363,7 @@ def search_card2card(
     top_k: int = 20,
     output_json: Optional[str] = None,
     retrieval_mode: str = "dense",
-    jsonl_path: str = "data/card2card_corpus.jsonl",
-    bm25_index_path: Optional[str] = None,
+    sparse_index_path: Optional[str] = None,
     hybrid_method: str = "rrf",
     sparse_weight: float = 0.5,
     dense_weight: float = 0.5
@@ -395,8 +378,7 @@ def search_card2card(
         top_k: Number of neighbors to return
         output_json: Optional path to save results as JSON
         retrieval_mode: Retrieval mode - "sparse", "dense", or "hybrid"
-        jsonl_path: Path to corpus JSONL (used only if bm25_index_path not set)
-        bm25_index_path: Path to prebuilt BM25 pickle (Part 1); if set, inference only loads it
+        sparse_index_path: Path to Pyserini Lucene index (Part 1 build-sparse-index); inference only loads it
         hybrid_method: Hybrid combination method - "rrf" or "weighted"
         sparse_weight: Weight for sparse scores (for weighted method)
         dense_weight: Weight for dense scores (for weighted method)
@@ -411,67 +393,80 @@ def search_card2card(
         raise ValueError(f"Invalid retrieval_mode: {retrieval_mode}. Must be 'sparse', 'dense', or 'hybrid'")
     
     results = []
-    
+    inference_sec = None  # time for scoring/retrieval only (excl. loading prebuilt index)
+
     if retrieval_mode == "dense":
         # Dense retrieval (FAISS only)
         print("  [timing] dense retrieval (per-step):")
         t0 = time.time()
         data = np.load(emb_npz)
         ids = data['ids'].tolist()
-        print(f"  [timing] load npz: {time.time() - t0:.2f}s")
+        print(f"  [timing] load npz (not inference): {time.time() - t0:.2f}s")
         try:
             query_idx = ids.index(model_id)
         except ValueError:
             raise ValueError(f"Model ID '{model_id}' not found in corpus")
         t0 = time.time()
         index = faiss.read_index(faiss_index)
-        print(f"  [timing] load FAISS index: {time.time() - t0:.2f}s")
+        print(f"  [timing] load FAISS (not inference): {time.time() - t0:.2f}s")
         t0 = time.time()
         embs = data['embeddings']
         query_emb = embs[query_idx:query_idx+1]
         D, I = index.search(query_emb, top_k + 1)
+        inference_sec = time.time() - t0
         print(f"  [timing] FAISS search: {time.time() - t0:.2f}s")
         neighbor_indices = [i for i in I[0] if i != query_idx][:top_k]
         results = [ids[i] for i in neighbor_indices]
         
     elif retrieval_mode == "sparse":
-        # Sparse: load prebuilt BM25 if given, else build from jsonl
+        if not sparse_index_path or not os.path.isdir(sparse_index_path):
+            raise ValueError("Sparse mode requires --sparse_index_path to a Pyserini Lucene index (run build-sparse-index first)")
         print("  [timing] sparse retrieval (per-step):")
         t0 = time.time()
-        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path, bm25_index_path=bm25_index_path)
-        print(f"  [timing] get_bm25_index total: {time.time() - t0:.2f}s")
-        sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k)
+        searcher, index_reader = _get_pyserini_searcher_and_reader(sparse_index_path)
+        print(f"  [timing] load sparse index total (load, not inference): {time.time() - t0:.2f}s")
+        t_inf = time.time()
+        sparse_results = _sparse_search_pyserini(model_id, searcher, index_reader, top_k)
+        inference_sec = time.time() - t_inf
         results = [mid for mid, _ in sparse_results]
         
     elif retrieval_mode == "hybrid":
-        # Hybrid: sparse then dense then combine
+        if not sparse_index_path or not os.path.isdir(sparse_index_path):
+            raise ValueError("Hybrid mode requires --sparse_index_path (run build-sparse-index first)")
         print("  [timing] hybrid retrieval (per-step):")
         t0 = time.time()
-        bm25_index, model_ids, texts = _get_bm25_index(jsonl_path, bm25_index_path=bm25_index_path)
-        print(f"  [timing] get_bm25_index total: {time.time() - t0:.2f}s")
-        sparse_results = _sparse_search_bm25(model_id, model_ids, texts, bm25_index, top_k * 2)
+        searcher, index_reader = _get_pyserini_searcher_and_reader(sparse_index_path)
+        print(f"  [timing] load sparse index total (load, not inference): {time.time() - t0:.2f}s")
+        t_sparse_inf = time.time()
+        sparse_results = _sparse_search_pyserini(model_id, searcher, index_reader, top_k * 2)
+        sparse_inference = time.time() - t_sparse_inf
         print(f"  [timing] sparse branch total: {time.time() - t0:.2f}s")
         t0 = time.time()
         data = np.load(emb_npz)
         ids = data['ids'].tolist()
-        print(f"  [timing] load npz: {time.time() - t0:.2f}s")
+        print(f"  [timing] load npz (not inference): {time.time() - t0:.2f}s")
         try:
             query_idx = ids.index(model_id)
         except ValueError:
             raise ValueError(f"Model ID '{model_id}' not found in embeddings")
         t0 = time.time()
         index = faiss.read_index(faiss_index)
+        print(f"  [timing] load FAISS (not inference): {time.time() - t0:.2f}s")
+        t0 = time.time()
         embs = data['embeddings']
         query_emb = embs[query_idx:query_idx+1]
         D, I = index.search(query_emb, top_k * 2 + 1)
-        print(f"  [timing] load FAISS + search: {time.time() - t0:.2f}s")
-        
+        print(f"  [timing] hybrid: FAISS search: {time.time() - t0:.2f}s")
+        faiss_search_sec = time.time() - t0
+        t0 = time.time()
         dense_results = []
         for i, score in zip(I[0], D[0]):
             if ids[i] != model_id:
                 dense_results.append((ids[i], float(-score)))
         dense_results.sort(key=lambda x: x[1], reverse=True)
         dense_results = dense_results[:top_k * 2]
+        print(f"  [timing] hybrid: dense build results + sort: {time.time() - t0:.2f}s")
+        dense_build_sec = time.time() - t0
         t0 = time.time()
         # Combine results
         if hybrid_method == "rrf":
@@ -491,17 +486,22 @@ def search_card2card(
             all_ids = set(sparse_norm.keys()) | set(dense_norm.keys())
             
             combined_scores = {}
-            for model_id in all_ids:
-                sparse_score = sparse_norm.get(model_id, 0.0)
-                dense_score = dense_norm.get(model_id, 0.0)
-                combined_scores[model_id] = sparse_weight * sparse_score + dense_weight * dense_score
+            for mid in all_ids:
+                sparse_score = sparse_norm.get(mid, 0.0)
+                dense_score = dense_norm.get(mid, 0.0)
+                combined_scores[mid] = sparse_weight * sparse_score + dense_weight * dense_score
             
             combined_results = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
         else:
             raise ValueError(f"Invalid hybrid_method: {hybrid_method}. Must be 'rrf' or 'weighted'")
-        print(f"  [timing] hybrid combine: {time.time() - t0:.2f}s")
+        print(f"  [timing] hybrid: combine (RRF/weighted): {time.time() - t0:.2f}s")
+        combine_sec = time.time() - t0
+        inference_sec = sparse_inference + faiss_search_sec + dense_build_sec + combine_sec
         results = [mid for mid, _ in combined_results[:top_k]]
     
+    if inference_sec is not None:
+        print(f"  [timing] inference (min): {inference_sec:.2f}s")
+
     # Save if requested
     if output_json:
         result = {
@@ -588,24 +588,25 @@ def main():
     build_parser.add_argument('--device', default=None,
                               help='Device (cuda or cpu). Auto-detects if not set.')
 
-    # Build sparse index (Part 1): save BM25 so inference only loads
-    sparse_build_parser = subparsers.add_parser('build-sparse-index', help='Build and save BM25 index from jsonl (Part 1)')
+    # Build sparse index (Part 1, train): Pyserini Lucene index (same as ModelTables baseline2)
+    sparse_build_parser = subparsers.add_parser('build-sparse-index', help='Train: build Pyserini Lucene BM25 index from jsonl (Part 1)')
     sparse_build_parser.add_argument('--jsonl_path', default='data/card2card_corpus.jsonl', help='Corpus JSONL')
-    sparse_build_parser.add_argument('--output_bm25', default='data/card2card_bm25.pkl', help='Output pickle path')
+    sparse_build_parser.add_argument('--corpus_dir', default='data/card2card_sparse_corpus', help='Dir for Pyserini JsonCollection input')
+    sparse_build_parser.add_argument('--output_index', default='data/card2card_sparse_index', help='Output Lucene index directory')
+    sparse_build_parser.add_argument('--threads', type=int, default=1)
     
-    # Search single command
+    # Search (inference)
     search_parser = subparsers.add_parser('search', help='Search for similar model cards')
-    search_parser.add_argument('--model_id', required=True)
+    search_parser.add_argument('--model_id', help='Single query model ID')
+    search_parser.add_argument('--model_ids_file', help='File with one model_id per line: load index once, then inference per query')
     search_parser.add_argument('--emb_npz', default='data/card2card_embeddings.npz')
     search_parser.add_argument('--faiss_index', default='data/card2card.faiss')
     search_parser.add_argument('--top_k', type=int, default=20)
     search_parser.add_argument('--output_json', default=None)
     search_parser.add_argument('--retrieval_mode', choices=['sparse', 'dense', 'hybrid'], default='dense',
-                              help='Retrieval mode: sparse (BM25), dense (FAISS), or hybrid')
-    search_parser.add_argument('--jsonl_path', default='data/card2card_corpus.jsonl',
-                              help='Corpus JSONL (used only if --bm25_index_path not set)')
-    search_parser.add_argument('--bm25_index_path', default='data/card2card_bm25.pkl',
-                              help='Prebuilt BM25 pickle from Part 1; inference only loads (no rebuild)')
+                              help='Retrieval mode: sparse (Pyserini BM25), dense (FAISS), or hybrid')
+    search_parser.add_argument('--sparse_index_path', default='data/card2card_sparse_index',
+                              help='Pyserini Lucene index dir from Part 1; inference only loads (no rebuild)')
     search_parser.add_argument('--hybrid_method', choices=['rrf', 'weighted'], default='rrf',
                               help='Hybrid combination method: rrf or weighted')
     search_parser.add_argument('--sparse_weight', type=float, default=0.5,
@@ -640,27 +641,56 @@ def main():
     elif args.command == 'build-sparse-index':
         build_sparse_index(
             jsonl_path=args.jsonl_path,
-            output_bm25=args.output_bm25,
+            corpus_dir=args.corpus_dir,
+            output_index=args.output_index,
+            threads=getattr(args, 'threads', 1),
         )
         print(f"\nTotal time: {time.time() - start_time:.2f}s")
     elif args.command == 'search':
-        neighbors = search_card2card(
-            model_id=args.model_id,
-            emb_npz=args.emb_npz,
-            faiss_index=args.faiss_index,
-            top_k=args.top_k,
-            output_json=args.output_json,
-            retrieval_mode=args.retrieval_mode,
-            jsonl_path=args.jsonl_path,
-            bm25_index_path=getattr(args, 'bm25_index_path', None),
-            hybrid_method=args.hybrid_method,
-            sparse_weight=args.sparse_weight,
-            dense_weight=args.dense_weight
-        )
-        print(f"Found {len(neighbors)} neighbors for {args.model_id} (mode: {args.retrieval_mode})")
-        for i, neighbor in enumerate(neighbors, 1):
-            print(f"  {i}. {neighbor}")
-        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
+        model_ids_file = getattr(args, 'model_ids_file', None)
+        if model_ids_file:
+            with open(model_ids_file, 'r', encoding='utf-8') as f:
+                model_ids_list = [line.strip() for line in f if line.strip()]
+            if not model_ids_list:
+                print("No model_ids in file")
+            else:
+                # Load once (first query), then inference (min) per query
+                for i, mid in enumerate(model_ids_list):
+                    if i > 0:
+                        print(f"\n--- Query {i + 1} (inference only, index already loaded) ---")
+                    neighbors = search_card2card(
+                        model_id=mid,
+                        emb_npz=args.emb_npz,
+                        faiss_index=args.faiss_index,
+                        top_k=args.top_k,
+                        output_json=args.output_json if i == 0 else None,
+                        retrieval_mode=args.retrieval_mode,
+                        sparse_index_path=getattr(args, 'sparse_index_path', None),
+                        hybrid_method=args.hybrid_method,
+                        sparse_weight=args.sparse_weight,
+                        dense_weight=args.dense_weight
+                    )
+                    print(f"Found {len(neighbors)} neighbors for {mid}")
+                print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
+        else:
+            if not args.model_id:
+                parser.error("--model_id or --model_ids_file required")
+            neighbors = search_card2card(
+                model_id=args.model_id,
+                emb_npz=args.emb_npz,
+                faiss_index=args.faiss_index,
+                top_k=args.top_k,
+                output_json=args.output_json,
+                retrieval_mode=args.retrieval_mode,
+                sparse_index_path=getattr(args, 'sparse_index_path', None),
+                hybrid_method=args.hybrid_method,
+                sparse_weight=args.sparse_weight,
+                dense_weight=args.dense_weight
+            )
+            print(f"Found {len(neighbors)} neighbors for {args.model_id} (mode: {args.retrieval_mode})")
+            for i, neighbor in enumerate(neighbors, 1):
+                print(f"  {i}. {neighbor}")
+            print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
     elif args.command == 'search-batch':
         neighbors = search_card2card_batch(
             emb_npz=args.emb_npz,
