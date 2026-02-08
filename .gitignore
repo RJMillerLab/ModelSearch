@@ -48,6 +48,8 @@ bak/
 
 # Data
 data/
+data_citationlake
+data_citationlake/
 .env
 *.parquet
 *.db
