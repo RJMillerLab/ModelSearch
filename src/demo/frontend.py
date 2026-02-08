@@ -367,24 +367,17 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <div class="form-row">
-                <label for="card2card_retrieval_mode_select">Card2Card Retrieval:</label>
-                <select id="card2card_retrieval_mode_select" class="form-control">
-                    <option value="dense" selected>Dense (FAISS)</option>
-                    <option value="sparse">Sparse (BM25)</option>
-                    <option value="hybrid">Hybrid (BM25 + FAISS)</option>
-                </select>
+            <div class="form-row one-click-info" style="background: #f0f7ff; border: 1px solid #b8d4e8; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;">
+                <div style="font-size: 13px;">
+                    <strong>One-click runs:</strong><br>
+                    • Card2Card: Dense (FAISS), Sparse (Pyserini), Hybrid (Pyserini+FAISS)<br>
+                    • Card2Tab2Card: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation, dependent_data, feature_for_ml, multi_column_collinearity, negative_example<br>
+                    <span style="color: #555;">Each method logs its elapsed time ⏱️ in the progress log when done.</span>
+                </div>
             </div>
             
             <div class="form-row">
-                <label for="tab2tab_mode_select">Tab2Tab Step:</label>
-                <select id="tab2tab_mode_select" class="form-control" onchange="toggleTab2TabMode()">
-                    <option value="search" selected>Temporary Dataset Search</option>
-                    <option value="load">Load from JSON</option>
-                </select>
-                <div id="tab2tab_json_input" style="display: none; margin-left: 140px;">
-                    <input type="file" id="tab2tab_json_file" accept=".json" class="form-control" style="max-width: 320px;">
-                </div>
+                <span style="font-size: 13px; color: #444;">Table retrieval: Run search</span>
             </div>
             
             <div class="form-row">
@@ -397,7 +390,6 @@ HTML_TEMPLATE = """
                 <label for="table_search_k">Table Search Top K:</label>
                 <input type="range" id="table_search_k_slider" min="1" max="20" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
                 <input type="number" id="table_search_k" class="form-control" value="10" min="1" max="20" oninput="updateTableSearchKSlider(this.value)">
-                <span id="table_search_k_note" style="display: none; font-size: 11px; color: #999;">(Disabled when load JSON)</span>
             </div>
             
             <button id="searchBtn" onclick="startSearch()">Start Search</button>
@@ -467,9 +459,6 @@ HTML_TEMPLATE = """
             // Initialize diagram based on default selected mode (query is default)
             toggleMode();
             
-            // Initialize tab2tab mode
-            toggleTab2TabMode();
-            
             loadPresetQueries();
         });
         
@@ -512,27 +501,6 @@ HTML_TEMPLATE = """
                 const newVal = Math.min(Math.max(suggested, 1), 20);
                 document.getElementById('table_search_k').value = newVal;
                 document.getElementById('table_search_k_slider').value = newVal;
-            }
-        }
-        
-        function toggleTab2TabMode() {
-            const modeEl = document.getElementById('tab2tab_mode_select');
-            const mode = modeEl ? modeEl.value : 'search';
-            const jsonInput = document.getElementById('tab2tab_json_input');
-            const tableSearchKInputs = document.getElementById('table_search_k');
-            const tableSearchKSlider = document.getElementById('table_search_k_slider');
-            const note = document.getElementById('table_search_k_note');
-            
-            if (mode === 'load') {
-                if (jsonInput) jsonInput.style.display = 'inline-block';
-                if (tableSearchKInputs) tableSearchKInputs.disabled = true;
-                if (tableSearchKSlider) tableSearchKSlider.disabled = true;
-                if (note) note.style.display = 'inline';
-            } else {
-                if (jsonInput) jsonInput.style.display = 'none';
-                if (tableSearchKInputs) tableSearchKInputs.disabled = false;
-                if (tableSearchKSlider) tableSearchKSlider.disabled = false;
-                if (note) note.style.display = 'none';
             }
         }
         
@@ -733,8 +701,10 @@ HTML_TEMPLATE = """
             const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt(document.getElementById('top_k').value);
             const tableSearchK = parseInt(document.getElementById('table_search_k').value);
-            const tab2tabMode = (document.getElementById('tab2tab_mode_select') || {}).value || 'search';
-            const card2cardRetrievalMode = (document.getElementById('card2card_retrieval_mode_select') || {}).value || 'dense';
+            // Table retrieval: always run search (no load-from-JSON option)
+            const tab2tabMode = 'search';
+            // One-click: always run all; primary display uses dense
+            const card2cardRetrievalMode = 'dense';
             
             // Validate input based on mode
             if (mode === 'query' && !query) {
@@ -744,15 +714,6 @@ HTML_TEMPLATE = """
             if (mode === 'modelid' && !modelId) {
                 showError('Please enter a model ID');
                 return;
-            }
-            
-            // Validate tab2tab mode
-            if (tab2tabMode === 'load') {
-                const jsonFile = document.getElementById('tab2tab_json_file').files[0];
-                if (!jsonFile) {
-                    showError('Please select a JSON file when using "Load from Saved JSON Results" mode');
-                    return;
-                }
             }
             
             // Reset UI
@@ -765,59 +726,13 @@ HTML_TEMPLATE = """
             try {
                 // Start search
                 const requestBody = {
-                    search_mode: 'new',  // Explicitly set to new search
+                    search_mode: 'new',
                     mode: mode,
                     top_k: topK,
-                    tab2tab_mode: tab2tabMode,
+                    tab2tab_mode: 'search',
+                    table_search_k: tableSearchK,
                     card2card_retrieval_mode: card2cardRetrievalMode
                 };
-                
-                // Add table_search_k only if mode is search
-                if (tab2tabMode === 'search') {
-                    requestBody.table_search_k = tableSearchK;
-                }
-                
-                // Add tab2tab_json if mode is load
-                if (tab2tabMode === 'load') {
-                    const jsonFile = document.getElementById('tab2tab_json_file').files[0];
-                    // Read file as text
-                    const fileReader = new FileReader();
-                    fileReader.onload = async function(e) {
-                        try {
-                            const jsonContent = e.target.result;
-                            // Parse to validate JSON
-                            const jsonData = JSON.parse(jsonContent);
-                            requestBody.tab2tab_json = jsonContent;
-                            
-                            // Continue with the request
-                            const response = await fetch('{{BACKEND_URL}}/api/search', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify(requestBody)
-                            });
-                            
-                            const data = await response.json();
-                            
-                            if (data.status === 'started') {
-                                currentJobId = data.job_id;
-                                startLogStreaming(currentJobId);
-                                pollResults(currentJobId);
-                            } else {
-                                showError(data.message || 'Failed to start search');
-                                document.getElementById('searchBtn').disabled = false;
-                            }
-                        } catch (error) {
-                            showError('Error reading JSON file: ' + error.message);
-                            document.getElementById('searchBtn').disabled = false;
-                        }
-                    };
-                    fileReader.onerror = function() {
-                        showError('Error reading JSON file');
-                        document.getElementById('searchBtn').disabled = false;
-                    };
-                    fileReader.readAsText(jsonFile);
-                    return; // Exit early, will continue in fileReader.onload
-                }
                 
                 if (mode === 'query') {
                     requestBody.query = query;
@@ -964,8 +879,8 @@ HTML_TEMPLATE = """
             const card2cardAllModes = results.card2card_all_modes || {};
             const retrievalModes = [
                 { key: 'dense', label: 'Dense (FAISS)', desc: 'Semantic similarity using embeddings' },
-                { key: 'sparse', label: 'Sparse (BM25)', desc: 'Keyword matching using BM25' },
-                { key: 'hybrid', label: 'Hybrid (BM25 + FAISS)', desc: 'Combines sparse and dense retrieval' }
+                { key: 'sparse', label: 'Sparse (Pyserini)', desc: 'Sparse retrieval via Pyserini Lucene BM25' },
+                { key: 'hybrid', label: 'Hybrid (Pyserini + FAISS)', desc: 'Pyserini sparse + FAISS dense, then combine' }
             ];
             const currentMode = results.card2card_retrieval_mode || 'dense';
             

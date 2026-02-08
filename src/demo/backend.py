@@ -61,7 +61,7 @@ CORS(app)  # Enable CORS for frontend
 # Default paths
 DEFAULT_EMB_NPZ = "data/card2card_embeddings.npz"
 DEFAULT_FAISS_INDEX = "data/card2card.faiss"
-DEFAULT_JSONL = "data/card2card_corpus.jsonl"
+DEFAULT_SPARSE_INDEX = "data/card2card_sparse_index"  # Pyserini Lucene index (build-sparse-index)
 DEFAULT_SCHEMA_LOG = "data_citationlake/logs/parquet_schema.log"
 DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
 DEFAULT_DB_PATH = "data_citationlake/modellake.db"
@@ -263,11 +263,12 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         def run_one_card2card_mode(mode):
             """Run Card2Card for one retrieval mode (used in parallel)."""
             retrieval_mode_display = {
-                "sparse": "sparse (BM25)",
+                "sparse": "sparse (Pyserini)",
                 "dense": "dense (FAISS)",
-                "hybrid": "hybrid (BM25 + FAISS)"
+                "hybrid": "hybrid (Pyserini + FAISS)"
             }.get(mode, mode)
             logger.log(f"  [Card2Card-{mode.upper()}] Starting {retrieval_mode_display} semantic search...")
+            t0 = time.time()
             try:
                 expanded_topk = max(top_k * 2, top_k + 5)
                 logger.log(f"  ℹ️  [Card2Card-{mode.upper()}] Using expanded top_k: {expanded_topk} (requested: {top_k})")
@@ -278,13 +279,17 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                     top_k=expanded_topk,
                     output_json=None,
                     retrieval_mode=mode,
-                    jsonl_path=DEFAULT_JSONL,
+                    sparse_index_path=DEFAULT_SPARSE_INDEX,
                     hybrid_method="rrf"
                 )
+                elapsed = time.time() - t0
+                logger.log(f"  ⏱️ [Card2Card-{mode.upper()}] Done in {elapsed:.2f}s")
                 final_results = results[:top_k]
                 logger.log(f"  ✅ [Card2Card-{mode.upper()}] Found {len(results)} results (returning top {len(final_results)})")
                 return (mode, final_results)
             except Exception as e:
+                elapsed = time.time() - t0
+                logger.log(f"  ⏱️ [Card2Card-{mode.upper()}] Done in {elapsed:.2f}s (error)")
                 logger.log(f"  ❌ [Card2Card-{mode.upper()}] Error: {str(e)}")
                 import traceback
                 logger.log(f"  Traceback: {traceback.format_exc()}")
@@ -300,7 +305,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                     mode, result = future.result()
                     all_results[mode] = result
 
-            primary_results = all_results.get(card2card_retrieval_mode, all_results.get("dense", []))
+            # One-click: run all modes; primary for display defaults to dense
+            primary_results = all_results.get("dense", [])
             if isinstance(primary_results, dict) and "error" in primary_results:
                 primary_results = all_results.get("dense", [])
 
@@ -316,6 +322,7 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         def run_card2tab2card_search(search_type_name, query_parsed, table_search_k=None):
             """Run one Card2Tab2Card search type"""
             logger.log(f"  [Card2Tab2Card-{search_type_name}] Starting...")
+            t0 = time.time()
             try:
                 # query_csv is available in the outer scope
                 # Define hardcoded JSON file paths to check (in priority order)
@@ -886,6 +893,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
             except Exception as e:
                 logger.log(f"  ❌ [Card2Tab2Card-{search_type_name}] Error: {str(e)}")
                 return search_type_name, {"error": str(e)}
+            finally:
+                logger.log(f"  ⏱️ [Card2Tab2Card-{search_type_name}] Done in {time.time() - t0:.2f}s")
         
         # Prepare queries for all search types
         # Follow Blend_internal logic from README examples:
@@ -1065,16 +1074,17 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 'negative_example': []
             }
         else:
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                # Submit all tasks
+            # Parallel: 1 Card2Card task (internally runs dense/sparse/hybrid in parallel) + 12 Card2Tab2Card tasks run concurrently
+            all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', 'negative_example']
+            max_workers = 16  # 1 card2card + up to 12 card2tab2card; run all in parallel
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {}
                 
-                # Submit Card2Card (all modes)
+                # Submit Card2Card (all modes; internally uses 3 threads for dense/sparse/hybrid)
                 futures['card2card'] = executor.submit(run_card2card_all_modes)
                 
-                # Submit all Card2Tab2Card search types (run all: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation, dependent_data, feature_for_ml, multi_column_collinearity, negative_example)
-                all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', 'negative_example']
-                logger.log(f"  ℹ️  Running {len(all_search_types)} search types: {', '.join(all_search_types)}")
+                # Submit all Card2Tab2Card search types in parallel
+                logger.log(f"  ℹ️  Running {len(all_search_types)} search types in parallel: {', '.join(all_search_types)}")
                 for search_type_name in all_search_types:
                     query_parsed = queries_parsed[search_type_name]
                     # Skip if query is None (e.g., no CSV loaded)

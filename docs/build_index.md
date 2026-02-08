@@ -209,15 +209,15 @@ Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
 |----------|-----------|-----------------|--------|------|
 | query2modelcard.log | 10.09 | — | cuda | |
 | card2card_dense.log | 11.11 | ~7.7 | cuda | FAISS search only |
-| card2card_sparse.log | (re-run) | — | — | Pyserini: load index + top-k search |
-| card2card_hybrid.log | (re-run) | — | — | sparse + FAISS + combine |
+| card2card_sparse.log | 4.04 | 0.67 | cpu | load index 3.37s, get query+truncate 0.03s, BM25 top-k 0.65s |
+| card2card_hybrid.log | 17.22 | 7.92 | cuda | sparse branch 2.75s, load npz 1.76s, FAISS 4.68s, search 7.60s |
 | tab2tab_keyword.log | 0.11 | — | cpu | |
 | tab2tab_single_column.log | 0.09 | — | cpu | |
 | tab2tab_by_type.log | 0.21 | — | — | (script may print ⏱️ Total time without device) |
 | card2tab2card_* / tab2tab_by_type_* | (see prior rows if present) | | | |
 | tab2tab_by_type_multi_column.log | — | — | | DuckDB to_bitstring; fix in Blend_internal (2.5) |
 
-**Sparse (Pyserini):** inference = get query text + truncate + BM25 search (top-k only). **Hybrid:** same sparse step, then load npz/FAISS, FAISS search, combine. Re-run sparse/hybrid after building the Lucene index (1.1b) and refresh timings.
+**Sparse (Pyserini):** inference (min) = get query text + truncate + BM25 top-k search (~0.67s). **Hybrid:** inference (min) = sparse step + FAISS search + combine (~7.92s).
 
 Run `grep -h "Total time\|inference (min)\|\[timing\]" logs/*.log` to refresh.
 
