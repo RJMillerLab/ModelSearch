@@ -257,8 +257,8 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         else:
             query_df = None
         
-        # Step 3: Run Card2Card and Card2Tab2Card in parallel
-        logger.log("Step 3: Running Card2Card and Card2Tab2Card pipelines in parallel...")
+        # Step 3: Run Card2Card (left three) and Card2Tab2Card with table search (right) in parallel
+        logger.log("Step 3: Running in parallel — Card2Card (dense / sparse / hybrid) and Card2Tab2Card table search (all 12 types).")
         
         def run_one_card2card_mode(mode):
             """Run Card2Card for one retrieval mode (used in parallel)."""
@@ -1074,17 +1074,17 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
                 'negative_example': []
             }
         else:
-            # Parallel: 1 Card2Card task (internally runs dense/sparse/hybrid in parallel) + 12 Card2Tab2Card tasks run concurrently
+            # Parallel: left three (Card2Card dense/sparse/hybrid) and right (Card2Tab2Card with table search) run together
             all_search_types = ['single_column', 'keyword', 'multi_column', 'unionable', 'complex', 'correlation', 'imputation', 'augmentation', 'dependent_data', 'feature_for_ml', 'multi_column_collinearity', 'negative_example']
-            max_workers = 16  # 1 card2card + up to 12 card2tab2card; run all in parallel
+            max_workers = 16  # 1 card2card + up to 12 card2tab2card (each does table search); all in parallel
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {}
                 
-                # Submit Card2Card (all modes; internally uses 3 threads for dense/sparse/hybrid)
+                # Left three: Card2Card (internally 3 threads for dense/sparse/hybrid)
                 futures['card2card'] = executor.submit(run_card2card_all_modes)
                 
-                # Submit all Card2Tab2Card search types in parallel
-                logger.log(f"  ℹ️  Running {len(all_search_types)} search types in parallel: {', '.join(all_search_types)}")
+                # Right: Card2Tab2Card (each type runs table search then card2tab2card) — all in parallel
+                logger.log(f"  ℹ️  Table search + Card2Tab2Card: running {len(all_search_types)} types in parallel: {', '.join(all_search_types)}")
                 for search_type_name in all_search_types:
                     query_parsed = queries_parsed[search_type_name]
                     # Skip if query is None (e.g., no CSV loaded)
