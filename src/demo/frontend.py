@@ -361,6 +361,13 @@ HTML_TEMPLATE = """
                     </select>
                     <input type="text" id="query" class="form-control" placeholder="Type or pick preset" value="transformer model for code generation">
                 </div>
+                <div class="form-row" id="require-seed-has-tables-row" style="margin-top: 8px;">
+                    <label for="require_seed_has_tables">Seed for Table Search:</label>
+                    <select id="require_seed_has_tables" class="form-control" style="width: 200px; flex: none;">
+                        <option value="0">Use top-1 (Table Search may be empty)</option>
+                        <option value="1">Narrow down: first model with tables</option>
+                    </select>
+                </div>
             </div>
             
             <div class="mode-input" id="modelid-input">
@@ -739,6 +746,8 @@ HTML_TEMPLATE = """
                 
                 if (mode === 'query') {
                     requestBody.query = query;
+                    const requireSeedEl = document.getElementById('require_seed_has_tables');
+                    requestBody.require_seed_has_tables = !!(requireSeedEl && requireSeedEl.value === '1');
                 } else {
                     requestBody.model_id = modelId;
                 }

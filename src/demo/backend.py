@@ -87,6 +87,26 @@ def _read_json(path: str) -> Optional[Dict]:
         return json.load(f)
 
 
+def _model_has_tables(parquet_path: str, model_id: str) -> bool:
+    """Return True if model_id has at least one row with csv_basename in relationship parquet."""
+    if not os.path.isfile(parquet_path) or not model_id:
+        return False
+    try:
+        import pandas as pd
+        df = pd.read_parquet(parquet_path, columns=None)
+        # Column may be modelId or model_id
+        id_col = "modelId" if "modelId" in df.columns else ("model_id" if "model_id" in df.columns else None)
+        base_col = "csv_basename" if "csv_basename" in df.columns else None
+        if id_col is None or base_col is None:
+            return False
+        subset = df[df[id_col].astype(str).str.strip() == str(model_id).strip()]
+        if subset.empty:
+            return False
+        return subset[base_col].notna().any() and (subset[base_col].astype(str).str.strip() != "").any()
+    except Exception:
+        return False
+
+
 def run_search_pipeline(
     job_id: str,
     query: Optional[str] = None,
@@ -96,6 +116,7 @@ def run_search_pipeline(
     tab2tab_mode: str = "search",
     tab2tab_json: Optional[str] = None,
     card2card_retrieval_mode: str = "dense",
+    require_seed_has_tables: bool = False,
 ):
     """Run pipeline by calling CLI commands (build_index.md). All outputs under job_dir."""
     logger = jobs.get(job_id)
@@ -119,6 +140,7 @@ def run_search_pipeline(
         _run_pipeline_body(
             logger, job_id, job_dir, start_time,
             query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode,
+            require_seed_has_tables,
         )
     except Exception as e:
         logger.log(f"Pipeline crashed: {e}")
@@ -139,6 +161,7 @@ def _run_pipeline_body(
     tab2tab_mode: str,
     tab2tab_json: Optional[str],
     card2card_retrieval_mode: str,
+    require_seed_has_tables: bool = False,
 ):
     logger.log("Starting search pipeline (CLI)...")
     logger.log("Mode: Query → ModelCard → Search" if query else "Mode: Model ID → Search")
@@ -149,14 +172,18 @@ def _run_pipeline_body(
     logger.set_status("running")
 
     # Resolve model_id (query mode: from FAISS retrieval only; no default/hardcoded id)
+    seed_no_tables_skip_table_search = False  # when True: use first model for Card2Card only, skip Card2Tab2Card and set reason
     if query:
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
         logger.log(f"query2modelcard input query: {query!r}")
         q2m_out = os.path.join(job_dir, "query2modelcard.json")
+        q2m_top_k = 20 if require_seed_has_tables else 1  # narrow down: get more candidates to pick first with tables
+        # Run as script to avoid importing whole src.search (card2card, FAISS, etc.) and RuntimeWarning/segfault
+        q2m_script = os.path.join(REPO_ROOT, "src", "search", "query2modelcard.py")
         cmd = [
-            sys.executable, "-m", "src.search.query2modelcard",
+            sys.executable, q2m_script,
             "--query", query,
-            "--top_k", "1",
+            "--top_k", str(q2m_top_k),
             "--emb_npz", DEFAULT_EMB_NPZ,
             "--faiss_index", DEFAULT_FAISS_INDEX,
             "--output_json", q2m_out,
@@ -173,16 +200,39 @@ def _run_pipeline_body(
             logger.set_status("error")
             logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
             return
-        first = data["results"][0]
-        model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
-        if not model_id:
-            logger.log("query2modelcard returned empty model_id")
-            logger.set_status("error")
-            logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
-            return
-        # Confirm: id comes from query2modelcard JSON (FAISS top-1), not a default
+        results_list = data["results"]
         stored_query = data.get("query", "")
-        logger.log(f"Extracted model: {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
+
+        if require_seed_has_tables:
+            rel_path = os.path.join(REPO_ROOT, DEFAULT_RELATIONSHIP_PARQUET)
+            chosen = None
+            for i, r in enumerate(results_list):
+                mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
+                if not mid:
+                    continue
+                if _model_has_tables(rel_path, mid):
+                    chosen = mid
+                    logger.log(f"Narrow down: first model with tables in parquet is #{i+1}: {chosen}")
+                    break
+            if chosen is not None:
+                model_id = chosen
+                logger.log(f"Extracted model (with tables): {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
+            else:
+                # Cross: none of top-K have tables; use first for Card2Card only, skip Table Search
+                first = results_list[0]
+                model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
+                seed_no_tables_skip_table_search = True
+                logger.log(f"Require seed has tables: none of top-{len(results_list)} models have tables in dataset. Using top-1 for Card2Card only; Table Search skipped.")
+                logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
+        else:
+            first = results_list[0]
+            model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
+            if not model_id:
+                logger.log("query2modelcard returned empty model_id")
+                logger.set_status("error")
+                logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                return
+            logger.log(f"Extracted model: {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
     else:
         if not model_id:
             logger.log("model_id is required in modelid mode")
@@ -258,8 +308,10 @@ def _run_pipeline_body(
 
     def run_card2tab2card(st: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
+        # Run as script to avoid RuntimeWarning (src.search pre-import) and unpredictable behaviour
+        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
         cmd = [
-            sys.executable, "-m", "src.search.card2tab2card",
+            sys.executable, c2t2c_script,
             "--model_id", model_id,
             "--search_type", st,
             "--k", str(k_table),
@@ -280,11 +332,13 @@ def _run_pipeline_body(
     with ThreadPoolExecutor(max_workers=16) as ex:
         for m in card2card_modes:
             futures[ex.submit(run_card2card, m)] = ("card2card", m)
-        for st in card2tab2card_types:
-            futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
+        if not seed_no_tables_skip_table_search:
+            for st in card2tab2card_types:
+                futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
 
     card2card_all = {}
     card2tab2card_all = {}
+    table_search_empty_reason: Optional[str] = None
 
     for fut in as_completed(futures):
         kind, name = futures[fut]
@@ -319,6 +373,12 @@ def _run_pipeline_body(
                     logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
                     if len(lst) == 0 and qty == 0:
                         logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {DEFAULT_RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
+                        if table_search_empty_reason is None:
+                            table_search_empty_reason = (
+                                f"Seed model «{model_id}» has no tables in the dataset: it is not in "
+                                f"{DEFAULT_RELATIONSHIP_PARQUET} or has no csv_basename. "
+                                "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
+                            )
                         cli_out = (err or out or "").strip()
                         if cli_out and ("No tables" in cli_out or "Warning" in cli_out):
                             for line in cli_out.split("\n")[-3:]:
@@ -328,6 +388,15 @@ def _run_pipeline_body(
                     card2tab2card_all[st] = []
                     logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
+    # When we skipped Table Search (require_seed_has_tables but none had tables), fill empty
+    if seed_no_tables_skip_table_search:
+        for st in card2tab2card_types:
+            card2tab2card_all[st] = []
+        if table_search_empty_reason is None:
+            table_search_empty_reason = (
+                "None of the top-20 models from the query have tables in the dataset. "
+                "Table Search skipped. Select «Use top-1» for Seed for Table Search to run with top-1 anyway."
+            )
     # Fill missing card2tab2card types with empty (no scan)
     for st in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation",
                "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example"]:
@@ -355,6 +424,8 @@ def _run_pipeline_body(
         "folder_path": job_dir,
         "running_time_seconds": round(elapsed_total, 3),
     }
+    if table_search_empty_reason:
+        results_data["table_search_reason"] = table_search_empty_reason
 
     out_file = os.path.join(job_dir, "search_results.json")
     with open(out_file, "w", encoding="utf-8") as f:
@@ -391,14 +462,12 @@ def search():
         return jsonify({"status": "completed", "job_id": job_id, "results": saved})
 
     mode = data.get("mode", "query")
-    try:
-        top_k = int(data.get("top_k", 20) or 20)
-    except (TypeError, ValueError):
-        top_k = 20
+    top_k = int(data.get("top_k", 20))
     table_search_k = data.get("table_search_k")
     tab2tab_mode = data.get("tab2tab_mode", "search")
     tab2tab_json = data.get("tab2tab_json")
     card2card_retrieval_mode = data.get("card2card_retrieval_mode", "dense")
+    require_seed_has_tables = bool(data.get("require_seed_has_tables", False))
 
     if mode == "query":
         query = (data.get("query") or "").strip()
@@ -420,7 +489,7 @@ def search():
     jobs[job_id] = JobLogger(job_id)
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode),
+        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables),
     )
     thread.daemon = True
     thread.start()
