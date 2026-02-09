@@ -1254,7 +1254,7 @@ def search_card2tab2card_by_type(
     print(f"📊 Final Results Summary")
     print(f"{'='*60}")
     print(f"✅ Query Model: {model_id}")
-    print(f"✅ Found {len(final_results)} similar model cards" + (f" (top {modelcard_k}, filtered by classification)" if modelcard_k and modelcard_k > 0 else " (filtered by classification)")
+    print(f"✅ Found {len(final_results)} similar model cards" + (f" (top {modelcard_k}, filtered by classification)" if modelcard_k and modelcard_k > 0 else " (filtered by classification)"))
     if final_results:
         print(f"📝 Sample results (showing first 2):")
         for i, model_id_result in enumerate(final_results[:2], 1):
