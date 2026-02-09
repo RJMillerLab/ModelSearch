@@ -1181,40 +1181,46 @@ HTML_TEMPLATE = """
             const integrationCardStyle = 'padding: 24px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 10px; border: 1px solid #dee2e6; box-shadow: 0 4px 12px rgba(0,0,0,0.06); font-family: inherit; font-size: 14px; color: #212529; min-width: 0;';
             const integrationTitleStyle = 'margin-top: 0; font-size: 18px; font-weight: 600; color: #1a1d21; letter-spacing: -0.02em;';
             const integrationDescStyle = 'font-size: 14px; color: #5a6268; margin-bottom: 18px; line-height: 1.5;';
-            const integrationBtnStyle = 'padding: 12px 28px; font-size: 15px; font-weight: 600; background: linear-gradient(180deg, #007bff 0%, #0056b3 100%); color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,123,255,0.3);';
-            const topKRowStyle = 'display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;';
-            const topKBlockStyle = 'flex: 1; min-width: 200px;';
             const topKLabelStyle = 'display: block; margin-bottom: 4px; font-weight: 500; color: #212529;';
             html += `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 30px;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="${integrationDescStyle}">Run both: <span class="number-badge">1</span> Card2Card (model search) + <span class="number-badge">2</span> Card2Tab2Card (table search). Shared settings below; one button runs both in parallel. Table search returns <strong>all models</strong> that contain the retrieved tables (no model cap).</p>
-                    <div class="form-row" style="margin-bottom: 12px;">
-                        <label style="min-width: 140px; margin-bottom: 0; font-size: 14px; font-weight: 500;">Integration Type:</label>
-                        <select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select>
-                    </div>
-                    <div style="${topKRowStyle}">
-                        <div style="${topKBlockStyle}">
-                            <label for="integration_k" style="${topKLabelStyle}">Top K Tables:</label>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="range" id="integration_k_slider" min="1" max="50" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateIntegrationKValue(this.value)">
-                                <input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" oninput="updateIntegrationKSlider(this.value)" style="width: 80px;">
-                            </div>
+                    <div style="margin-bottom: 12px;">
+                        <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px;">
+                            <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" style="width: 140px; box-sizing: border-box;">
+                                <option value="union">Union</option>
+                                <option value="intersection">Intersection</option>
+                                <option value="alite">ALITE</option>
+                                <option value="outer_join">Outer Join</option>
+                            </select></div>
+                            <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 140px; box-sizing: border-box;"></div>
+                            <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 140px; box-sizing: border-box;"></div>
                         </div>
-                        <div style="${topKBlockStyle}">
-                            <label for="integration_max_models" style="${topKLabelStyle}">Max Models:</label>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="range" id="integration_max_models_slider" min="1" max="50" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateIntegrationMaxModelsValue(this.value)">
-                                <input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" oninput="updateIntegrationMaxModelsSlider(this.value)" style="width: 80px;">
-                            </div>
+                        <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
+                            <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Model Search option:</label><select id="integration_model_search_mode" class="form-control" style="width: 140px; box-sizing: border-box;">
+                                <option value="dense">Dense</option>
+                                <option value="sparse">Sparse</option>
+                                <option value="hybrid">Hybrid</option>
+                            </select></div>
+                            <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Table Search option:</label><select id="integration_search_type" class="form-control" style="width: 140px; box-sizing: border-box;">
+                                <option value="single_column">Single Column</option>
+                                <option value="keyword">Keyword</option>
+                                <option value="multi_column">Multi Column</option>
+                                <option value="unionable">Unionable</option>
+                                <option value="complex">Complex</option>
+                                <option value="correlation">Correlation</option>
+                                <option value="imputation">Imputation</option>
+                                <option value="augmentation">Augmentation</option>
+                                <option value="dependent_data">Dependent Data</option>
+                                <option value="feature_for_ml">Feature for ML</option>
+                                <option value="multi_column_collinearity">Multi-Column Collinearity</option>
+                                <option value="negative_example">Negative Example</option>
+                            </select></div>
                         </div>
                     </div>
-                    <div class="form-row" style="margin-bottom: 12px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center;">
-                        <div><label style="font-weight: 500;">Model Search (Card2Card) mode:</label> <select id="integration_model_search_mode" class="form-control" style="max-width: 160px; margin-left: 8px;"><option value="dense">Dense</option><option value="sparse">Sparse</option><option value="hybrid">Hybrid</option></select></div>
-                        <div><label style="font-weight: 500;">Table Search type:</label> <select id="integration_search_type" class="form-control" style="max-width: 280px; margin-left: 8px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
-                    </div>
-                    <div style="margin-top: 16px;">
-                        <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="${integrationBtnStyle}">🔗 Run Both Integrations (Model Search + Table Search)</button>
+                    <div style="margin-top: 12px;">
+                        <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Run Both Integrations</button>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 20px; display: none;">
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
@@ -1317,8 +1323,63 @@ HTML_TEMPLATE = """
         }
         
         // Fixed viewport: table never expands the page; user scrolls inside this window only
-        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff; resize: none;';
+        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff; resize: none; position: relative;';
         window.__integrationTables = window.__integrationTables || {};
+        window.__tableViewports = window.__tableViewports || {};
+        
+        function showTableAsImage(tableId, downloadId) {
+            const t = window.__integrationTables[downloadId];
+            if (!t || !t.columns || !t.data) return;
+            const modalId = `table-image-modal-${tableId}`;
+            const existing = document.getElementById(modalId);
+            if (existing) { existing.remove(); }
+            const modal = document.createElement('div');
+            modal.id = modalId;
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; cursor: move;';
+            const container = document.createElement('div');
+            container.style.cssText = 'position: relative; max-width: 95%; max-height: 95%; overflow: auto; background: white; border-radius: 8px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);';
+            container.style.transform = 'scale(1)';
+            container.style.transformOrigin = 'center center';
+            let scale = 1, isDragging = false, startX = 0, startY = 0, offsetX = 0, offsetY = 0;
+            const buildTableHtml = () => {
+                return `<table style="width: max-content; border-collapse: collapse; font-size: 12px; margin: 0 auto;">
+                    <thead><tr style="background: #f8f9fa;">
+                        ${t.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 8px; text-align: left; background: #f8f9fa; white-space: nowrap;">${col}</th>`).join('')}
+                    </tr></thead>
+                    <tbody>
+                        ${t.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                    </tbody>
+                </table>`;
+            };
+            container.innerHTML = `<div style="position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; z-index: 10;">
+                <button onclick="this.closest('[id^=\\'table-image-modal-\\']').querySelector('[data-scale-up]').click()" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">🔍+</button>
+                <button onclick="this.closest('[id^=\\'table-image-modal-\\']').querySelector('[data-scale-down]').click()" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">🔍-</button>
+                <button onclick="this.closest('[id^=\\'table-image-modal-\\']').querySelector('[data-reset]').click()" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">↺ Reset</button>
+                <button onclick="this.closest('[id^=\\'table-image-modal-\\']').remove()" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">✕ Close</button>
+            </div>
+            <div data-table-content>${buildTableHtml()}</div>`;
+            const scaleUp = document.createElement('button');
+            scaleUp.setAttribute('data-scale-up', '');
+            scaleUp.style.display = 'none';
+            scaleUp.onclick = () => { scale = Math.min(scale * 1.2, 5); container.style.transform = `scale(${scale})`; };
+            const scaleDown = document.createElement('button');
+            scaleDown.setAttribute('data-scale-down', '');
+            scaleDown.style.display = 'none';
+            scaleDown.onclick = () => { scale = Math.max(scale / 1.2, 0.2); container.style.transform = `scale(${scale})`; };
+            const reset = document.createElement('button');
+            reset.setAttribute('data-reset', '');
+            reset.style.display = 'none';
+            reset.onclick = () => { scale = 1; offsetX = 0; offsetY = 0; container.style.transform = 'scale(1)'; container.style.left = ''; container.style.top = ''; };
+            container.appendChild(scaleUp);
+            container.appendChild(scaleDown);
+            container.appendChild(reset);
+            modal.appendChild(container);
+            modal.onmousedown = (e) => { if (e.target === modal) { isDragging = true; startX = e.clientX - offsetX; startY = e.clientY - offsetY; } };
+            modal.onmousemove = (e) => { if (isDragging && e.target === modal) { offsetX = e.clientX - startX; offsetY = e.clientY - startY; container.style.left = offsetX + 'px'; container.style.top = offsetY + 'px'; } };
+            modal.onmouseup = () => { isDragging = false; };
+            modal.onwheel = (e) => { e.preventDefault(); scale = Math.max(0.2, Math.min(5, scale - e.deltaY * 0.001)); container.style.transform = `scale(${scale})`; };
+            document.body.appendChild(modal);
+        }
         
         function downloadIntegrationTableAsCsv(downloadId) {
             const t = window.__integrationTables[downloadId];
@@ -1353,18 +1414,21 @@ HTML_TEMPLATE = """
                 <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
                 <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols</div>
                 ${extraHtml}
-                <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" title="Scroll inside this window to see the full table">
-                    <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
-                        <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
-                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
-                        </tr></thead>
-                        <tbody>
-                            ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
-                        </tbody>
-                    </table>
+                <div style="position: relative;">
+                    <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Scroll inside this window to see the full table">
+                        <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
+                            <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
+                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
+                            </tr></thead>
+                            <tbody>
+                                ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
                 <div style="margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
                     ${footer.join('')}
+                    <button type="button" onclick="showTableAsImage('${downloadId}', '${downloadId}')" style="margin-left: 8px; padding: 6px 12px; font-size: 13px; background: #17a2b8; color: white; border: none; border-radius: 6px; cursor: pointer;">🖼️ View as Image (Drag & Zoom)</button>
                 </div>
             </div>`;
             return html;
