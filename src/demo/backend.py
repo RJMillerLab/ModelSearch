@@ -215,18 +215,18 @@ def _run_pipeline_body(
                 if str(mid).strip() in valid_model_ids:
                     chosen = str(mid).strip()
                     logger.log(f"Narrow down: first result in valid set is #{i+1}: {chosen}")
-                        break
+                    break
             if chosen is not None:
                 model_id = chosen
                 logger.log(f"Extracted model (with tables): {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
-                            else:
+            else:
                 # Cross: none of top-K are in valid set; use raw top-1 for Card2Card only, skip Table Search
                 first = results_list[0]
                 model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
                 seed_no_tables_skip_table_search = True
                 logger.log(f"Table Search Seed Model: Pick first model with tables - none of top-{len(results_list)} in valid set (have tables). Using top-1 for Card2Card only; Table Search skipped.")
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
-                                        else:
+        else:
             first = results_list[0]
             model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
             if not model_id:
@@ -235,7 +235,7 @@ def _run_pipeline_body(
                 logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
                 return
             logger.log(f"Extracted model: {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
-                                else:
+    else:
         if not model_id:
             logger.log("model_id is required in modelid mode")
             logger.set_status("error")
@@ -301,7 +301,7 @@ def _run_pipeline_body(
             cmd.extend(["--emb_npz", DEFAULT_EMB_NPZ, "--faiss_index", DEFAULT_FAISS_INDEX])
         elif mode == "sparse":
             cmd.extend(["--sparse_index_path", DEFAULT_SPARSE_INDEX])
-                            else:
+        else:
             cmd.extend(["--emb_npz", DEFAULT_EMB_NPZ, "--faiss_index", DEFAULT_FAISS_INDEX, "--sparse_index_path", DEFAULT_SPARSE_INDEX, "--hybrid_method", "rrf"])
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT)
@@ -330,7 +330,7 @@ def _run_pipeline_body(
     card2card_modes = ["dense", "sparse", "hybrid"]
     card2tab2card_types = ["keyword", "single_column"]  # CLI supports these without CSV
 
-                futures = {}
+    futures = {}
     with ThreadPoolExecutor(max_workers=16) as ex:
         for m in card2card_modes:
             futures[ex.submit(run_card2card, m)] = ("card2card", m)
@@ -351,12 +351,12 @@ def _run_pipeline_body(
             if rc != 0:
                 logger.log(f"[Card2Card-{mode.upper()}] Error (exit {rc}): {err or out}")
                 card2card_all[mode] = {"error": err or out}
-                    else:
+            else:
                 data = _read_json(out_path)
                 if data is not None:
                     # CLI writes "neighbors" (list of model_id); legacy used "results"
                     card2card_all[mode] = data.get("neighbors", data.get("results", []))
-                        else:
+                else:
                     card2card_all[mode] = []
         else:
             st, rc, out_path, out, err, elapsed = res
@@ -375,7 +375,7 @@ def _run_pipeline_body(
                         mid = data.get("model_ids", [])
                         lst = list(mid) if isinstance(mid, (list, np.ndarray)) else []
                         qty = len(data.get("query_tables", []))
-            else:
+                    else:
                         # Legacy format: just a list/array of model_ids
                         lst = list(data) if isinstance(data, (list, np.ndarray)) else []
                         card2tab2card_all[st] = {"model_ids": lst, "intermediate": {}}
@@ -394,7 +394,7 @@ def _run_pipeline_body(
                             for line in cli_out.split("\n")[-3:]:
                                 if line.strip():
                                     logger.log(f"[Card2Tab2Card-{st}] CLI: {line.strip()}")
-            else:
+                else:
                     # Save as empty object (consistent format) so frontend can handle it
                     card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
                     logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
@@ -420,18 +420,18 @@ def _run_pipeline_body(
 
     elapsed_total = time.time() - start_time
     logger.log(f"Step 3: Done. Total time: {elapsed_total:.2f}s")
-        
-        results_data = {
-            "job_id": job_id,
-            "query": query,
-            "model_id": model_id,
-            "top_k": top_k,
+
+    results_data = {
+        "job_id": job_id,
+        "query": query,
+        "model_id": model_id,
+        "top_k": top_k,
         "table_search_k": k_table,
-            "card2card_retrieval_mode": card2card_retrieval_mode,
+        "card2card_retrieval_mode": card2card_retrieval_mode,
         "card2card_results": primary,
         "card2card_all_modes": card2card_all,
         "card2tab2card_results": card2tab2card_all,
-            "timestamp": datetime.fromtimestamp(start_time).isoformat(),
+        "timestamp": datetime.fromtimestamp(start_time).isoformat(),
         "folder_path": job_dir,
         "running_time_seconds": round(elapsed_total, 3),
     }
@@ -440,9 +440,9 @@ def _run_pipeline_body(
 
     out_file = os.path.join(job_dir, "search_results.json")
     with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(results_data, f, ensure_ascii=False, indent=2)
+        json.dump(results_data, f, ensure_ascii=False, indent=2)
     logger.log(f"Results saved to {out_file}")
-        logger.set_results(results_data)
+    logger.set_results(results_data)
     logger.set_status("completed")
     logger.log("Pipeline completed.")
 
@@ -454,22 +454,22 @@ def health():
 
 @app.route("/api/search", methods=["POST"])
 def search():
-        data = request.json or {}
+    data = request.json or {}
     search_mode = data.get("search_mode", "new")
-        
+
     if search_mode == "mimic":
         folder_name = data.get("folder_name")
-            if not folder_name:
+        if not folder_name:
             return jsonify({"status": "error", "message": "folder_name required for mimic"}), 400
         path = os.path.join(REPO_ROOT, "data", "template", "search_results.json") if folder_name == "template" else os.path.join(REPO_ROOT, "data", folder_name, "search_results.json")
         if not os.path.exists(path):
             return jsonify({"status": "error", "message": f"Saved results not found: {folder_name}"}), 404
         with open(path, "r", encoding="utf-8") as f:
             saved = json.load(f)
-            job_id = str(uuid.uuid4())
-            jobs[job_id] = JobLogger(job_id)
+        job_id = str(uuid.uuid4())
+        jobs[job_id] = JobLogger(job_id)
         jobs[job_id].set_results(saved)
-            jobs[job_id].set_status("completed")
+        jobs[job_id].set_status("completed")
         return jsonify({"status": "completed", "job_id": job_id, "results": saved})
 
     mode = data.get("mode", "query")
@@ -482,28 +482,28 @@ def search():
 
     if mode == "query":
         query = (data.get("query") or "").strip()
-            if not query:
+        if not query:
             return jsonify({"status": "error", "message": "query required"}), 400
-            model_id = None
+        model_id = None
     elif mode == "modelid":
         model_id = (data.get("model_id") or "").strip()
-            if not model_id:
+        if not model_id:
             return jsonify({"status": "error", "message": "model_id required"}), 400
-            query = None
-        else:
+        query = None
+    else:
         return jsonify({"status": "error", "message": "mode must be query or modelid"}), 400
-        
+
     if tab2tab_mode == "load" and not tab2tab_json:
         return jsonify({"status": "error", "message": "tab2tab_json required when tab2tab_mode=load"}), 400
-        
-        job_id = str(uuid.uuid4())
-        jobs[job_id] = JobLogger(job_id)
-        thread = threading.Thread(
-            target=run_search_pipeline,
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = JobLogger(job_id)
+    thread = threading.Thread(
+        target=run_search_pipeline,
         args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables),
-        )
-        thread.daemon = True
-        thread.start()
+    )
+    thread.daemon = True
+    thread.start()
     return jsonify({"status": "started", "job_id": job_id, "message": "Search pipeline started"})
 
 
@@ -640,10 +640,10 @@ def integrate():
         integrated_df = result.get("integrated_table")
         if integrated_df is not None:
             result["integrated_table"] = {
-            "columns": list(integrated_df.columns),
+                "columns": list(integrated_df.columns),
                 "data": integrated_df.values.tolist()
             }
-        
+
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback
@@ -659,8 +659,8 @@ def integrate_model_search():
     integration_type = data.get("integration_type", "union")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
-        
-        if not job_id:
+
+    if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
     
     # Find job results file
@@ -691,10 +691,10 @@ def integrate_model_search():
         integrated_df = result.get("integrated_table")
         if integrated_df is not None:
             result["integrated_table"] = {
-            "columns": list(integrated_df.columns),
+                "columns": list(integrated_df.columns),
                 "data": integrated_df.values.tolist()
             }
-        
+
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback
