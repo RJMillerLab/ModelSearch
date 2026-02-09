@@ -1323,9 +1323,54 @@ HTML_TEMPLATE = """
         }
         
         // Fixed viewport: table never expands the page; user scrolls inside this window only
-        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff; resize: none; position: relative;';
+        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow: hidden; border: 1px solid #dee2e6; border-radius: 6px; background: #fff; position: relative; cursor: grab; user-select: none;';
         window.__integrationTables = window.__integrationTables || {};
         window.__tableViewports = window.__tableViewports || {};
+        
+        function initTablePanZoom(root) {
+            if (!root) return;
+            root.querySelectorAll('.integration-table-viewport').forEach(viewport => {
+                let wrapper = viewport.querySelector('.integration-table-panzoom');
+                if (!wrapper) return;
+                let scale = 1, tx = 0, ty = 0, isDrag = false, startX = 0, startY = 0, startTx = 0, startTy = 0;
+                const apply = () => {
+                    wrapper.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+                    wrapper.style.transformOrigin = '0 0';
+                };
+                const onMove = (e) => {
+                    tx = startTx + (e.clientX - startX);
+                    ty = startTy + (e.clientY - startY);
+                    apply();
+                };
+                const onUp = () => {
+                    isDrag = false;
+                    viewport.style.cursor = 'grab';
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+                viewport.addEventListener('mousedown', (e) => {
+                    if (e.button !== 0) return;
+                    isDrag = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    startTx = tx;
+                    startTy = ty;
+                    viewport.style.cursor = 'grabbing';
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+                viewport.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+                    scale = Math.max(0.25, Math.min(3, scale + delta));
+                    apply();
+                }, { passive: false });
+                viewport.addEventListener('mouseleave', () => {
+                    if (isDrag) onUp();
+                });
+                apply();
+            });
+        }
         
         function showTableAsImage(tableId, downloadId) {
             const t = window.__integrationTables[downloadId];
@@ -1415,15 +1460,17 @@ HTML_TEMPLATE = """
                 <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols</div>
                 ${extraHtml}
                 <div style="position: relative;">
-                    <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Scroll inside this window to see the full table">
-                        <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
-                            <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
-                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
-                            </tr></thead>
-                            <tbody>
-                                ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
-                            </tbody>
-                        </table>
+                    <div class="integration-table-viewport" style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Drag to pan, scroll to zoom">
+                        <div class="integration-table-panzoom" style="transform: translate(0px,0px) scale(1); transform-origin: 0 0; display: inline-block;">
+                            <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
+                                <thead><tr style="background: #f8f9fa;">
+                                    ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap;">${col}</th>`).join('')}
+                                </tr></thead>
+                                <tbody>
+                                    ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
                 <div style="margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
@@ -1486,6 +1533,8 @@ HTML_TEMPLATE = """
                 } else {
                     rightDiv.innerHTML = `<div style="padding: 15px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">❌ ${tableRes.message || 'Integration failed'}</div>`;
                 }
+                initTablePanZoom(leftDiv);
+                initTablePanZoom(rightDiv);
             } catch (err) {
                 leftDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${err.message}</div>`;
                 rightDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${err.message}</div>`;
@@ -1515,6 +1564,7 @@ HTML_TEMPLATE = """
                     const stats = data.stats;
                     const table = data.integrated_table;
                     resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Integration Successful', successColor: '#28a745', savedPath: data.saved_path || '', downloadId: 'table-search-single' });
+                    initTablePanZoom(resultsDiv);
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
                 }
@@ -1547,6 +1597,7 @@ HTML_TEMPLATE = """
                         extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${data.models_with_tables.slice(0, 5).map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ')}${data.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
                     }
                     resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'model-search-single' });
+                    initTablePanZoom(resultsDiv);
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
                 }
