@@ -362,10 +362,10 @@ HTML_TEMPLATE = """
                     <input type="text" id="query" class="form-control" placeholder="Type or pick preset" value="transformer model for code generation">
                 </div>
                 <div class="form-row" id="require-seed-has-tables-row" style="margin-top: 8px;">
-                    <label for="require_seed_has_tables">Table Search Seed Model:</label>
+                    <label for="require_seed_has_tables">Table Search Seed Model (Model with Tables / Model without Tables):</label>
                     <select id="require_seed_has_tables" class="form-control" style="width: 200px; flex: none;" title="Only applies in Query mode: pick which seed model to use for Table Search.">
                         <option value="0">Use top-1 result</option>
-                        <option value="1">Pick first model with tables (from top-20)</option>
+                        <option value="1" selected>Pick first model with tables (from top-20)</option>
                     </select>
                     <span style="font-size: 11px; color: #666; margin-left: 8px;">Only in Query mode. If "Pick first model with tables" and none of top-20 have tables → Table Search skipped.</span>
                 </div>
@@ -515,6 +515,30 @@ HTML_TEMPLATE = """
                 document.getElementById('table_search_k').value = newVal;
                 document.getElementById('table_search_k_slider').value = newVal;
             }
+        }
+        function updateIntegrationKValue(value) {
+            const num = document.getElementById('integration_k');
+            const slider = document.getElementById('integration_k_slider');
+            if (num) num.value = value;
+            if (slider) slider.value = value;
+        }
+        function updateIntegrationKSlider(value) {
+            const slider = document.getElementById('integration_k_slider');
+            const num = document.getElementById('integration_k');
+            const v = parseInt(value, 10);
+            if (slider && num && v >= 1 && v <= 50) { slider.value = v; num.value = v; }
+        }
+        function updateIntegrationMaxModelsValue(value) {
+            const num = document.getElementById('integration_max_models');
+            const slider = document.getElementById('integration_max_models_slider');
+            if (num) num.value = value;
+            if (slider) slider.value = value;
+        }
+        function updateIntegrationMaxModelsSlider(value) {
+            const slider = document.getElementById('integration_max_models_slider');
+            const num = document.getElementById('integration_max_models');
+            const v = parseInt(value, 10);
+            if (slider && num && v >= 1 && v <= 50) { slider.value = v; num.value = v; }
         }
         
         function toggleLoadPrevious() {
@@ -990,6 +1014,12 @@ HTML_TEMPLATE = """
                             const intermediate = data.intermediate || {};
                             const tableToModels = intermediate.table_to_models || {};
                             
+                            // Real table count for this search type
+                            const retrievedTableFilenames = intermediate.retrieved_table_filenames || [];
+                            const tableCountFromFilenames = Array.isArray(retrievedTableFilenames) ? retrievedTableFilenames.length : 0;
+                            const tableCountFromMapping = Object.keys(tableToModels).length;
+                            const realTableCount = tableCountFromFilenames || tableCountFromMapping || 0;
+                            
                             // Build reverse mapping: model_id -> list of tables
                             const modelToTables = {};
                             Object.entries(tableToModels).forEach(([table, modelList]) => {
@@ -1025,7 +1055,12 @@ HTML_TEMPLATE = """
                             return `
                                 <div class="search-type-section">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
-                                        <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px;">${displayName} <span style="font-size: 12px; color: #666; font-weight: normal;">${models.length} models</span></h4>
+                                        <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                                            ${displayName}
+                                            <span style="font-size: 12px; color: #666; font-weight: normal;">
+                                                ${models.length} models${realTableCount ? ` from ${realTableCount} tables` : ''}
+                                            </span>
+                                        </h4>
                                     </div>
                                     <div class="collapsible-content" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
@@ -1136,31 +1171,51 @@ HTML_TEMPLATE = """
                 </div>
             ` : '';
             
-            // Add Integration Sections - Horizontal layout, unified style (same width, font, color, card size)
+            // Single merged Table Integration section: one set of settings, one button runs both in parallel
             const integrationCardStyle = 'padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-family: inherit; font-size: 14px; color: #212529; min-width: 0;';
             const integrationTitleStyle = 'margin-top: 0; font-size: 16px; font-weight: 600; color: #212529;';
             const integrationDescStyle = 'font-size: 14px; color: #666; margin-bottom: 15px;';
-            const integrationBtnStyle = 'padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%; font-size: 14px;';
+            const integrationBtnStyle = 'padding: 10px 24px; font-size: 15px; font-weight: 600; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;';
+            // Same row style as Model Card Top K / Table Search Top K (label + slider + number)
+            const topKRowStyle = 'display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;';
+            const topKBlockStyle = 'flex: 1; min-width: 200px;';
+            const topKLabelStyle = 'display: block; margin-bottom: 4px; font-weight: 500; color: #212529;';
             html += `
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px;">
-                    <div class="integration-section" style="${integrationCardStyle}">
-                        <h3 style="${integrationTitleStyle}">Table Integration (from Model Search)</h3>
-                        <p style="${integrationDescStyle}">Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.</p>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Integration Type:</label><select id="integration_model_search_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Top K Tables:</label><input type="number" id="integration_model_search_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(controls table count per model)</span></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
-                        <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" style="${integrationBtnStyle}">🔗 Integrate Model Search Tables</button>
-                        <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
+                <div class="integration-section" style="${integrationCardStyle}; margin-top: 30px;">
+                    <h3 style="${integrationTitleStyle}">Table Integration</h3>
+                    <p style="${integrationDescStyle}">Run both: <span class="number-badge">1</span> Card2Card (model search) + <span class="number-badge">2</span> Card2Tab2Card (table search). Shared settings below; one button runs both in parallel.</p>
+                    <div class="form-row" style="margin-bottom: 12px;">
+                        <label style="min-width: 140px; margin-bottom: 0; font-size: 14px; font-weight: 500;">Integration Type:</label>
+                        <select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select>
                     </div>
-                    <div class="integration-section" style="${integrationCardStyle}">
-                        <h3 style="${integrationTitleStyle}">Table Integration (from Table Search)</h3>
-                        <p style="${integrationDescStyle}">Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.</p>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Integration Type:</label><select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Top K Tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(controls table count)</span></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Max Models:</label><input type="number" id="integration_max_models_table" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Search Type:</label><select id="integration_search_type" class="form-control" style="max-width: 280px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex (Union+Join+Correlation)</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
-                        <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" style="${integrationBtnStyle}">🔗 Integrate Tables</button>
-                        <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
+                    <div style="${topKRowStyle}">
+                        <div style="${topKBlockStyle}">
+                            <label for="integration_k" style="${topKLabelStyle}">Top K Tables:</label>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="range" id="integration_k_slider" min="1" max="50" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateIntegrationKValue(this.value)">
+                                <input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" oninput="updateIntegrationKSlider(this.value)" style="width: 80px;">
+                            </div>
+                        </div>
+                        <div style="${topKBlockStyle}">
+                            <label for="integration_max_models" style="${topKLabelStyle}">Max Models:</label>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="range" id="integration_max_models_slider" min="1" max="50" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateIntegrationMaxModelsValue(this.value)">
+                                <input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" oninput="updateIntegrationMaxModelsSlider(this.value)" style="width: 80px;">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-row" style="margin-bottom: 12px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center;">
+                        <div><label style="font-weight: 500;">Model Search (Card2Card) mode:</label> <select id="integration_model_search_mode" class="form-control" style="max-width: 160px; margin-left: 8px;"><option value="dense">Dense</option><option value="sparse">Sparse</option><option value="hybrid">Hybrid</option></select></div>
+                        <div><label style="font-weight: 500;">Table Search type:</label> <select id="integration_search_type" class="form-control" style="max-width: 280px; margin-left: 8px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="${integrationBtnStyle}">🔗 Run Both Integrations (Model Search + Table Search)</button>
+                    </div>
+                    <div id="integrationResultsContainer" style="margin-top: 20px; display: none;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                            <div><h4 style="margin: 0 0 8px 0; font-size: 14px; color: #495057;">From Model Search</h4><div id="integrationModelSearchResults"></div></div>
+                            <div><h4 style="margin: 0 0 8px 0; font-size: 14px; color: #495057;">From Table Search</h4><div id="integrationResults"></div></div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -1256,227 +1311,153 @@ HTML_TEMPLATE = """
             document.getElementById('resultsSection').classList.add('active');
         }
         
+        // Fixed-height card for table so UI does not expand (scroll inside card only)
+        const INTEGRATION_TABLE_CARD_STYLE = 'height: 280px; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; background: #fff;';
+        
+        function renderIntegrationTable(table, stats, options) {
+            const { title = 'Integration', successColor = '#28a745', extraHtml = '' } = options || {};
+            if (!table || (stats && stats.output_rows === 0)) {
+                return `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
+                    <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
+                    <div style="margin-bottom: 15px;">${(stats && stats.output_columns === 0) ? '⚠️ No common columns. Intersection result is empty.' : '⚠️ No common rows. Intersection result is empty.'}</div></div>`;
+            }
+            let html = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
+                <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
+                <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols</div>
+                ${extraHtml}
+                <div style="${INTEGRATION_TABLE_CARD_STYLE}">
+                    <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
+                        <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
+                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
+                        </tr></thead>
+                        <tbody>
+                            ${table.data.slice(0, 100).map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 6px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
+            </div>`;
+            return html;
+        }
+        
+        async function runBothIntegrations(jobId) {
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
+            const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
+            const modelSearchMode = (document.getElementById('integration_model_search_mode') || {}).value || 'dense';
+            const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
+            
+            const btn = document.getElementById('integrationRunBothBtn');
+            const container = document.getElementById('integrationResultsContainer');
+            const leftDiv = document.getElementById('integrationModelSearchResults');
+            const rightDiv = document.getElementById('integrationResults');
+            if (!btn || !container || !leftDiv || !rightDiv) return;
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ Running both...';
+            container.style.display = 'block';
+            leftDiv.innerHTML = '<div style="padding: 12px; background: #f8f9fa; border-radius: 4px;">⏳ Model Search integration...</div>';
+            rightDiv.innerHTML = '<div style="padding: 12px; background: #f8f9fa; border-radius: 4px;">⏳ Table Search integration...</div>';
+            
+            const fetchModelSearch = fetch('{{BACKEND_URL}}/api/integrate-model-search', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels, card2card_retrieval_mode: modelSearchMode })
+            }).then(r => r.json());
+            const fetchTableSearch = fetch('{{BACKEND_URL}}/api/integrate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels })
+            }).then(r => r.json());
+            
+            try {
+                const [modelRes, tableRes] = await Promise.all([fetchModelSearch, fetchTableSearch]);
+                
+                if (modelRes.status === 'success') {
+                    const stats = modelRes.stats || {};
+                    const table = modelRes.integrated_table;
+                    let extra = '';
+                    if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${modelRes.models_with_tables.slice(0, 5).join(', ')}${modelRes.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
+                    }
+                    leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra });
+                } else {
+                    leftDiv.innerHTML = `<div style="padding: 15px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">❌ ${modelRes.message || 'Integration failed'}</div>`;
+                }
+                
+                if (tableRes.status === 'success') {
+                    const stats = tableRes.stats || {};
+                    const table = tableRes.integrated_table;
+                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745' });
+                } else {
+                    rightDiv.innerHTML = `<div style="padding: 15px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">❌ ${tableRes.message || 'Integration failed'}</div>`;
+                }
+            } catch (err) {
+                leftDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${err.message}</div>`;
+                rightDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${err.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔗 Run Both Integrations (Model Search + Table Search)';
+            }
+        }
+        
         async function runIntegration(jobId) {
-            const searchType = document.getElementById('integration_search_type').value;
-            const integrationType = document.getElementById('integration_type').value;
-            const k = parseInt(document.getElementById('integration_k').value);
-            const maxModels = parseInt(document.getElementById('integration_max_models_table').value);
+            const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
+            const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
             
-            const integrationBtn = document.getElementById('integrationBtn');
             const resultsDiv = document.getElementById('integrationResults');
-            
-            // Disable button and show loading
-            integrationBtn.disabled = true;
-            integrationBtn.textContent = '⏳ Integrating...';
-            resultsDiv.style.display = 'block';
-            resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running integration...</div>';
-            
+            if (!resultsDiv) return;
+            resultsDiv.innerHTML = '<div style="padding: 15px;">⏳ Running integration...</div>';
             try {
                 const response = await fetch('{{BACKEND_URL}}/api/integrate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        job_id: jobId,
-                        search_type: searchType,
-                        integration_type: integrationType,
-                        k: k,
-                        max_models: maxModels
-                    })
+                    body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels })
                 });
-                
                 const data = await response.json();
-                
                 if (data.status === 'success') {
-                    // Display integration results
                     const stats = data.stats;
                     const table = data.integrated_table;
-                    
-                    let html = `
-                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
-                            <h4 style="margin-top: 0; color: #28a745;">✅ Integration Successful</h4>
-                            <div style="margin-bottom: 15px;">
-                                <strong>Statistics:</strong><br>
-                                Input: ${stats.input_tables} tables, ${stats.input_rows} total rows<br>
-                                Output: ${stats.output_rows} rows, ${stats.output_columns} columns<br>
-                                Type: ${stats.integration_type}
-                            </div>
-                    `;
-                    
-                    if (stats.output_rows === 0) {
-                        // Empty result (e.g., intersection with no common rows/columns)
-                        html += `
-                            <div style="padding: 20px; text-align: center; color: #666; background: #f8f9fa; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 14px;">
-                                    ${stats.output_columns === 0 
-                                        ? '⚠️ No common columns found between tables. Intersection result is empty.' 
-                                        : '⚠️ No common rows found between tables. Intersection result is empty.'}
-                                </p>
-                            </div>
-                        `;
-                    } else {
-                        // Show table: scroll both horizontal and vertical (draggable)
-                        html += `
-                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; position: relative;">
-                                <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
-                                    <thead>
-                                        <tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
-                                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${table.data.slice(0, 100).map(row => `
-                                            <tr>
-                                                ${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell || ''}</td>`).join('')}
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
-                                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px; padding: 5px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
-                            </div>
-                        `;
-                    }
-                    
-                    html += `</div>`;
-                    resultsDiv.innerHTML = html;
+                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Integration Successful', successColor: '#28a745' });
                 } else {
-                    resultsDiv.innerHTML = `
-                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                            <strong>❌ Integration Failed:</strong> ${data.message || 'Unknown error'}
-                        </div>
-                    `;
+                    resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
                 }
             } catch (error) {
-                resultsDiv.innerHTML = `
-                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                        <strong>❌ Error:</strong> ${error.message}
-                    </div>
-                `;
-            } finally {
-                integrationBtn.disabled = false;
-                integrationBtn.textContent = '🔗 Integrate Tables';
+                resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${error.message}</div>`;
             }
         }
         
         async function runModelSearchIntegration(jobId) {
-            const integrationType = document.getElementById('integration_model_search_type').value;
-            const k = parseInt(document.getElementById('integration_model_search_k').value);
-            const maxModels = parseInt(document.getElementById('integration_max_models').value);
-            
-            const integrationBtn = document.getElementById('integrationModelSearchBtn');
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
+            const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
+            const modelSearchMode = (document.getElementById('integration_model_search_mode') || {}).value || 'dense';
             const resultsDiv = document.getElementById('integrationModelSearchResults');
-            
-            // Disable button and show loading
-            integrationBtn.disabled = true;
-            integrationBtn.textContent = '⏳ Integrating...';
+            if (!resultsDiv) return;
             resultsDiv.style.display = 'block';
-            resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running integration...</div>';
-            
+            resultsDiv.innerHTML = '<div style="padding: 15px;">⏳ Running integration...</div>';
             try {
                 const response = await fetch('{{BACKEND_URL}}/api/integrate-model-search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        job_id: jobId,
-                        integration_type: integrationType,
-                        k: k,
-                        max_models: maxModels
-                    })
+                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels, card2card_retrieval_mode: modelSearchMode })
                 });
-                
                 const data = await response.json();
-                
                 if (data.status === 'success') {
-                    // Display integration results
-                    const stats = data.stats;
+                    const stats = data.stats || {};
                     const table = data.integrated_table;
-                    
-                    let html = `
-                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
-                            <h4 style="margin-top: 0; color: #007bff;">✅ Integration Successful</h4>
-                            <div style="margin-bottom: 15px;">
-                                <strong>Statistics:</strong><br>
-                                Models Processed: ${stats.models_processed || 'N/A'}<br>
-                                Models with Tables: ${stats.models_with_tables || 'N/A'}<br>
-                                Models without Tables: ${stats.models_without_tables || 'N/A'}<br>
-                                Total Unique Tables: ${stats.total_unique_tables || 'N/A'}<br>
-                                Input: ${stats.input_tables || 'N/A'} tables, ${stats.input_rows || 'N/A'} total rows<br>
-                                Output: ${stats.output_rows || 'N/A'} rows, ${stats.output_columns || 'N/A'} columns<br>
-                                Type: ${stats.integration_type || integrationType}
-                            </div>
-                    `;
-                    
+                    let extra = '';
                     if (data.models_with_tables && data.models_with_tables.length > 0) {
-                        html += `
-                            <div style="margin-bottom: 15px; padding: 10px; background: #e7f3ff; border-radius: 4px;">
-                                <strong>Models with Tables (${data.models_with_tables.length}):</strong><br>
-                                <div style="font-size: 12px; margin-top: 5px;">
-                                    ${data.models_with_tables.slice(0, 10).map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ')}
-                                    ${data.models_with_tables.length > 10 ? ` ... and ${data.models_with_tables.length - 10} more` : ''}
-                                </div>
-                            </div>
-                        `;
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${data.models_with_tables.slice(0, 5).map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ')}${data.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
                     }
-                    
-                    if (stats.output_rows === 0) {
-                        // Empty result (e.g., intersection with no common rows/columns)
-                        html += `
-                            <div style="padding: 20px; text-align: center; color: #666; background: #f8f9fa; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 14px;">
-                                    ${stats.output_columns === 0 
-                                        ? '⚠️ No common columns found between tables. Intersection result is empty.' 
-                                        : '⚠️ No common rows found between tables. Intersection result is empty.'}
-                                </p>
-                            </div>
-                        `;
-                    } else {
-                        // Show table: scroll both horizontal and vertical (draggable)
-                        html += `
-                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; position: relative;">
-                                <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
-                                    <thead>
-                                        <tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
-                                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${table.data.slice(0, 100).map(row => `
-                                            <tr>
-                                                ${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell || ''}</td>`).join('')}
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
-                                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px; padding: 5px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
-                            </div>
-                        `;
-                    }
-                    
-                    html += `</div>`;
-                    resultsDiv.innerHTML = html;
-                    
-                    // Show evaluation section after successful integration
-                    setTimeout(() => {
-                        const evaluationSection = document.querySelector('.evaluation-section');
-                        if (evaluationSection) {
-                            evaluationSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                        }
-                    }, 500);
+                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra });
                 } else {
-                    resultsDiv.innerHTML = `
-                        <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                            <strong>❌ Integration Failed:</strong> ${data.message || 'Unknown error'}
-                        </div>
-                    `;
+                    resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
                 }
             } catch (error) {
-                resultsDiv.innerHTML = `
-                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                        <strong>❌ Error:</strong> ${error.message}
-                    </div>
-                `;
-            } finally {
-                integrationBtn.disabled = false;
-                integrationBtn.textContent = '🔗 Integrate Model Search Tables';
+                resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${error.message}</div>`;
             }
         }
         

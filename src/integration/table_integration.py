@@ -615,7 +615,8 @@ def integrate_tables_from_model_search_results(
     db_path: Optional[str] = None,
     relationship_parquet: Optional[str] = None,
     schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
-    use_citationlake: bool = True
+    use_citationlake: bool = True,
+    card2card_retrieval_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Integrate tables from Card2Card (model search) results.
@@ -631,6 +632,8 @@ def integrate_tables_from_model_search_results(
         relationship_parquet: Optional path to relationship parquet file
         schema_log_path: Path to parquet_schema.log (for CitationLake)
         use_citationlake: Whether to use CitationLake get_from (default: True)
+        card2card_retrieval_mode: Optional retrieval mode for Card2Card results: "dense", "sparse", or "hybrid".
+            If provided, model IDs are taken from card2card_all_modes[card2card_retrieval_mode]; otherwise from card2card_results.
         
     Returns:
         Dictionary with integration results
@@ -650,16 +653,21 @@ def integrate_tables_from_model_search_results(
     with open(search_results_json, 'r', encoding='utf-8') as f:
         search_results = json.load(f)
     
-    # Extract Card2Card model IDs
+    # Extract Card2Card model IDs (optionally from a specific retrieval mode: dense/sparse/hybrid)
     card2card_results = []
     if isinstance(search_results, dict):
-        # Try to get card2card_results
-        if "card2card_results" in search_results:
+        if card2card_retrieval_mode and search_results.get("card2card_all_modes"):
+            mode_data = search_results["card2card_all_modes"].get(card2card_retrieval_mode)
+            if isinstance(mode_data, list):
+                card2card_results = mode_data
+            elif isinstance(mode_data, dict) and "error" not in mode_data:
+                card2card_results = []
+            # else keep []
+        if not card2card_results and "card2card_results" in search_results:
             card2card_results = search_results["card2card_results"]
-        elif "results" in search_results and "card2card_results" in search_results["results"]:
+        elif not card2card_results and "results" in search_results and "card2card_results" in search_results["results"]:
             card2card_results = search_results["results"]["card2card_results"]
     elif isinstance(search_results, list):
-        # Direct list of model IDs
         card2card_results = search_results
     
     # Handle both string and object formats

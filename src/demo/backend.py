@@ -673,6 +673,7 @@ def integrate_model_search():
     integration_type = data.get("integration_type", "union")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
+    card2card_retrieval_mode = data.get("card2card_retrieval_mode") or None  # dense, sparse, hybrid
 
     if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
@@ -700,6 +701,7 @@ def integrate_model_search():
             db_path=DEFAULT_DB_PATH,
             relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
             use_citationlake=False,
+            card2card_retrieval_mode=card2card_retrieval_mode,
         )
         
         if not result.get("success", False):
