@@ -363,15 +363,23 @@ def _run_pipeline_body(
             logger.log(f"[Card2Tab2Card-{st}] Done in {elapsed:.2f}s")
             if rc != 0:
                 logger.log(f"[Card2Tab2Card-{st}] Error (exit {rc}): {err or out}")
-                card2tab2card_all[st] = {"error": err or out}
+                # Save as empty result (not error object) so frontend can handle it gracefully
+                card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
             else:
                 data = _read_json(out_path)
                 if data is not None:
                     # CLI writes {"model_ids": [...], "query_tables": [...], "intermediate": {...}}
-                    mid = data.get("model_ids") if isinstance(data, dict) else None
-                    lst = list(mid) if isinstance(mid, (list, np.ndarray)) else (list(data) if isinstance(data, (list, np.ndarray)) else [])
-                    card2tab2card_all[st] = lst
-                    qty = len(data.get("query_tables", [])) if isinstance(data, dict) else 0
+                    # Save the full data object (not just model_ids) so frontend can access intermediate.table_to_models
+                    if isinstance(data, dict):
+                        card2tab2card_all[st] = data
+                        mid = data.get("model_ids", [])
+                        lst = list(mid) if isinstance(mid, (list, np.ndarray)) else []
+                        qty = len(data.get("query_tables", []))
+                    else:
+                        # Legacy format: just a list/array of model_ids
+                        lst = list(data) if isinstance(data, (list, np.ndarray)) else []
+                        card2tab2card_all[st] = {"model_ids": lst, "intermediate": {}}
+                        qty = 0
                     logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
                     if len(lst) == 0 and qty == 0:
                         logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {DEFAULT_RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
@@ -387,13 +395,14 @@ def _run_pipeline_body(
                                 if line.strip():
                                     logger.log(f"[Card2Tab2Card-{st}] CLI: {line.strip()}")
                 else:
-                    card2tab2card_all[st] = []
+                    # Save as empty object (consistent format) so frontend can handle it
+                    card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
                     logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
     # When we skipped Table Search (require_seed_has_tables but none had tables), fill empty
     if seed_no_tables_skip_table_search:
         for st in card2tab2card_types:
-            card2tab2card_all[st] = []
+            card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
         if table_search_empty_reason is None:
             table_search_empty_reason = (
                 "None of the top-20 models from the query have tables in the dataset. "
@@ -403,7 +412,7 @@ def _run_pipeline_body(
     for st in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation",
                "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example"]:
         if st not in card2tab2card_all:
-            card2tab2card_all[st] = []
+            card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
 
     primary = card2card_all.get("dense", card2card_all.get(list(card2card_all.keys())[0] if card2card_all else "dense", []))
     if isinstance(primary, dict) and "error" in primary:
