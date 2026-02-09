@@ -18,7 +18,20 @@ from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
+import math
 import numpy as np
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """Replace float('nan') with None so JSON serialization produces null."""
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    return obj
+
 
 # Repo root (backend lives in src/demo/)
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -636,12 +649,13 @@ def integrate():
         if not result.get("success", False):
             return jsonify({"status": "error", "message": result.get("error", "Integration failed")}), 500
         
-        # Convert DataFrame to dict for JSON response
+        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
         integrated_df = result.get("integrated_table")
         if integrated_df is not None:
+            raw_data = integrated_df.values.tolist()
             result["integrated_table"] = {
                 "columns": list(integrated_df.columns),
-                "data": integrated_df.values.tolist()
+                "data": _sanitize_for_json(raw_data)
             }
 
         return jsonify({"status": "success", **result})
@@ -687,12 +701,13 @@ def integrate_model_search():
         if not result.get("success", False):
             return jsonify({"status": "error", "message": result.get("error", "Integration failed")}), 500
         
-        # Convert DataFrame to dict for JSON response
+        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
         integrated_df = result.get("integrated_table")
         if integrated_df is not None:
+            raw_data = integrated_df.values.tolist()
             result["integrated_table"] = {
                 "columns": list(integrated_df.columns),
-                "data": integrated_df.values.tolist()
+                "data": _sanitize_for_json(raw_data)
             }
 
         return jsonify({"status": "success", **result})

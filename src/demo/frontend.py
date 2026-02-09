@@ -381,7 +381,7 @@ HTML_TEMPLATE = """
             <div class="form-row one-click-info" style="background: #f0f7ff; border: 1px solid #b8d4e8; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;">
                 <div style="font-size: 13px;">
                     <strong>One-click runs:</strong><br>
-                    • Card2Card: Dense (FAISS), Sparse (Pyserini), Hybrid (Pyserini+FAISS)<br>
+                    • Card2Card: Dense, Sparse, Hybrid<br>
                     • Card2Tab2Card: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation, dependent_data, feature_for_ml, multi_column_collinearity, negative_example<br>
                     <span style="color: #555;">Each method logs its elapsed time ⏱️ in the progress log when done.</span>
                 </div>
@@ -903,9 +903,9 @@ HTML_TEMPLATE = """
             // Get Card2Card results for all modes
             const card2cardAllModes = results.card2card_all_modes || {};
             const retrievalModes = [
-                { key: 'dense', label: 'Dense (FAISS)', desc: 'Semantic similarity using embeddings' },
-                { key: 'sparse', label: 'Sparse (Pyserini)', desc: 'Sparse retrieval via Pyserini Lucene BM25' },
-                { key: 'hybrid', label: 'Hybrid (Pyserini + FAISS)', desc: 'Pyserini sparse + FAISS dense, then combine' }
+                { key: 'dense', label: 'Dense', desc: 'Semantic similarity using embeddings' },
+                { key: 'sparse', label: 'Sparse', desc: 'Sparse retrieval via Pyserini Lucene BM25' },
+                { key: 'hybrid', label: 'Hybrid', desc: 'Pyserini sparse + FAISS dense, then combine' }
             ];
             const currentMode = results.card2card_retrieval_mode || 'dense';
             
@@ -914,8 +914,8 @@ HTML_TEMPLATE = """
                 ${seedModelLine}
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
-                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px;">
-                            <span class="number-badge">1</span> Card2Card Results (Multiple Retrieval Modes)
+                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; color: #495057;">
+                            <span class="number-badge">1</span> Card2Card Results
                         </h3>
                         ${retrievalModes.map((modeInfo, idx) => {
                             const modeKey = modeInfo.key;
@@ -930,8 +930,7 @@ HTML_TEMPLATE = """
                                     <div class="search-type-header ${isCurrentMode ? 'expanded' : ''}" onclick="toggleSearchType('${sectionId}', this)" style="${isCurrentMode ? 'background: #e7f3ff;' : ''}">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${modeInfo.label}
-                                            ${isCurrentMode ? '<span style="font-size: 11px; color: #007bff; font-weight: normal;">(Selected)</span>' : ''}
-                                            <span style="font-size: 12px; color: #666; font-weight: normal;">(${isError ? 'Error' : resultList.length + ' models'})</span>
+                                            <span style="font-size: 12px; color: #666; font-weight: normal;">${isError ? 'Error' : resultList.length + ' models'}</span>
                                         </h4>
                                     </div>
                                     <div class="collapsible-content ${isCurrentMode ? 'expanded' : ''}" id="${sectionId}">
@@ -965,7 +964,7 @@ HTML_TEMPLATE = """
                         }).join('')}
                     </div>
                     <div class="result-card" style="min-width: 0;">
-                        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
+                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; color: #495057;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
                         ${(() => {
                             // Filter: show keyword, unionable, and joinable types (single_column and multi_column are joinable)
                             const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
@@ -1026,7 +1025,7 @@ HTML_TEMPLATE = """
                             return `
                                 <div class="search-type-section">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
-                                        <h4>${displayName} (${models.length} models)</h4>
+                                        <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px;">${displayName} <span style="font-size: 12px; color: #666; font-weight: normal;">${models.length} models</span></h4>
                                     </div>
                                     <div class="collapsible-content" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
@@ -1137,33 +1136,30 @@ HTML_TEMPLATE = """
                 </div>
             ` : '';
             
-            // Add Integration Sections - Horizontal layout (side by side)
+            // Add Integration Sections - Horizontal layout, unified style (same width, font, color, card size)
+            const integrationCardStyle = 'padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-family: inherit; font-size: 14px; color: #212529; min-width: 0;';
+            const integrationTitleStyle = 'margin-top: 0; font-size: 16px; font-weight: 600; color: #212529;';
+            const integrationDescStyle = 'font-size: 14px; color: #666; margin-bottom: 15px;';
+            const integrationBtnStyle = 'padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%; font-size: 14px;';
             html += `
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px;">
-                    <!-- First: Model Search Integration (Card2Card) - Max Models first, then same order as Table Search -->
-                    <div class="integration-section" style="padding: 20px; background: #e7f3ff; border-radius: 8px; border: 1px solid #b3d9ff; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <h3 style="margin-top: 0;">Table Integration (from Model Search)</h3>
-                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                            Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.
-                        </p>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_model_search_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_model_search_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of tables per model"> <span style="font-size: 11px; color: #666;">(controls table count per model)</span></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of models to process"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
-                        <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Model Search Tables</button>
+                    <div class="integration-section" style="${integrationCardStyle}">
+                        <h3 style="${integrationTitleStyle}">Table Integration (from Model Search)</h3>
+                        <p style="${integrationDescStyle}">Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.</p>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Integration Type:</label><select id="integration_model_search_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Top K Tables:</label><input type="number" id="integration_model_search_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(controls table count per model)</span></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
+                        <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" style="${integrationBtnStyle}">🔗 Integrate Model Search Tables</button>
                         <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
                     </div>
-                    
-                    <!-- Second: Table Search Integration (Card2Tab2Card) - Search Type first, then same order as Model Search (Integration Type, Top K Tables) -->
-                    <div class="integration-section" style="padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <h3 style="margin-top: 0;">Table Integration (from Table Search)</h3>
-                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                            Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
-                        </p>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of tables to retrieve"> <span style="font-size: 11px; color: #666;">(controls table count)</span></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models_table" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of models after getting modelids from tables"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Search Type:</label><select id="integration_search_type" class="form-control" style="max-width: 280px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex (Union+Join+Correlation)</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
-                        <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Tables</button>
+                    <div class="integration-section" style="${integrationCardStyle}">
+                        <h3 style="${integrationTitleStyle}">Table Integration (from Table Search)</h3>
+                        <p style="${integrationDescStyle}">Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.</p>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Integration Type:</label><select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Top K Tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(controls table count)</span></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Max Models:</label><input type="number" id="integration_max_models_table" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0; font-size: 14px;">Search Type:</label><select id="integration_search_type" class="form-control" style="max-width: 280px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex (Union+Join+Correlation)</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
+                        <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" style="${integrationBtnStyle}">🔗 Integrate Tables</button>
                         <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
                     </div>
                 </div>
