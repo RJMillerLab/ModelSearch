@@ -888,11 +888,16 @@ HTML_TEMPLATE = """
             const errorBlock = results.error
                 ? `<div style="padding: 12px; margin-bottom: 15px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px;"><strong>❌ Pipeline error:</strong> ${results.error}</div>`
                 : '';
-            // Seed model = from query step or user input (modelid mode). This is the ID used for this search, not a fixed placeholder.
+            // Seed model + Tables note: same row, two columns (aligned with the two result cards below)
             const seedModelId = results.model_id || null;
-            const seedModelLine = seedModelId
-                ? `<p style="margin: 0 0 12px 0; font-size: 14px;"><strong>Seed model (from query):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a></p>`
-                : (results.error ? '' : `<p style="margin: 0 0 12px 0; font-size: 14px; color: #856404; background: #fff3cd; padding: 8px; border-radius: 4px;">⚠️ Model ID missing (something went wrong)</p>`);
+            const seedModelCell = results.error ? '' : (seedModelId
+                ? `<strong>Seed model (from query):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a>`
+                : `<span style="color: #856404;">⚠️ Model ID missing</span>`);
+            const tablesNoteCell = '<span style="font-size: 12px; color: #666;">Tables are presented under each item.</span>';
+            const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; font-size: 13px; align-items: center;">
+                <div>${seedModelCell}</div>
+                <div>${tablesNoteCell}</div>
+            </div>`;
             
             // Helper function to format model display (handle both string and object formats)
             function formatModel(model) {
@@ -922,7 +927,7 @@ HTML_TEMPLATE = """
             
             let html = `
                 ${errorBlock}
-                ${seedModelLine}
+                ${headerRowHtml}
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">
@@ -976,7 +981,6 @@ HTML_TEMPLATE = """
                     </div>
                     <div class="result-card" style="min-width: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
                         <h3 style="margin-top: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #343a40;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
-                        <p style="margin: 0 0 6px 0; font-size: 11px; color: #666;">Tables are presented under each item.</p>
                         ${(() => {
                             // Filter: show keyword, unionable, and joinable types (single_column and multi_column are joinable)
                             const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
@@ -1215,67 +1219,61 @@ HTML_TEMPLATE = """
             html += `
                 <div class="evaluation-section" style="margin-top: 16px; padding: 12px; background: #fff3cd; border-radius: 6px; border: 2px solid #ffc107;">
                     ${comparisonHtml}
-                    <h3 style="margin-top: 0; color: #856404; font-size: 16px;">📊 Evaluation on Integrated Tables</h3>
-                    <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                        Evaluate diversity between Table Search Integration and Model Search Integration results using LLM.
-                    </p>
-                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
-                        <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
-                            <input type="radio" name="evaluation_mode" value="generate" id="eval_mode_generate" checked onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
+                    <h3 style="margin-top: 0; margin-bottom: 6px; color: #856404; font-size: 15px;">📊 Evaluation on Integrated Tables</h3>
+                    <p style="font-size: 12px; color: #666; margin-bottom: 8px;">Evaluate diversity between Table Search and Model Search integration results using LLM.</p>
+                    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                        <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
+                            <input type="radio" name="evaluation_mode" value="generate" id="eval_mode_generate" checked onchange="toggleEvaluationMode()" style="width: 16px; height: 16px;">
                             <span>Generate New Response</span>
                         </label>
-                        <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
-                            <input type="radio" name="evaluation_mode" value="use_fake" id="eval_mode_fake" onchange="toggleEvaluationMode()" style="width: 18px; height: 18px;">
-                            <span>Use Fake Response for testing/demo</span>
+                        <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
+                            <input type="radio" name="evaluation_mode" value="use_fake" id="eval_mode_fake" onchange="toggleEvaluationMode()" style="width: 16px; height: 16px;">
+                            <span>Use Fake Response</span>
                         </label>
-                    </div>
-                    <div id="evaluation_generate_options" style="display: block;">
-                        <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
-                                style="padding: 8px 16px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
-                            📊 Generate Evaluation
-                        </button>
-                    </div>
-                    <div id="evaluation_use_fake_options" style="display: none;">
-                        <div style="margin-bottom: 10px;">
+                        <div id="evaluation_generate_options" style="display: block;">
+                            <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                    style="padding: 6px 14px; font-size: 13px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                📊 Generate Evaluation
+                            </button>
+                        </div>
+                        <div id="evaluation_use_fake_options" style="display: none; align-items: center; gap: 8px;" class="eval-fake-row">
                             <input type="file" id="evaluation_fake_file2" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
                             <button type="button" onclick="document.getElementById('evaluation_fake_file2').click()" 
-                                    style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
-                                📁 Load Fake Response File
+                                    style="padding: 6px 12px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                📁 Load Fake File
                             </button>
                             <span id="fake_file_name2" style="font-size: 11px; color: #666;"></span>
+                            <button id="evaluationBtnFake" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                    style="padding: 6px 14px; font-size: 13px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                📊 Use Fake Response
+                            </button>
                         </div>
-                        <button id="evaluationBtnFake" onclick="runEvaluation('${results.job_id || currentJobId}')" 
-                                style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
-                            📊 Use Fake Response
-                        </button>
                     </div>
-                    <div id="evaluationResults" style="margin-top: 20px; display: none;"></div>
+                    <div id="evaluationResults" style="margin-top: 12px; display: none;"></div>
                     </div>
                     
-                    <!-- QA Section: fake choice + one button; after click show integrated tables + answers (two columns) -->
+                    <!-- QA Section: options and button on same line -->
                     <div class="qa-section" style="margin-top: 16px; padding: 12px; background: #d1ecf1; border-radius: 6px; border: 2px solid #17a2b8;">
-                        <h3 style="margin-top: 0; color: #0c5460;">💬 Question Answering (QA)</h3>
-                        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                            QA on both integrated tables. One button generates two answers for comparison.
-                        </p>
-                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap; margin-bottom: 15px;">
-                            <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
-                                <input type="radio" name="qa_mode" value="generate" id="qa_mode_generate" checked onchange="toggleQAMode()" style="width: 18px; height: 18px;">
+                        <h3 style="margin-top: 0; margin-bottom: 6px; color: #0c5460; font-size: 15px;">💬 Question Answering (QA)</h3>
+                        <p style="font-size: 12px; color: #666; margin-bottom: 8px;">QA on both integrated tables. One button generates two answers for comparison.</p>
+                        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                            <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
+                                <input type="radio" name="qa_mode" value="generate" id="qa_mode_generate" checked onchange="toggleQAMode()" style="width: 16px; height: 16px;">
                                 <span>Generate New Answer</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 5px; font-weight: 500;">
-                                <input type="radio" name="qa_mode" value="use_fake" id="qa_mode_fake" onchange="toggleQAMode()" style="width: 18px; height: 18px;">
-                                <span>Use Fake Response for testing/demo</span>
+                            <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
+                                <input type="radio" name="qa_mode" value="use_fake" id="qa_mode_fake" onchange="toggleQAMode()" style="width: 16px; height: 16px;">
+                                <span>Use Fake Response</span>
                             </label>
-                            <div id="qa_use_fake_options" style="display: none; width: 100%; margin-top: 8px;">
-                                <input type="file" id="qa_fake_file" accept=".json" onchange="handleQAFakeFileSelect()" style="font-size: 13px;">
-                                <span id="qa_fake_file_name" style="font-size: 12px; color: #666;"></span>
+                            <div id="qa_use_fake_options" style="display: none; align-items: center; gap: 8px;">
+                                <input type="file" id="qa_fake_file" accept=".json" onchange="handleQAFakeFileSelect()" style="font-size: 12px; max-width: 140px;">
+                                <span id="qa_fake_file_name" style="font-size: 11px; color: #666;"></span>
                             </div>
+                            <button id="qaBtn" onclick="runQABoth('${results.job_id || currentJobId}')" 
+                                    style="padding: 6px 14px; font-size: 13px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                💬 Generate Answer
+                            </button>
                         </div>
-                        <button id="qaBtn" onclick="runQABoth('${results.job_id || currentJobId}')" 
-                                style="padding: 8px 16px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">
-                            💬 Generate Answer
-                        </button>
                         <div id="qa_after_click" style="display: none; margin-top: 20px;">
                             <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Integrated tables</h4>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
@@ -1592,7 +1590,7 @@ HTML_TEMPLATE = """
         function toggleQAMode() {
             const fakeMode = document.getElementById('qa_mode_fake')?.checked || false;
             const fakeOptions = document.getElementById('qa_use_fake_options');
-            if (fakeOptions) fakeOptions.style.display = fakeMode ? 'block' : 'none';
+            if (fakeOptions) fakeOptions.style.display = fakeMode ? 'flex' : 'none';
         }
         
         function handleQAFakeFileSelect() {
@@ -1618,13 +1616,13 @@ HTML_TEMPLATE = """
                 if (fakeOptions) fakeOptions.style.display = 'none';
             } else if (fakeMode) {
                 if (generateOptions) generateOptions.style.display = 'none';
-                if (fakeOptions) fakeOptions.style.display = 'block';
+                if (fakeOptions) fakeOptions.style.display = 'flex';
             }
         }
         
         function handleFakeFileSelect() {
-            const fileInput = document.getElementById('evaluation_fake_file');
-            const fileNameSpan = document.getElementById('fake_file_name');
+            const fileInput = document.getElementById('evaluation_fake_file2');
+            const fileNameSpan = document.getElementById('fake_file_name2');
             if (fileInput && fileInput.files.length > 0) {
                 fakeResponseFile = fileInput.files[0];
                 if (fileNameSpan) {

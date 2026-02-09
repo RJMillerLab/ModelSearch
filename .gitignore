@@ -44,6 +44,10 @@ md/
 *.md
 !README.md
 !docs/*.md
+# Allow demo template and preset queries under config (versioned, not in data/)
+!config/demo_template/
+!config/demo_template/search_results.json
+!config/preset_queries.json
 
 # Backup / non-essential docs
 bak/

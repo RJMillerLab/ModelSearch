@@ -475,7 +475,10 @@ def search():
         folder_name = data.get("folder_name")
         if not folder_name:
             return jsonify({"status": "error", "message": "folder_name required for mimic"}), 400
-        path = os.path.join(REPO_ROOT, "data", "template", "search_results.json") if folder_name == "template" else os.path.join(REPO_ROOT, "data", folder_name, "search_results.json")
+        if folder_name == "template":
+            path = os.path.join(REPO_ROOT, "config", "demo_template", "search_results.json")
+        else:
+            path = os.path.join(REPO_ROOT, "data", folder_name, "search_results.json")
         if not os.path.exists(path):
             return jsonify({"status": "error", "message": f"Saved results not found: {folder_name}"}), 404
         with open(path, "r", encoding="utf-8") as f:
@@ -584,12 +587,14 @@ def get_table_preview():
 @app.route("/api/saved-searches", methods=["GET"])
 def list_saved_searches():
     data_dir = os.path.join(REPO_ROOT, "data")
-    template_path = os.path.join(REPO_ROOT, "data", "template", "search_results.json")
+    template_path = os.path.join(REPO_ROOT, "config", "demo_template", "search_results.json")
     template_available = os.path.isfile(template_path)
     if not os.path.isdir(data_dir):
         return jsonify({"status": "success", "searches": [], "template_available": template_available})
     searches = []
     for name in sorted(os.listdir(data_dir), reverse=True)[:50]:
+        if name == "template":
+            continue
         path = os.path.join(data_dir, name)
         json_path = os.path.join(path, "search_results.json")
         if os.path.isdir(path) and os.path.isfile(json_path):
