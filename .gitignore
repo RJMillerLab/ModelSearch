@@ -24,6 +24,8 @@ wheels/
 venv/
 env/
 ENV/
+.venv_test/
+.venv/
 
 # IDE
 .vscode/
@@ -56,9 +58,11 @@ data_citationlake/
 
 # Blend_internal (clone separately)
 src/Blend_internal/
+src/Blend_internal
 
 # Logs
-#*.log
+logs/
+*.log
 
 # OS
 .DS_Store

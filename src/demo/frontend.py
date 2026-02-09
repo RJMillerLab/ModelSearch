@@ -362,12 +362,12 @@ HTML_TEMPLATE = """
                     <input type="text" id="query" class="form-control" placeholder="Type or pick preset" value="transformer model for code generation">
                 </div>
                 <div class="form-row" id="require-seed-has-tables-row" style="margin-top: 8px;">
-                    <label for="require_seed_has_tables">Seed for Table Search:</label>
+                    <label for="require_seed_has_tables">Table Search Seed Model:</label>
                     <select id="require_seed_has_tables" class="form-control" style="width: 200px; flex: none;" title="Only applies in Query mode: pick which seed model to use for Table Search.">
-                        <option value="0">Use top-1 (Table Search may be empty)</option>
-                        <option value="1">Narrow down: first of top-20 with tables</option>
+                        <option value="0">Use top-1 result</option>
+                        <option value="1">Pick first model with tables (from top-20)</option>
                     </select>
-                    <span style="font-size: 11px; color: #666; margin-left: 8px;">Only in Query mode. If “Narrow down” and none of top-20 have tables → Table Search skipped.</span>
+                    <span style="font-size: 11px; color: #666; margin-left: 8px;">Only in Query mode. If "Pick first model with tables" and none of top-20 have tables → Table Search skipped.</span>
                 </div>
             </div>
             
@@ -387,23 +387,25 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <div class="form-row">
-                <span style="font-size: 13px; color: #444;">Table retrieval: Run search</span>
+            <div class="form-row" style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 200px;">
+                    <label for="top_k">Model Card Top K:</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="range" id="top_k_slider" min="1" max="100" value="50" step="1" style="flex: 1; max-width: 200px;" oninput="updateTopKValue(this.value)">
+                        <input type="number" id="top_k" class="form-control" value="50" min="1" max="100" oninput="updateTopKSlider(this.value)" style="width: 80px;">
+                    </div>
+                </div>
+                <div style="flex: 1; min-width: 200px;">
+                    <label for="table_search_k">Table Search Top K:</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="range" id="table_search_k_slider" min="1" max="20" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
+                        <input type="number" id="table_search_k" class="form-control" value="10" min="1" max="20" oninput="updateTableSearchKSlider(this.value)" style="width: 80px;">
+                    </div>
+                </div>
+                <div>
+                    <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>
+                </div>
             </div>
-            
-            <div class="form-row">
-                <label for="top_k">Model Card Top K:</label>
-                <input type="range" id="top_k_slider" min="1" max="100" value="50" step="1" style="flex: 1; max-width: 200px;" oninput="updateTopKValue(this.value)">
-                <input type="number" id="top_k" class="form-control" value="50" min="1" max="100" oninput="updateTopKSlider(this.value)">
-            </div>
-            
-            <div class="form-row">
-                <label for="table_search_k">Table Search Top K:</label>
-                <input type="range" id="table_search_k_slider" min="1" max="20" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
-                <input type="number" id="table_search_k" class="form-control" value="10" min="1" max="20" oninput="updateTableSearchKSlider(this.value)">
-            </div>
-            
-            <button id="searchBtn" onclick="startSearch()">Start Search</button>
             </div>
         </div>
         
@@ -964,10 +966,28 @@ HTML_TEMPLATE = """
                     </div>
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
-                        ${Object.entries(results.card2tab2card_results).map(([type, data]) => {
+                        ${(() => {
+                            // Filter: show keyword, unionable, and joinable types (single_column and multi_column are joinable)
+                            const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
+                            // Map joinable types to display names
+                            const typeDisplayNames = {
+                                'single_column': 'joinable (single_column)',
+                                'multi_column': 'joinable (multi_column)',
+                                'keyword': 'keyword',
+                                'unionable': 'unionable'
+                            };
+                            const entries = Object.entries(results.card2tab2card_results)
+                                .filter(([type, data]) => allowedTypes.includes(type))
+                                .map(([type, data]) => {
+                                    const models = Array.isArray(data) ? data : (data.model_ids || []);
+                                    const displayName = typeDisplayNames[type] || type;
+                                    return { type, displayName, data, models, count: models.length };
+                                })
+                                .sort((a, b) => b.count - a.count); // Sort by count descending
+                            
+                            return entries.map(({type, displayName, data, models}) => {
                             const sectionId = card2tab2cardIds[type];
                             // Handle both old format (array) and new format (object with model_ids and intermediate)
-                            const models = Array.isArray(data) ? data : (data.model_ids || []);
                             const intermediate = data.intermediate || {};
                             const tableToModels = intermediate.table_to_models || {};
                             
@@ -1006,7 +1026,7 @@ HTML_TEMPLATE = """
                             return `
                                 <div class="search-type-section">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
-                                        <h4>${type} (${models.length} models)</h4>
+                                        <h4>${displayName} (${models.length} models)</h4>
                                     </div>
                                     <div class="collapsible-content" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
@@ -1079,7 +1099,8 @@ HTML_TEMPLATE = """
                                     </div>
                                 </div>
                             `;
-                        }).join('')}
+                            }).join('');
+                        })()}
                     </div>
                 </div>
             `;
@@ -1116,9 +1137,9 @@ HTML_TEMPLATE = """
                 </div>
             ` : '';
             
-            // Add Integration Sections - Vertical layout (one above the other)
+            // Add Integration Sections - Horizontal layout (side by side)
             html += `
-                <div style="display: flex; flex-direction: column; gap: 20px; margin-top: 30px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px;">
                     <!-- First: Model Search Integration (Card2Card) - Max Models first, then same order as Table Search -->
                     <div class="integration-section" style="padding: 20px; background: #e7f3ff; border-radius: 8px; border: 1px solid #b3d9ff; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <h3 style="margin-top: 0;">Table Integration (from Model Search)</h3>
@@ -1126,8 +1147,8 @@ HTML_TEMPLATE = """
                             Integrate tables from <span class="number-badge">1</span> Card2Card (model search) results. Gets tables for each model and integrates them.
                         </p>
                         <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_model_search_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_model_search_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_model_search_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of tables per model"> <span style="font-size: 11px; color: #666;">(controls table count per model)</span></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of models to process"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
                         <button id="integrationModelSearchBtn" onclick="runModelSearchIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Model Search Tables</button>
                         <div id="integrationModelSearchResults" style="margin-top: 20px; display: none;"></div>
                     </div>
@@ -1139,7 +1160,8 @@ HTML_TEMPLATE = """
                             Integrate tables from <span class="number-badge">2</span> Card2Tab2Card search results using Union or Intersection.
                         </p>
                         <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Integration Type:</label><select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select></div>
-                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;"></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Top K Tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of tables to retrieve"> <span style="font-size: 11px; color: #666;">(controls table count)</span></div>
+                        <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Max Models:</label><input type="number" id="integration_max_models_table" class="form-control" value="10" min="1" max="50" style="width: 80px; flex: none;" title="Limit number of models after getting modelids from tables"> <span style="font-size: 11px; color: #666;">(limits final model count)</span></div>
                         <div class="form-row" style="margin-bottom: 10px;"><label style="min-width: 120px; margin-bottom: 0;">Search Type:</label><select id="integration_search_type" class="form-control" style="max-width: 280px;"><option value="single_column">Single Column</option><option value="keyword">Keyword</option><option value="multi_column">Multi Column</option><option value="unionable">Unionable</option><option value="complex">Complex (Union+Join+Correlation)</option><option value="correlation">Correlation</option><option value="imputation">Imputation</option><option value="augmentation">Augmentation</option><option value="dependent_data">Dependent Data</option><option value="feature_for_ml">Feature for ML</option><option value="multi_column_collinearity">Multi-Column Collinearity</option><option value="negative_example">Negative Example</option></select></div>
                         <button id="integrationBtn" onclick="runIntegration('${results.job_id || currentJobId}')" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; width: 100%;">🔗 Integrate Tables</button>
                         <div id="integrationResults" style="margin-top: 20px; display: none;"></div>
@@ -1242,6 +1264,7 @@ HTML_TEMPLATE = """
             const searchType = document.getElementById('integration_search_type').value;
             const integrationType = document.getElementById('integration_type').value;
             const k = parseInt(document.getElementById('integration_k').value);
+            const maxModels = parseInt(document.getElementById('integration_max_models_table').value);
             
             const integrationBtn = document.getElementById('integrationBtn');
             const resultsDiv = document.getElementById('integrationResults');
@@ -1260,7 +1283,8 @@ HTML_TEMPLATE = """
                         job_id: jobId,
                         search_type: searchType,
                         integration_type: integrationType,
-                        k: k
+                        k: k,
+                        max_models: maxModels
                     })
                 });
                 
@@ -1294,13 +1318,13 @@ HTML_TEMPLATE = """
                             </div>
                         `;
                     } else {
-                        // Show table: scroll both horizontal and vertical
+                        // Show table: scroll both horizontal and vertical (draggable)
                         html += `
-                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto;">
+                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; position: relative;">
                                 <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
                                     <thead>
-                                        <tr style="background: #f8f9fa; position: sticky; top: 0;">
-                                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left;">${col}</th>`).join('')}
+                                        <tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
+                                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1311,7 +1335,7 @@ HTML_TEMPLATE = """
                                         `).join('')}
                                     </tbody>
                                 </table>
-                                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
+                                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px; padding: 5px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
                             </div>
                         `;
                     }
@@ -1409,13 +1433,13 @@ HTML_TEMPLATE = """
                             </div>
                         `;
                     } else {
-                        // Show table: scroll both horizontal and vertical
+                        // Show table: scroll both horizontal and vertical (draggable)
                         html += `
-                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto;">
+                            <div style="max-height: 400px; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; position: relative;">
                                 <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
                                     <thead>
-                                        <tr style="background: #f8f9fa; position: sticky; top: 0;">
-                                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left;">${col}</th>`).join('')}
+                                        <tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
+                                            ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1426,7 +1450,7 @@ HTML_TEMPLATE = """
                                         `).join('')}
                                     </tbody>
                                 </table>
-                                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
+                                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 10px; padding: 5px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
                             </div>
                         `;
                     }
