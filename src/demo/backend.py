@@ -560,14 +560,33 @@ def get_table_preview():
 @app.route("/api/saved-searches", methods=["GET"])
 def list_saved_searches():
     data_dir = os.path.join(REPO_ROOT, "data")
+    template_path = os.path.join(REPO_ROOT, "data", "template", "search_results.json")
+    template_available = os.path.isfile(template_path)
     if not os.path.isdir(data_dir):
-        return jsonify({"status": "success", "folders": []})
-    folders = []
+        return jsonify({"status": "success", "searches": [], "template_available": template_available})
+    searches = []
     for name in sorted(os.listdir(data_dir), reverse=True)[:50]:
         path = os.path.join(data_dir, name)
-        if os.path.isdir(path) and os.path.exists(os.path.join(path, "search_results.json")):
-            folders.append({"name": name, "path": path})
-    return jsonify({"status": "success", "folders": folders})
+        json_path = os.path.join(path, "search_results.json")
+        if os.path.isdir(path) and os.path.isfile(json_path):
+            entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None}
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                entry["query"] = saved.get("query") or ""
+                entry["model_id"] = saved.get("model_id") or ""
+                ts = saved.get("timestamp")
+                if ts:
+                    try:
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        entry["timestamp_str"] = dt.strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        entry["timestamp_str"] = str(ts)[:16]
+                entry["top_k"] = saved.get("top_k")
+            except Exception:
+                pass
+            searches.append(entry)
+    return jsonify({"status": "success", "searches": searches, "template_available": template_available})
 
 
 # Stubs for integrate / evaluate / qa (use legacy backend for full support)

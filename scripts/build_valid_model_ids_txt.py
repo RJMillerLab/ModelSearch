@@ -3,7 +3,7 @@
 Build data/valid_model_ids_with_tables.txt from relationship parquet (Part 1 / training).
 Run once; inference (demo backend) only loads this txt.
 
-Extracts model_id that have at least one row with csv_basename in the parquet.
+Extracts modelId that have at least one non-empty table list (schema: modelId + hugging/github/html/llm table list columns).
 One model_id per line. Used by backend "Narrow down" to pick seed from query2modelcard results.
 """
 
@@ -52,30 +52,41 @@ def main():
             print(f"  {c!r}: {df[c].dtype}")
         print(f"Rows: {len(df)}")
         sys.exit(0)
-    cols = list(df.columns)
-    # Model ID column: try common names (case-sensitive then case-insensitive)
-    id_candidates = ["modelId", "model_id", "modelID"]
-    id_col = next((c for c in id_candidates if c in df.columns), None)
-    if id_col is None:
-        low = {c.lower(): c for c in df.columns}
-        id_col = low.get("modelid") or low.get("model_id")
-    # Table/file column: any that look like csv basename or table reference
-    base_candidates = ["csv_basename", "csvBasename", "basename", "filename", "table_basename", "csv_path", "table_id"]
-    base_col = next((c for c in base_candidates if c in df.columns), None)
-    if base_col is None:
-        low = {c.lower(): c for c in df.columns}
-        base_col = low.get("csv_basename") or low.get("basename") or low.get("filename")
-    if id_col is None or base_col is None:
-        print("Error: parquet must have a model-id column and a table/csv column.", file=sys.stderr)
-        print("Schema (columns and dtypes):", file=sys.stderr)
-        for c in cols:
-            print(f"  {c!r}: {df[c].dtype}", file=sys.stderr)
-        print("Expected model-id: one of modelId, model_id, modelID", file=sys.stderr)
-        print("Expected table/csv: one of csv_basename, basename, filename", file=sys.stderr)
+
+    # Hardcoded for data_citationlake/processed/modelcard_step3_dedup.parquet schema:
+    # modelId (object) + table list columns: hugging_table_list_dedup, github_table_list_dedup,
+    # html_table_list_mapped_dedup, llm_table_list_mapped_dedup (object, may be list or str)
+    ID_COL = "modelId"
+    TABLE_LIST_COLS = [
+        "hugging_table_list_dedup",
+        "github_table_list_dedup",
+        "html_table_list_mapped_dedup",
+        "llm_table_list_mapped_dedup",
+    ]
+    if ID_COL not in df.columns:
+        print(f"Error: parquet missing column {ID_COL!r}. Schema: {list(df.columns)}", file=sys.stderr)
+        sys.exit(1)
+    existing_table_cols = [c for c in TABLE_LIST_COLS if c in df.columns]
+    if not existing_table_cols:
+        print(f"Error: parquet missing any of {TABLE_LIST_COLS}. Schema: {list(df.columns)}", file=sys.stderr)
         sys.exit(1)
 
-    has_base = df[base_col].notna() & (df[base_col].astype(str).str.strip() != "")
-    valid = sorted(df.loc[has_base, id_col].astype(str).str.strip().unique())
+    def _has_tables(row):
+        for c in existing_table_cols:
+            v = row[c]
+            if pd.isna(v):
+                continue
+            if isinstance(v, (list, tuple)):
+                if len(v) > 0:
+                    return True
+                continue
+            s = str(v).strip()
+            if s and s.lower() not in ("nan", "none", "[]", ""):
+                return True
+        return False
+
+    mask = df.apply(_has_tables, axis=1)
+    valid = sorted(df.loc[mask, ID_COL].astype(str).str.strip().unique())
 
     os.makedirs(os.path.dirname(out_abs) or ".", exist_ok=True)
     with open(out_abs, "w", encoding="utf-8") as f:

@@ -540,12 +540,13 @@ HTML_TEMPLATE = """
                 
                 if (data.status === 'success') {
                     let html = '';
-                    
-                    if (data.searches.length === 0 && !data.template_available) {
+                    const searches = data.searches || [];
+                    const templateAvailable = !!data.template_available;
+                    if (searches.length === 0 && !templateAvailable) {
                         html = '<div style="text-align: center; color: #666; padding: 20px;">No saved searches found. Run a new search to create one.</div>';
                     } else {
                         // Display each saved search as a clickable card
-                        data.searches.forEach(search => {
+                        searches.forEach(search => {
                             const label = search.query 
                                 ? `${search.timestamp_str} - ${search.query.substring(0, 50)}${search.query.length > 50 ? '...' : ''}`
                                 : `${search.timestamp_str} - ${search.model_id}`;
