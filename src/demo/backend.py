@@ -139,10 +139,10 @@ def run_search_pipeline(
             query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode,
             require_seed_has_tables,
         )
-            except Exception as e:
+    except Exception as e:
         logger.log(f"Pipeline crashed: {e}")
         _set_pipeline_error(f"Pipeline error: {e}", model_id)
-                import traceback
+        import traceback
         logger.log(traceback.format_exc())
 
 
