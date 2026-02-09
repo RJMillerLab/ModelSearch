@@ -30,6 +30,11 @@ def main():
         default=DEFAULT_OUTPUT,
         help=f"Output txt path, one model_id per line (default: {DEFAULT_OUTPUT})",
     )
+    parser.add_argument(
+        "--schema-only",
+        action="store_true",
+        help="Only print parquet schema (column names and dtypes) and exit.",
+    )
     args = parser.parse_args()
 
     parquet_abs = os.path.join(REPO_ROOT, args.parquet) if not os.path.isabs(args.parquet) else args.parquet
@@ -41,10 +46,32 @@ def main():
 
     import pandas as pd
     df = pd.read_parquet(parquet_abs, columns=None)
-    id_col = "modelId" if "modelId" in df.columns else ("model_id" if "model_id" in df.columns else None)
-    base_col = "csv_basename" if "csv_basename" in df.columns else None
+    if args.schema_only:
+        print("Parquet schema:")
+        for c in df.columns:
+            print(f"  {c!r}: {df[c].dtype}")
+        print(f"Rows: {len(df)}")
+        sys.exit(0)
+    cols = list(df.columns)
+    # Model ID column: try common names (case-sensitive then case-insensitive)
+    id_candidates = ["modelId", "model_id", "modelID"]
+    id_col = next((c for c in id_candidates if c in df.columns), None)
+    if id_col is None:
+        low = {c.lower(): c for c in df.columns}
+        id_col = low.get("modelid") or low.get("model_id")
+    # Table/file column: any that look like csv basename or table reference
+    base_candidates = ["csv_basename", "csvBasename", "basename", "filename", "table_basename", "csv_path", "table_id"]
+    base_col = next((c for c in base_candidates if c in df.columns), None)
+    if base_col is None:
+        low = {c.lower(): c for c in df.columns}
+        base_col = low.get("csv_basename") or low.get("basename") or low.get("filename")
     if id_col is None or base_col is None:
-        print(f"Error: parquet must have modelId (or model_id) and csv_basename columns", file=sys.stderr)
+        print("Error: parquet must have a model-id column and a table/csv column.", file=sys.stderr)
+        print("Schema (columns and dtypes):", file=sys.stderr)
+        for c in cols:
+            print(f"  {c!r}: {df[c].dtype}", file=sys.stderr)
+        print("Expected model-id: one of modelId, model_id, modelID", file=sys.stderr)
+        print("Expected table/csv: one of csv_basename, basename, filename", file=sys.stderr)
         sys.exit(1)
 
     has_base = df[base_col].notna() & (df[base_col].astype(str).str.strip() != "")
