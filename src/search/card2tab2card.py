@@ -400,24 +400,50 @@ def search_card2tab2card(
                 # Fallback: use table basenames if no headers found
                 query = [os.path.basename(str(t)) for t in query_tables[:10]]
         else:
-            # For other search types, we'd need to load the actual table data
-            # For now, default to keyword search
-            query = None
+            # For other search types (e.g. single_column) we'd need table data; no query provided → fall back to keyword
             search_type = "keyword"
+            all_headers = []
+            for table_path in query_tables[:10]:
+                try:
+                    csv_path = None
+                    if os.path.exists(table_path):
+                        csv_path = table_path
+                    else:
+                        basename = os.path.basename(str(table_path))
+                        for base_dir in [
+                            "data_citationlake/processed/deduped_hugging_csvs",
+                            "data_citationlake/processed/deduped_github_csvs",
+                            "data_citationlake/processed/tables_output"
+                        ]:
+                            full_path = os.path.join(base_dir, basename)
+                            if os.path.exists(full_path):
+                                csv_path = full_path
+                                break
+                    if csv_path:
+                        df_temp = pd.read_csv(csv_path, nrows=0)
+                        headers = [str(col).lower().strip() for col in df_temp.columns]
+                        headers = [h for h in headers if h]
+                        all_headers.extend(headers)
+                except Exception:
+                    continue
+            query = list(set(all_headers))
+            if not query:
+                query = [os.path.basename(str(t)) for t in query_tables[:10]]
     else:
         print(f"ℹ️  Using provided query (not model's tables)")
     
     # Step 2: Tables -> Retrieved Tables
+    _query_safe = query if query is not None else []
     print(f"\n{'='*60}")
     print(f"🔍 Step 2: Tables -> Retrieved Tables")
     print(f"{'='*60}")
     print(f"✅ Search type: {search_type}")
     if search_type == "keyword":
-        print(f"✅ Query keywords: {query[:5]}{'...' if len(query) > 5 else ''}")
-        print(f"   (Total {len(query)} keywords)")
+        print(f"✅ Query keywords: {_query_safe[:5]}{'...' if len(_query_safe) > 5 else ''}")
+        print(f"   (Total {len(_query_safe)} keywords)")
     elif search_type == "single_column":
-        print(f"✅ Query values: {query[:5]}{'...' if len(query) > 5 else ''}")
-        print(f"   (Total {len(query)} values)")
+        print(f"✅ Query values: {_query_safe[:5]}{'...' if len(_query_safe) > 5 else ''}")
+        print(f"   (Total {len(_query_safe)} values)")
     elif search_type in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation", "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example"]:
         print(f"✅ Query: DataFrame with {len(query)} rows and {len(query.columns)} columns")
         if search_type == "multi_column":
