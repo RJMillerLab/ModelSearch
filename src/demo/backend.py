@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
+import numpy as np
 
 # Repo root (backend lives in src/demo/)
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -368,7 +369,7 @@ def _run_pipeline_body(
                 if data is not None:
                     # CLI writes {"model_ids": [...], "query_tables": [...], "intermediate": {...}}
                     mid = data.get("model_ids") if isinstance(data, dict) else None
-                    lst = mid if isinstance(mid, list) else (data if isinstance(data, list) else [])
+                    lst = list(mid) if isinstance(mid, (list, np.ndarray)) else (list(data) if isinstance(data, (list, np.ndarray)) else [])
                     card2tab2card_all[st] = lst
                     qty = len(data.get("query_tables", [])) if isinstance(data, dict) else 0
                     logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
