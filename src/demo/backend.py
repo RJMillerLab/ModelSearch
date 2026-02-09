@@ -689,13 +689,17 @@ def integrate_model_search():
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from integration.table_integration import integrate_tables_from_model_search_results
         
+        # For the demo backend we don't rely on live CitationLake.
+        # Force integration to use the local relationship_parquet instead of CitationLake,
+        # to avoid "CitationLake not available ... no fallback data found" errors.
         result = integrate_tables_from_model_search_results(
             search_results_json=results_file,
             integration_type=integration_type,
             k=k,
             max_models=max_models,
             db_path=DEFAULT_DB_PATH,
-            relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET
+            relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
+            use_citationlake=False,
         )
         
         if not result.get("success", False):
