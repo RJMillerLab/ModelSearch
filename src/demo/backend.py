@@ -330,6 +330,7 @@ def _run_pipeline_body(
             "--model_id", model_id,
             "--search_type", st,
             "--k", str(k_table),
+            "--modelcard_k", "0",  # 0 = no limit: return all models that contain the retrieved tables
             "--db_path", DEFAULT_DB_PATH,
             "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
             "--no_citationlake",
@@ -651,13 +652,23 @@ def integrate():
         
         # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
         integrated_df = result.get("integrated_table")
+        saved_path = None
         if integrated_df is not None:
             raw_data = integrated_df.values.tolist()
             result["integrated_table"] = {
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
-
+            # Save integrated table to job dir for reference
+            try:
+                csv_name = "integrated_table_search.csv"
+                save_path = os.path.join(job_dir, csv_name)
+                integrated_df.to_csv(save_path, index=False, encoding="utf-8")
+                saved_path = os.path.join("data", job_id, csv_name)
+            except Exception:
+                pass
+        if saved_path:
+            result["saved_path"] = saved_path
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback
@@ -709,13 +720,22 @@ def integrate_model_search():
         
         # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
         integrated_df = result.get("integrated_table")
+        saved_path = None
         if integrated_df is not None:
             raw_data = integrated_df.values.tolist()
             result["integrated_table"] = {
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
-
+            try:
+                csv_name = "integrated_model_search.csv"
+                save_path = os.path.join(job_dir, csv_name)
+                integrated_df.to_csv(save_path, index=False, encoding="utf-8")
+                saved_path = os.path.join("data", job_id, csv_name)
+            except Exception:
+                pass
+        if saved_path:
+            result["saved_path"] = saved_path
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback

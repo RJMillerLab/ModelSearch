@@ -719,15 +719,20 @@ def search_card2tab2card(
     
     print(f"✅ Found {len(similar_model_ids)} unique model cards (excluding query model)")
     
-    # Limit to top modelcard_k
-    final_results = list(similar_model_ids)[:modelcard_k]
+    # Limit to top modelcard_k only if modelcard_k > 0 (0 or None = no limit: all models for these tables)
+    if modelcard_k and modelcard_k > 0:
+        final_results = list(similar_model_ids)[:modelcard_k]
+        print(f"   (capped at top {modelcard_k} models)")
+    else:
+        final_results = list(similar_model_ids)
+        print(f"   (no limit: returning all {len(final_results)} models that contain the retrieved tables)")
     
     # Final summary
     print(f"\n{'='*60}")
     print(f"📊 Final Results Summary")
     print(f"{'='*60}")
     print(f"✅ Query Model: {model_id}")
-    print(f"✅ Found {len(final_results)} similar model cards (top {modelcard_k})")
+    print(f"✅ Found {len(final_results)} similar model cards" + (f" (top {modelcard_k})" if modelcard_k and modelcard_k > 0 else ""))
     if final_results:
         print(f"📝 Sample results (showing first 2):")
         for i, model_id_result in enumerate(final_results[:2], 1):
@@ -858,15 +863,18 @@ def search_card2tab2card_from_tables(
     # Remove the query model itself
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
     
-    # Limit to top modelcard_k
-    final_results = list(similar_model_ids)[:modelcard_k]
+    # Limit to top modelcard_k only if modelcard_k > 0 (0 = no limit)
+    if modelcard_k and modelcard_k > 0:
+        final_results = list(similar_model_ids)[:modelcard_k]
+    else:
+        final_results = list(similar_model_ids)
     
     # Final summary
     print(f"\n{'='*60}")
     print(f"📊 Final Results Summary")
     print(f"{'='*60}")
     print(f"✅ Query Model: {model_id}")
-    print(f"✅ Found {len(final_results)} similar model cards (top {modelcard_k})")
+    print(f"✅ Found {len(final_results)} similar model cards" + (f" (top {modelcard_k})" if modelcard_k and modelcard_k > 0 else ""))
     if final_results:
         print(f"📝 Sample results (showing first 2):")
         for i, model_id_result in enumerate(final_results[:2], 1):
@@ -1235,15 +1243,18 @@ def search_card2tab2card_by_type(
     
     print(f"✅ Found {len(similar_model_ids)} unique model cards (excluding query model)")
     
-    # Limit to top modelcard_k
-    final_results = list(similar_model_ids)[:modelcard_k]
+    # Limit to top modelcard_k only if modelcard_k > 0 (0 = no limit)
+    if modelcard_k and modelcard_k > 0:
+        final_results = list(similar_model_ids)[:modelcard_k]
+    else:
+        final_results = list(similar_model_ids)
     
     # Final summary
     print(f"\n{'='*60}")
     print(f"📊 Final Results Summary")
     print(f"{'='*60}")
     print(f"✅ Query Model: {model_id}")
-    print(f"✅ Found {len(final_results)} similar model cards (top {modelcard_k}, filtered by classification)")
+    print(f"✅ Found {len(final_results)} similar model cards" + (f" (top {modelcard_k}, filtered by classification)" if modelcard_k and modelcard_k > 0 else " (filtered by classification)")
     if final_results:
         print(f"📝 Sample results (showing first 2):")
         for i, model_id_result in enumerate(final_results[:2], 1):
@@ -1293,7 +1304,9 @@ def main():
                        default='keyword',
                        help='Type of table search')
     parser.add_argument('--k', type=int, default=10,
-                       help='Number of table results to retrieve')
+                       help='Number of table results to retrieve (table_search_k)')
+    parser.add_argument('--modelcard_k', type=int, default=0,
+                       help='Max model cards to return (0 = no limit: all models that contain the retrieved tables)')
     parser.add_argument('--table_search_json', default=None,
                        help='Optional: Path to pre-computed table search results JSON')
     parser.add_argument('--use_citationlake', action='store_true', default=True,
@@ -1501,6 +1514,8 @@ def main():
                     query=query,
                     search_type=args.search_type,
                     k=args.k,
+                    table_search_k=args.k,
+                    modelcard_k=args.modelcard_k,
                     schema_log_path=args.schema_log,
                     use_citationlake=args.use_citationlake,
                     output_json=args.output_json or "data/card2tab2card_results.json",

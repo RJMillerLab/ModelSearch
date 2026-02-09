@@ -230,23 +230,29 @@ HTML_TEMPLATE = """
             max-height: 5000px;
         }
         .search-type-section {
-            margin: 6px 0;
-            padding: 6px;
-            background: #f8f9fa;
-            border-radius: 4px;
+            margin: 8px 0;
+            padding: 0;
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            overflow: hidden;
         }
         .search-type-header {
             cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 5px 8px;
-            background: white;
-            border-radius: 4px;
-            margin-bottom: 6px;
+            padding: 10px 12px;
+            background: linear-gradient(180deg, #fafbfc 0%, #f1f3f5 100%);
+            border-bottom: 1px solid #e9ecef;
+            margin-bottom: 0;
         }
         .search-type-header:hover {
-            background: #e9ecef;
+            background: linear-gradient(180deg, #f1f3f5 0%, #e9ecef 100%);
+        }
+        .search-type-section .collapsible-content {
+            padding: 12px;
         }
         .search-type-header::before {
             content: '▶';
@@ -987,8 +993,8 @@ HTML_TEMPLATE = """
                             `;
                         }).join('')}
                     </div>
-                    <div class="result-card" style="min-width: 0;">
-                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; color: #495057;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
+                    <div class="result-card" style="min-width: 0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-radius: 8px;">
+                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 17px; font-weight: 600; color: #343a40;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
                         ${(() => {
                             // Filter: show keyword, unionable, and joinable types (single_column and multi_column are joinable)
                             const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
@@ -1172,18 +1178,17 @@ HTML_TEMPLATE = """
             ` : '';
             
             // Single merged Table Integration section: one set of settings, one button runs both in parallel
-            const integrationCardStyle = 'padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-family: inherit; font-size: 14px; color: #212529; min-width: 0;';
-            const integrationTitleStyle = 'margin-top: 0; font-size: 16px; font-weight: 600; color: #212529;';
-            const integrationDescStyle = 'font-size: 14px; color: #666; margin-bottom: 15px;';
-            const integrationBtnStyle = 'padding: 10px 24px; font-size: 15px; font-weight: 600; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;';
-            // Same row style as Model Card Top K / Table Search Top K (label + slider + number)
+            const integrationCardStyle = 'padding: 24px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 10px; border: 1px solid #dee2e6; box-shadow: 0 4px 12px rgba(0,0,0,0.06); font-family: inherit; font-size: 14px; color: #212529; min-width: 0;';
+            const integrationTitleStyle = 'margin-top: 0; font-size: 18px; font-weight: 600; color: #1a1d21; letter-spacing: -0.02em;';
+            const integrationDescStyle = 'font-size: 14px; color: #5a6268; margin-bottom: 18px; line-height: 1.5;';
+            const integrationBtnStyle = 'padding: 12px 28px; font-size: 15px; font-weight: 600; background: linear-gradient(180deg, #007bff 0%, #0056b3 100%); color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,123,255,0.3);';
             const topKRowStyle = 'display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;';
             const topKBlockStyle = 'flex: 1; min-width: 200px;';
             const topKLabelStyle = 'display: block; margin-bottom: 4px; font-weight: 500; color: #212529;';
             html += `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 30px;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
-                    <p style="${integrationDescStyle}">Run both: <span class="number-badge">1</span> Card2Card (model search) + <span class="number-badge">2</span> Card2Tab2Card (table search). Shared settings below; one button runs both in parallel.</p>
+                    <p style="${integrationDescStyle}">Run both: <span class="number-badge">1</span> Card2Card (model search) + <span class="number-badge">2</span> Card2Tab2Card (table search). Shared settings below; one button runs both in parallel. Table search returns <strong>all models</strong> that contain the retrieved tables (no model cap).</p>
                     <div class="form-row" style="margin-bottom: 12px;">
                         <label style="min-width: 140px; margin-bottom: 0; font-size: 14px; font-weight: 500;">Integration Type:</label>
                         <select id="integration_type" class="form-control" style="max-width: 220px;"><option value="union">Union</option><option value="intersection">Intersection</option><option value="alite">ALITE (FD-based)</option><option value="outer_join">Outer Join</option></select>
@@ -1311,31 +1316,56 @@ HTML_TEMPLATE = """
             document.getElementById('resultsSection').classList.add('active');
         }
         
-        // Fixed-height card for table so UI does not expand (scroll inside card only)
-        const INTEGRATION_TABLE_CARD_STYLE = 'height: 280px; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; background: #fff;';
+        // Fixed viewport: table never expands the page; user scrolls inside this window only
+        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff; resize: none;';
+        window.__integrationTables = window.__integrationTables || {};
+        
+        function downloadIntegrationTableAsCsv(downloadId) {
+            const t = window.__integrationTables[downloadId];
+            if (!t || !t.columns || !t.data) return;
+            const escape = (v) => {
+                const s = (v == null || v === '') ? '' : String(v);
+                return /[",\\n\\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            };
+            const header = t.columns.map(escape).join(',');
+            const rows = t.data.map(row => row.map(escape).join(','));
+            const csv = [header].concat(rows).join('\\r\\n');
+            const blob = new Blob(['\\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = (downloadId || 'integrated') + '.csv';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
         
         function renderIntegrationTable(table, stats, options) {
-            const { title = 'Integration', successColor = '#28a745', extraHtml = '' } = options || {};
+            const { title = 'Integration', successColor = '#28a745', extraHtml = '', savedPath = '', downloadId = '' } = options || {};
             if (!table || (stats && stats.output_rows === 0)) {
                 return `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                     <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
                     <div style="margin-bottom: 15px;">${(stats && stats.output_columns === 0) ? '⚠️ No common columns. Intersection result is empty.' : '⚠️ No common rows. Intersection result is empty.'}</div></div>`;
             }
+            if (downloadId) window.__integrationTables[downloadId] = table;
+            const footer = [];
+            if (savedPath) footer.push(`<span style="font-size: 12px; color: #666;">Saved to: <code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${savedPath}</code></span>`);
+            footer.push(`<button type="button" onclick="downloadIntegrationTableAsCsv('${downloadId}')" style="margin-left: 10px; padding: 6px 12px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">📥 Download CSV</button>`);
             let html = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                 <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
                 <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols</div>
                 ${extraHtml}
-                <div style="${INTEGRATION_TABLE_CARD_STYLE}">
-                    <table style="width: 100%; min-width: max-content; border-collapse: collapse; font-size: 12px;">
+                <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" title="Scroll inside this window to see the full table">
+                    <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
                         <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
                             ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa;">${col}</th>`).join('')}
                         </tr></thead>
                         <tbody>
-                            ${table.data.slice(0, 100).map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                            ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
                         </tbody>
                     </table>
                 </div>
-                ${table.data.length > 100 ? `<p style="font-size: 11px; color: #666; margin-top: 6px;">Showing first 100 of ${table.data.length} rows</p>` : ''}
+                <div style="margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    ${footer.join('')}
+                </div>
             </div>`;
             return html;
         }
@@ -1380,7 +1410,7 @@ HTML_TEMPLATE = """
                     if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
                         extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${modelRes.models_with_tables.slice(0, 5).join(', ')}${modelRes.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
                     }
-                    leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra });
+                    leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                 } else {
                     leftDiv.innerHTML = `<div style="padding: 15px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">❌ ${modelRes.message || 'Integration failed'}</div>`;
                 }
@@ -1388,7 +1418,7 @@ HTML_TEMPLATE = """
                 if (tableRes.status === 'success') {
                     const stats = tableRes.stats || {};
                     const table = tableRes.integrated_table;
-                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745' });
+                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                 } else {
                     rightDiv.innerHTML = `<div style="padding: 15px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">❌ ${tableRes.message || 'Integration failed'}</div>`;
                 }
@@ -1420,7 +1450,7 @@ HTML_TEMPLATE = """
                 if (data.status === 'success') {
                     const stats = data.stats;
                     const table = data.integrated_table;
-                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Integration Successful', successColor: '#28a745' });
+                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Integration Successful', successColor: '#28a745', savedPath: data.saved_path || '', downloadId: 'table-search-single' });
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
                 }
@@ -1452,7 +1482,7 @@ HTML_TEMPLATE = """
                     if (data.models_with_tables && data.models_with_tables.length > 0) {
                         extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${data.models_with_tables.slice(0, 5).map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ')}${data.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
                     }
-                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra });
+                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'model-search-single' });
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
                 }
