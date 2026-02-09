@@ -30,14 +30,14 @@ HTML_TEMPLATE = """
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 1200px;
+            max-width: 880px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 12px;
             background: #f5f5f5;
         }
         .container {
             background: white;
-            padding: 30px;
+            padding: 16px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
@@ -46,11 +46,11 @@ HTML_TEMPLATE = """
             margin-bottom: 30px;
         }
         .input-section {
-            margin-bottom: 30px;
+            margin-bottom: 12px;
         }
         .mode-selector {
-            margin-bottom: 20px;
-            padding: 15px;
+            margin-bottom: 10px;
+            padding: 10px;
             background: #f8f9fa;
             border-radius: 4px;
         }
@@ -77,9 +77,9 @@ HTML_TEMPLATE = """
         .form-row {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             flex-wrap: wrap;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
         .form-row label {
             margin-bottom: 0;
@@ -127,8 +127,8 @@ HTML_TEMPLATE = """
             cursor: not-allowed;
         }
         .progress-section {
-            margin-top: 30px;
-            padding: 20px;
+            margin-top: 12px;
+            padding: 10px;
             background: #f8f9fa;
             border-radius: 4px;
             display: none;
@@ -137,15 +137,15 @@ HTML_TEMPLATE = """
             display: block;
         }
         .log-container {
-            max-height: 400px;
+            max-height: 220px;
             overflow-y: auto;
             background: #1e1e1e;
             color: #d4d4d4;
-            padding: 15px;
+            padding: 10px;
             border-radius: 4px;
             font-family: 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.6;
+            font-size: 11px;
+            line-height: 1.5;
         }
         .log-entry {
             margin-bottom: 5px;
@@ -158,7 +158,7 @@ HTML_TEMPLATE = """
             color: #d4d4d4;
         }
         .results-section {
-            margin-top: 30px;
+            margin-top: 12px;
             display: none;
         }
         .results-section.active {
@@ -167,17 +167,19 @@ HTML_TEMPLATE = """
         .results-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 15px;
+            gap: 10px;
             align-items: start;
         }
         .result-card {
             background: #f8f9fa;
-            padding: 12px;
+            padding: 8px;
             border-radius: 4px;
             border: 1px solid #dee2e6;
         }
         .result-card h3 {
             margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 14px;
             color: #495057;
         }
         .result-list {
@@ -230,12 +232,12 @@ HTML_TEMPLATE = """
             max-height: 5000px;
         }
         .search-type-section {
-            margin: 8px 0;
+            margin: 4px 0;
             padding: 0;
             background: #fff;
-            border-radius: 8px;
+            border-radius: 6px;
             border: 1px solid #e9ecef;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
             overflow: hidden;
         }
         .search-type-header {
@@ -243,7 +245,7 @@ HTML_TEMPLATE = """
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 10px 12px;
+            padding: 6px 8px;
             background: linear-gradient(180deg, #fafbfc 0%, #f1f3f5 100%);
             border-bottom: 1px solid #e9ecef;
             margin-bottom: 0;
@@ -252,7 +254,7 @@ HTML_TEMPLATE = """
             background: linear-gradient(180deg, #f1f3f5 0%, #e9ecef 100%);
         }
         .search-type-section .collapsible-content {
-            padding: 12px;
+            padding: 8px;
         }
         .search-type-header::before {
             content: '▶';
@@ -296,7 +298,7 @@ HTML_TEMPLATE = """
             justify-content: center;
         }
         .pdf-section img {
-            height: 240px;
+            height: 160px;
             width: auto;
             max-width: 100%;
             object-fit: contain;
@@ -309,49 +311,39 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1>🔍 ModelSearch Demo</h1>
-        <p>Compare <span class="number-badge">1</span> Card2Card (dense semantic) vs <span class="number-badge">2</span> Card2Tab2Card (table-based) search</p>
+        <h1 style="margin-bottom: 8px; font-size: 22px;">🔍 ModelSearch Demo</h1>
+        <p style="margin-bottom: 12px; font-size: 13px;">Compare <span class="number-badge">1</span> Card2Card vs <span class="number-badge">2</span> Card2Tab2Card</p>
         
         <div class="input-section">
-            <div style="margin-bottom: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" id="load_previous_search" onchange="toggleLoadPrevious()" style="margin-right: 8px; width: 18px; height: 18px;">
+            <div style="margin-bottom: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: flex; align-items: center; cursor: pointer; flex-wrap: wrap; gap: 6px; font-size: 13px;">
+                    <input type="checkbox" id="load_previous_search" onchange="toggleLoadPrevious()" style="margin-right: 4px; width: 16px; height: 16px;">
                     <span style="font-weight: 500;">Load Previous Search</span>
+                    <span style="color: #666; font-weight: normal;">— Check to load a previously saved search instead of running a new search.</span>
                 </label>
-                <p style="font-size: 11px; color: #666; margin-top: 5px; margin-left: 26px;">
-                    Check to load a previously saved search result instead of running a new search
-                </p>
             </div>
             
-            <div id="previous-search-section" style="display: none; margin-bottom: 20px;">
-                <div style="margin-bottom: 15px; padding: 10px; background: #e7f3ff; border-radius: 4px;">
-                    <button onclick="loadDemoExample()" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%; font-weight: 500; margin-bottom: 10px;">
-                        🎨 Load Demo Example (Template)
+            <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
+                <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <button onclick="loadDemoExample()" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500;">
+                        🎨 Load Demo Example
                     </button>
-                    <p style="font-size: 11px; color: #666; margin: 0;">
-                        Or select from saved searches below:
-                    </p>
+                    <span style="font-size: 12px; color: #666;">Or pick a saved search:</span>
                 </div>
-                
-                <div style="margin-top: 15px;">
-                    <label style="margin-bottom: 10px; display: block; font-weight: bold;">Saved Searches:</label>
-                    <div id="saved_searches_list" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 10px; background: #f8f9fa;">
-                        <div style="text-align: center; color: #666; padding: 20px;">
-                            Loading saved searches...
-                        </div>
-                    </div>
+                <div id="saved_searches_list" style="max-height: 180px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 6px; background: #f8f9fa;">
+                    <div style="text-align: center; color: #666; padding: 12px;">Loading saved searches...</div>
                 </div>
-                <p style="margin-top: 12px; font-size: 13px;">
+                <p style="margin-top: 6px; font-size: 12px;">
                     <a href="#" onclick="document.getElementById('load_previous_search').checked = false; toggleLoadPrevious(); return false;">Or run a new search</a>
                 </p>
             </div>
             
             <div id="new-search-inputs">
-            <div id="diagram-section" class="pdf-section" style="margin-bottom: 20px;">
-                <img id="search-diagram" src="/static/fig/modelsearch.png" alt="ModelSearch Overview" />
+            <div id="diagram-section" class="pdf-section" style="margin-bottom: 10px; padding: 8px;">
+                <img id="search-diagram" src="/static/fig/modelsearch.png" alt="ModelSearch Overview" style="height: 160px;" />
             </div>
             
-            <div class="form-row" style="margin-top: 15px;">
+            <div class="form-row" style="margin-top: 8px;">
                 <label for="search_mode_select">Search Mode:</label>
                 <select id="search_mode_select" class="form-control" onchange="toggleMode()">
                     <option value="query" selected>Query → ModelCard → Search</option>
@@ -384,12 +376,9 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <div class="form-row one-click-info" style="background: #f0f7ff; border: 1px solid #b8d4e8; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;">
-                <div style="font-size: 13px;">
-                    <strong>One-click runs:</strong><br>
-                    • Card2Card: Dense, Sparse, Hybrid<br>
-                    • Card2Tab2Card: single_column, keyword, multi_column, unionable, complex, correlation, imputation, augmentation, dependent_data, feature_for_ml, multi_column_collinearity, negative_example<br>
-                    <span style="color: #555;">Each method logs its elapsed time ⏱️ in the progress log when done.</span>
+            <div class="form-row one-click-info" style="background: #f0f7ff; border: 1px solid #b8d4e8; border-radius: 4px; padding: 6px 10px; margin-bottom: 6px;">
+                <div style="font-size: 11px; color: #555;">
+                    <strong>One-click:</strong> Card2Card (Dense/Sparse/Hybrid), Card2Tab2Card (single_column, keyword, multi_column, unionable, …). Time ⏱️ in log.
                 </div>
             </div>
             
@@ -416,14 +405,14 @@ HTML_TEMPLATE = """
         </div>
         
         <div id="progressSection" class="progress-section">
-            <h3>Progress Logs</h3>
+            <h3 style="margin-bottom: 6px; font-size: 14px;">Progress Logs</h3>
             <div id="logContainer" class="log-container"></div>
         </div>
         
         <div id="errorMsg" class="error" style="display: none;"></div>
         
         <div id="resultsSection" class="results-section">
-            <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; font-weight: bold;">Retrieval results</h3>
+            <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; font-weight: bold;">Retrieval results</h3>
             <div id="resultsContent"></div>
         </div>
     </div>
@@ -579,24 +568,16 @@ HTML_TEMPLATE = """
                     } else {
                         // Display each saved search as a clickable card
                         searches.forEach(search => {
-                            const label = search.query 
-                                ? `${search.timestamp_str} - ${search.query.substring(0, 50)}${search.query.length > 50 ? '...' : ''}`
-                                : `${search.timestamp_str} - ${search.model_id}`;
-                            
+                            const qShort = search.query ? (search.query.length > 45 ? search.query.substring(0, 45) + '...' : search.query) : '';
+                            const oneLine = search.query
+                                ? `${search.timestamp_str || ''} - ${qShort} | Query: ${search.query.substring(0, 40)}${search.query.length > 40 ? '...' : ''} | Top K: ${search.top_k || '-'}`
+                                : `${search.timestamp_str || ''} - ${search.model_id || ''} | Top K: ${search.top_k || '-'}`;
                             html += `
                                 <div class="saved-search-item" onclick="loadSavedSearchFolder('${search.folder_name}')" 
-                                     style="padding: 12px; margin-bottom: 8px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; transition: background 0.2s;"
+                                     style="padding: 6px 8px; margin-bottom: 4px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                                     title="${(search.query || search.model_id || '').substring(0, 200)}"
                                      onmouseover="this.style.background='#e7f3ff'" 
-                                     onmouseout="this.style.background='white'">
-                                    <div style="font-weight: 500; color: #333; margin-bottom: 4px;">${label}</div>
-                                    <div style="font-size: 11px; color: #666;">
-                                        ${search.query ? `Query: ${search.query.substring(0, 60)}${search.query.length > 60 ? '...' : ''}` : `Model: ${search.model_id}`}
-                                        ${search.top_k ? ` | Top K: ${search.top_k}` : ''}
-                                    </div>
-                                    <div style="font-size: 10px; color: #999; margin-top: 4px;">
-                                        ${search.timestamp_str || search.timestamp || ''}
-                                    </div>
-                                </div>
+                                     onmouseout="this.style.background='white'">${oneLine}</div>
                             `;
                         });
                     }
@@ -944,7 +925,7 @@ HTML_TEMPLATE = """
                 ${seedModelLine}
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
-                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; color: #495057;">
+                        <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">
                             <span class="number-badge">1</span> Card2Card Results
                         </h3>
                         ${retrievalModes.map((modeInfo, idx) => {
@@ -993,8 +974,9 @@ HTML_TEMPLATE = """
                             `;
                         }).join('')}
                     </div>
-                    <div class="result-card" style="min-width: 0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-radius: 8px;">
-                        <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 17px; font-weight: 600; color: #343a40;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
+                    <div class="result-card" style="min-width: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
+                        <h3 style="margin-top: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #343a40;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
+                        <p style="margin: 0 0 6px 0; font-size: 11px; color: #666;">Tables are presented under each item.</p>
                         ${(() => {
                             // Filter: show keyword, unionable, and joinable types (single_column and multi_column are joinable)
                             const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
@@ -1177,55 +1159,53 @@ HTML_TEMPLATE = """
                 </div>
             ` : '';
             
-            // Single merged Table Integration section: one set of settings, one button runs both in parallel
-            const integrationCardStyle = 'padding: 24px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 10px; border: 1px solid #dee2e6; box-shadow: 0 4px 12px rgba(0,0,0,0.06); font-family: inherit; font-size: 14px; color: #212529; min-width: 0;';
-            const integrationTitleStyle = 'margin-top: 0; font-size: 18px; font-weight: 600; color: #1a1d21; letter-spacing: -0.02em;';
-            const integrationDescStyle = 'font-size: 14px; color: #5a6268; margin-bottom: 18px; line-height: 1.5;';
-            const topKLabelStyle = 'display: block; margin-bottom: 4px; font-weight: 500; color: #212529;';
+            // Table Integration: one row settings, one button "Integrated", results stacked (Model Search top, Table Search bottom)
+            const integrationCardStyle = 'padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 8px; border: 1px solid #dee2e6; font-size: 13px; color: #212529; min-width: 0;';
+            const integrationTitleStyle = 'margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;';
+            const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
             html += `
-                <div class="integration-section" style="${integrationCardStyle}; margin-top: 30px;">
+                <div class="integration-section" style="${integrationCardStyle}; margin-top: 16px;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
-                    <p style="${integrationDescStyle}">Run both: <span class="number-badge">1</span> Card2Card (model search) + <span class="number-badge">2</span> Card2Tab2Card (table search). Shared settings below; one button runs both in parallel. Table search returns <strong>all models</strong> that contain the retrieved tables (no model cap).</p>
-                    <div style="margin-bottom: 12px;">
-                        <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px;">
-                            <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" style="width: 140px; box-sizing: border-box;">
-                                <option value="union">Union</option>
-                                <option value="intersection">Intersection</option>
-                                <option value="alite">ALITE</option>
-                                <option value="outer_join">Outer Join</option>
-                            </select></div>
-                            <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 140px; box-sizing: border-box;"></div>
-                            <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 140px; box-sizing: border-box;"></div>
-                        </div>
-                        <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
-                            <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Model Search option:</label><select id="integration_model_search_mode" class="form-control" style="width: 140px; box-sizing: border-box;">
-                                <option value="dense">Dense</option>
-                                <option value="sparse">Sparse</option>
-                                <option value="hybrid">Hybrid</option>
-                            </select></div>
-                            <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Table Search option:</label><select id="integration_search_type" class="form-control" style="width: 140px; box-sizing: border-box;">
-                                <option value="single_column">Single Column</option>
-                                <option value="keyword">Keyword</option>
-                                <option value="multi_column">Multi Column</option>
-                                <option value="unionable">Unionable</option>
-                                <option value="complex">Complex</option>
-                                <option value="correlation">Correlation</option>
-                                <option value="imputation">Imputation</option>
-                                <option value="augmentation">Augmentation</option>
-                                <option value="dependent_data">Dependent Data</option>
-                                <option value="feature_for_ml">Feature for ML</option>
-                                <option value="multi_column_collinearity">Multi-Column Collinearity</option>
-                                <option value="negative_example">Negative Example</option>
-                            </select></div>
-                        </div>
+                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 8px;">Run <span class="number-badge">1</span> Card2Card + <span class="number-badge">2</span> Card2Tab2Card with shared settings; one button runs both (Model Search then Table Search).</p>
+                    <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
+                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                            <option value="union">Union</option>
+                            <option value="intersection">Intersection</option>
+                            <option value="alite">ALITE</option>
+                            <option value="outer_join">Outer Join</option>
+                        </select></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;"></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;"></div>
+                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Model Search:</label><select id="integration_model_search_mode" class="form-control" style="width: 90px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                            <option value="dense">Dense</option>
+                            <option value="sparse">Sparse</option>
+                            <option value="hybrid">Hybrid</option>
+                        </select></div>
+                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Table Search:</label><select id="integration_search_type" class="form-control" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                            <option value="single_column">Single Column</option>
+                            <option value="keyword">Keyword</option>
+                            <option value="multi_column">Multi Column</option>
+                            <option value="unionable">Unionable</option>
+                            <option value="complex">Complex</option>
+                            <option value="correlation">Correlation</option>
+                            <option value="imputation">Imputation</option>
+                            <option value="augmentation">Augmentation</option>
+                            <option value="dependent_data">Dependent Data</option>
+                            <option value="feature_for_ml">Feature for ML</option>
+                            <option value="multi_column_collinearity">Multi-Column Collinearity</option>
+                            <option value="negative_example">Negative Example</option>
+                        </select></div>
+                        <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
                     </div>
-                    <div style="margin-top: 12px;">
-                        <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Run Both Integrations</button>
-                    </div>
-                    <div id="integrationResultsContainer" style="margin-top: 20px; display: none;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                            <div><h4 style="margin: 0 0 8px 0; font-size: 14px; color: #495057;">From Model Search</h4><div id="integrationModelSearchResults"></div></div>
-                            <div><h4 style="margin: 0 0 8px 0; font-size: 14px; color: #495057;">From Table Search</h4><div id="integrationResults"></div></div>
+                    <div id="integrationResultsContainer" style="margin-top: 12px; display: none;">
+                        <div style="margin-bottom: 10px;">
+                            <h4 style="margin: 0 0 4px 0; font-size: 13px; color: #495057;">From Model Search</h4>
+                            <div id="integrationModelSearchResults"></div>
+                        </div>
+                        <div>
+                            <h4 style="margin: 0 0 4px 0; font-size: 13px; color: #495057;">From Table Search</h4>
+                            <p style="margin: 0 0 4px 0; font-size: 11px; color: #666;">Tables are presented under each item.</p>
+                            <div id="integrationResults"></div>
                         </div>
                     </div>
                 </div>
@@ -1233,7 +1213,7 @@ HTML_TEMPLATE = """
             
             // Add Evaluation Section - comparison merged into same card, then evaluation
             html += `
-                <div class="evaluation-section" style="margin-top: 30px; padding: 20px; background: #fff3cd; border-radius: 8px; border: 2px solid #ffc107; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <div class="evaluation-section" style="margin-top: 16px; padding: 12px; background: #fff3cd; border-radius: 6px; border: 2px solid #ffc107;">
                     ${comparisonHtml}
                     <h3 style="margin-top: 0; color: #856404; font-size: 16px;">📊 Evaluation on Integrated Tables</h3>
                     <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
@@ -1273,7 +1253,7 @@ HTML_TEMPLATE = """
                     </div>
                     
                     <!-- QA Section: fake choice + one button; after click show integrated tables + answers (two columns) -->
-                    <div class="qa-section" style="margin-top: 30px; padding: 20px; background: #d1ecf1; border-radius: 8px; border: 2px solid #17a2b8; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <div class="qa-section" style="margin-top: 16px; padding: 12px; background: #d1ecf1; border-radius: 6px; border: 2px solid #17a2b8;">
                         <h3 style="margin-top: 0; color: #0c5460;">💬 Question Answering (QA)</h3>
                         <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
                             QA on both integrated tables. One button generates two answers for comparison.
@@ -1495,24 +1475,17 @@ HTML_TEMPLATE = """
             if (!btn || !container || !leftDiv || !rightDiv) return;
             
             btn.disabled = true;
-            btn.textContent = '⏳ Running both...';
+            btn.textContent = '⏳ Integrating...';
             container.style.display = 'block';
-            leftDiv.innerHTML = '<div style="padding: 12px; background: #f8f9fa; border-radius: 4px;">⏳ Model Search integration...</div>';
-            rightDiv.innerHTML = '<div style="padding: 12px; background: #f8f9fa; border-radius: 4px;">⏳ Table Search integration...</div>';
-            
-            const fetchModelSearch = fetch('{{BACKEND_URL}}/api/integrate-model-search', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels, card2card_retrieval_mode: modelSearchMode })
-            }).then(r => r.json());
-            const fetchTableSearch = fetch('{{BACKEND_URL}}/api/integrate', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels })
-            }).then(r => r.json());
+            leftDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Model Search integration...</div>';
+            rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">Waiting...</div>';
             
             try {
-                const [modelRes, tableRes] = await Promise.all([fetchModelSearch, fetchTableSearch]);
+                const modelRes = await fetch('{{BACKEND_URL}}/api/integrate-model-search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels, card2card_retrieval_mode: modelSearchMode })
+                }).then(r => r.json());
                 
                 if (modelRes.status === 'success') {
                     const stats = modelRes.stats || {};
@@ -1523,24 +1496,31 @@ HTML_TEMPLATE = """
                     }
                     leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                 } else {
-                    leftDiv.innerHTML = `<div style="padding: 15px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">❌ ${modelRes.message || 'Integration failed'}</div>`;
+                    leftDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${modelRes.message || 'Integration failed'}</div>`;
                 }
+                initTablePanZoom(leftDiv);
+                
+                rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Table Search integration...</div>';
+                const tableRes = await fetch('{{BACKEND_URL}}/api/integrate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels })
+                }).then(r => r.json());
                 
                 if (tableRes.status === 'success') {
                     const stats = tableRes.stats || {};
                     const table = tableRes.integrated_table;
                     rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                 } else {
-                    rightDiv.innerHTML = `<div style="padding: 15px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">❌ ${tableRes.message || 'Integration failed'}</div>`;
+                    rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>`;
                 }
-                initTablePanZoom(leftDiv);
                 initTablePanZoom(rightDiv);
             } catch (err) {
-                leftDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${err.message}</div>`;
-                rightDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${err.message}</div>`;
+                leftDiv.innerHTML = `<div style="padding: 10px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${err.message}</div>`;
+                rightDiv.innerHTML = `<div style="padding: 10px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${err.message}</div>`;
             } finally {
                 btn.disabled = false;
-                btn.textContent = '🔗 Run Both Integrations (Model Search + Table Search)';
+                btn.textContent = 'Integrated';
             }
         }
         
