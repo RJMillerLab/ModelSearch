@@ -306,6 +306,9 @@ HTML_TEMPLATE = """
         <h1>🔍 ModelSearch Demo</h1>
         <p>Compare <span class="number-badge">1</span> Card2Card (dense semantic) vs <span class="number-badge">2</span> Card2Tab2Card (table-based) search</p>
         
+        <div id="backendUnreachableBanner" style="display: none; margin-bottom: 15px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; color: #856404;">
+            <strong>⚠️ Backend unreachable (port 5002).</strong> "Failed to fetch" usually means the backend is not running on the server. With SSH tunnel: on the <strong>server</strong> run <code>python -m src.demo.backend</code> in one terminal, then <code>python -m src.demo.frontend</code> in another. Keep both running and ensure your SSH has <code>-L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002</code>.
+        </div>
         <div class="input-section">
             <div style="margin-bottom: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
                 <label style="display: flex; align-items: center; cursor: pointer;">
@@ -335,6 +338,9 @@ HTML_TEMPLATE = """
                         </div>
                     </div>
                 </div>
+                <p style="margin-top: 12px; font-size: 13px;">
+                    <a href="#" onclick="document.getElementById('load_previous_search').checked = false; toggleLoadPrevious(); return false;">Or run a new search</a>
+                </p>
             </div>
             
             <div id="new-search-inputs">
@@ -447,8 +453,25 @@ HTML_TEMPLATE = """
             }
         }
         
+        async function checkBackendHealth() {
+            const banner = document.getElementById('backendUnreachableBanner');
+            if (!banner) return;
+            try {
+                const response = await fetch('{{BACKEND_URL}}/api/health');
+                const data = response.ok ? await response.json() : null;
+                if (data && data.status === 'ok') {
+                    banner.style.display = 'none';
+                    return;
+                }
+            } catch (e) {
+                console.warn('Backend health check failed:', e);
+            }
+            banner.style.display = 'block';
+        }
+        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', function() {
+            checkBackendHealth();
             // Ensure "Load Previous Search" is unchecked by default
             const loadPreviousCheckbox = document.getElementById('load_previous_search');
             if (loadPreviousCheckbox) {
@@ -699,8 +722,8 @@ HTML_TEMPLATE = """
             const mode = (document.getElementById('search_mode_select') || {}).value || 'query';
             const query = document.getElementById('query').value.trim();
             const modelId = document.getElementById('model_id').value.trim();
-            const topK = parseInt(document.getElementById('top_k').value);
-            const tableSearchK = parseInt(document.getElementById('table_search_k').value);
+            const topK = parseInt(document.getElementById('top_k').value, 10) || 50;
+            const tableSearchK = parseInt(document.getElementById('table_search_k').value, 10) || 10;
             // Table retrieval: always run search (no load-from-JSON option)
             const tab2tabMode = 'search';
             // One-click: always run all; primary display uses dense
@@ -857,6 +880,15 @@ HTML_TEMPLATE = """
         
         function displayResults(results) {
             const container = document.getElementById('resultsContent');
+            // Pipeline error (e.g. query2modelcard failed or no model from query) - shown at top of results
+            const errorBlock = results.error
+                ? `<div style="padding: 12px; margin-bottom: 15px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px;"><strong>❌ Pipeline error:</strong> ${results.error}</div>`
+                : '';
+            // Seed model = from query step or user input (modelid mode). This is the ID used for this search, not a fixed placeholder.
+            const seedModelId = results.model_id || null;
+            const seedModelLine = seedModelId
+                ? `<p style="margin: 0 0 12px 0; font-size: 14px;"><strong>Seed model (from query):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a></p>`
+                : (results.error ? '' : `<p style="margin: 0 0 12px 0; font-size: 14px; color: #856404; background: #fff3cd; padding: 8px; border-radius: 4px;">⚠️ Model ID missing (something went wrong)</p>`);
             
             // Helper function to format model display (handle both string and object formats)
             function formatModel(model) {
@@ -885,6 +917,8 @@ HTML_TEMPLATE = """
             const currentMode = results.card2card_retrieval_mode || 'dense';
             
             let html = `
+                ${errorBlock}
+                ${seedModelLine}
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 15px; font-size: 16px;">

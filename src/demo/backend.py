@@ -27,6 +27,8 @@ DEFAULT_EMB_NPZ = "data/card2card_embeddings.npz"
 DEFAULT_FAISS_INDEX = "data/card2card.faiss"
 DEFAULT_SPARSE_INDEX = "data/card2card_sparse_index"
 DEFAULT_DB_PATH = "data/modellake.db"
+# Card2Tab2Card needs this to map model_id -> tables (default from card2tab2card CLI)
+DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
 
 app = Flask(__name__)
 CORS(app)
@@ -104,6 +106,40 @@ def run_search_pipeline(
     os.makedirs(job_dir, exist_ok=True)
     start_time = time.time()
 
+    def _set_pipeline_error(msg: str, mid=None):
+        logger.set_status("error")
+        logger.set_results({
+            "error": msg,
+            "model_id": mid,
+            "card2card_results": [],
+            "card2tab2card_results": {},
+        })
+
+    try:
+        _run_pipeline_body(
+            logger, job_id, job_dir, start_time,
+            query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode,
+        )
+    except Exception as e:
+        logger.log(f"Pipeline crashed: {e}")
+        _set_pipeline_error(f"Pipeline error: {e}", model_id)
+        import traceback
+        logger.log(traceback.format_exc())
+
+
+def _run_pipeline_body(
+    logger: "JobLogger",
+    job_id: str,
+    job_dir: str,
+    start_time: float,
+    query: Optional[str],
+    top_k: int,
+    model_id: Optional[str],
+    table_search_k: Optional[int],
+    tab2tab_mode: str,
+    tab2tab_json: Optional[str],
+    card2card_retrieval_mode: str,
+):
     logger.log("Starting search pipeline (CLI)...")
     logger.log("Mode: Query → ModelCard → Search" if query else "Mode: Model ID → Search")
     if query:
@@ -112,9 +148,10 @@ def run_search_pipeline(
         logger.log(f"Model ID: {model_id}")
     logger.set_status("running")
 
-    # Resolve model_id
+    # Resolve model_id (query mode: from FAISS retrieval only; no default/hardcoded id)
     if query:
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
+        logger.log(f"query2modelcard input query: {query!r}")
         q2m_out = os.path.join(job_dir, "query2modelcard.json")
         cmd = [
             sys.executable, "-m", "src.search.query2modelcard",
@@ -128,22 +165,71 @@ def run_search_pipeline(
         if rc != 0:
             logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
             logger.set_status("error")
-            logger.set_results({"error": f"query2modelcard failed: {err or out}", "card2card_results": [], "card2tab2card_results": {}})
+            logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
             return
         data = _read_json(q2m_out)
         if not data or "results" not in data or not data["results"]:
             logger.log("query2modelcard returned no results")
             logger.set_status("error")
-            logger.set_results({"error": "No model from query", "card2card_results": [], "card2tab2card_results": {}})
+            logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
             return
-        model_id = data["results"][0]
-        logger.log(f"Extracted model: {model_id}")
+        first = data["results"][0]
+        model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
+        if not model_id:
+            logger.log("query2modelcard returned empty model_id")
+            logger.set_status("error")
+            logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+            return
+        # Confirm: id comes from query2modelcard JSON (FAISS top-1), not a default
+        stored_query = data.get("query", "")
+        logger.log(f"Extracted model: {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
     else:
         if not model_id:
             logger.log("model_id is required in modelid mode")
             logger.set_status("error")
+            logger.set_results({"error": "Model ID is required (empty input)", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
             return
         logger.log(f"Using model_id: {model_id}")
+        # User-provided ID must exist in our dataset; otherwise fail before any downstream
+        check_cmd = [
+            sys.executable, os.path.join(REPO_ROOT, "scripts", "check_model_in_index.py"),
+            "--model_id", model_id,
+            "--emb_npz", DEFAULT_EMB_NPZ,
+        ]
+        rc, out, err = _run_cmd(check_cmd, REPO_ROOT, timeout=60)
+        if rc != 0:
+            msg = (err or out or "Model ID not in dataset").strip()
+            if "not in dataset" not in msg and "not in " not in msg:
+                msg = f"Model ID '{model_id}' not found in dataset (not in card2card index). Cannot run downstream."
+            logger.log(msg)
+            logger.set_status("error")
+            logger.set_results({"error": msg, "model_id": model_id, "card2card_results": [], "card2tab2card_results": {}})
+            return
+        logger.log("Model ID found in dataset, proceeding.")
+
+    # Table search requires these files; fail early with clear message if missing
+    rel_path = os.path.join(REPO_ROOT, DEFAULT_RELATIONSHIP_PARQUET)
+    db_path_abs = os.path.join(REPO_ROOT, DEFAULT_DB_PATH)
+    if not os.path.isfile(rel_path):
+        logger.log(f"Table search unavailable: relationship_parquet not found at {rel_path}")
+        logger.set_status("error")
+        logger.set_results({
+            "error": f"Table search failed: relationship_parquet not found at {DEFAULT_RELATIONSHIP_PARQUET}. Please add the file or symlink data_citationlake.",
+            "model_id": model_id,
+            "card2card_results": [],
+            "card2tab2card_results": {},
+        })
+        return
+    if not os.path.isfile(db_path_abs):
+        logger.log(f"Table search unavailable: db not found at {db_path_abs}")
+        logger.set_status("error")
+        logger.set_results({
+            "error": f"Table search failed: db not found at {DEFAULT_DB_PATH}. Please build or copy modellake.db.",
+            "model_id": model_id,
+            "card2card_results": [],
+            "card2tab2card_results": {},
+        })
+        return
 
     k_table = table_search_k if table_search_k is not None else min(max(int(top_k * 1.5), 20), 20)
 
@@ -178,6 +264,8 @@ def run_search_pipeline(
             "--search_type", st,
             "--k", str(k_table),
             "--db_path", DEFAULT_DB_PATH,
+            "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
+            "--no_citationlake",
             "--output_json", out_path,
         ]
         t0 = time.time()
@@ -209,8 +297,9 @@ def run_search_pipeline(
                 card2card_all[mode] = {"error": err or out}
             else:
                 data = _read_json(out_path)
-                if data is not None and "results" in data:
-                    card2card_all[mode] = data["results"]
+                if data is not None:
+                    # CLI writes "neighbors" (list of model_id); legacy used "results"
+                    card2card_all[mode] = data.get("neighbors", data.get("results", []))
                 else:
                     card2card_all[mode] = []
         else:
@@ -222,9 +311,22 @@ def run_search_pipeline(
             else:
                 data = _read_json(out_path)
                 if data is not None:
-                    card2tab2card_all[st] = data.get("model_ids", data) if isinstance(data.get("model_ids"), list) else data
+                    # CLI writes {"model_ids": [...], "query_tables": [...], "intermediate": {...}}
+                    mid = data.get("model_ids") if isinstance(data, dict) else None
+                    lst = mid if isinstance(mid, list) else (data if isinstance(data, list) else [])
+                    card2tab2card_all[st] = lst
+                    qty = len(data.get("query_tables", [])) if isinstance(data, dict) else 0
+                    logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
+                    if len(lst) == 0 and qty == 0:
+                        logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {DEFAULT_RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
+                        cli_out = (err or out or "").strip()
+                        if cli_out and ("No tables" in cli_out or "Warning" in cli_out):
+                            for line in cli_out.split("\n")[-3:]:
+                                if line.strip():
+                                    logger.log(f"[Card2Tab2Card-{st}] CLI: {line.strip()}")
                 else:
                     card2tab2card_all[st] = []
+                    logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
     # Fill missing card2tab2card types with empty (no scan)
     for st in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation",
@@ -289,7 +391,10 @@ def search():
         return jsonify({"status": "completed", "job_id": job_id, "results": saved})
 
     mode = data.get("mode", "query")
-    top_k = int(data.get("top_k", 20))
+    try:
+        top_k = int(data.get("top_k", 20) or 20)
+    except (TypeError, ValueError):
+        top_k = 20
     table_search_k = data.get("table_search_k")
     tab2tab_mode = data.get("tab2tab_mode", "search")
     tab2tab_json = data.get("tab2tab_json")
@@ -335,6 +440,8 @@ def get_results(job_id: str):
     if job_id not in jobs:
         return jsonify({"status": "error", "message": "Job not found"}), 404
     logger = jobs[job_id]
+    if logger.status == "error" and logger.results is not None:
+        return jsonify({"status": "success", "job_id": job_id, "results": logger.results})
     if logger.status != "completed":
         return jsonify({"status": logger.status, "message": "Job not completed yet"}), 202
     return jsonify({"status": "success", "job_id": job_id, "results": logger.results})
