@@ -363,10 +363,11 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="form-row" id="require-seed-has-tables-row" style="margin-top: 8px;">
                     <label for="require_seed_has_tables">Seed for Table Search:</label>
-                    <select id="require_seed_has_tables" class="form-control" style="width: 200px; flex: none;">
+                    <select id="require_seed_has_tables" class="form-control" style="width: 200px; flex: none;" title="Only applies in Query mode: pick which seed model to use for Table Search.">
                         <option value="0">Use top-1 (Table Search may be empty)</option>
-                        <option value="1">Narrow down: first model with tables</option>
+                        <option value="1">Narrow down: first of top-20 with tables</option>
                     </select>
+                    <span style="font-size: 11px; color: #666; margin-left: 8px;">Only in Query mode. If “Narrow down” and none of top-20 have tables → Table Search skipped.</span>
                 </div>
             </div>
             
@@ -923,14 +924,14 @@ HTML_TEMPLATE = """
                             
                             return `
                                 <div class="search-type-section" style="margin-bottom: 15px; ${isCurrentMode ? 'border: 2px solid #007bff;' : ''}">
-                                    <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)" style="${isCurrentMode ? 'background: #e7f3ff;' : ''}">
+                                    <div class="search-type-header ${isCurrentMode ? 'expanded' : ''}" onclick="toggleSearchType('${sectionId}', this)" style="${isCurrentMode ? 'background: #e7f3ff;' : ''}">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${modeInfo.label}
                                             ${isCurrentMode ? '<span style="font-size: 11px; color: #007bff; font-weight: normal;">(Selected)</span>' : ''}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">(${isError ? 'Error' : resultList.length + ' models'})</span>
                                         </h4>
                                     </div>
-                                    <div class="collapsible-content" id="${sectionId}" style="${isCurrentMode ? 'max-height: 5000px;' : ''}">
+                                    <div class="collapsible-content ${isCurrentMode ? 'expanded' : ''}" id="${sectionId}">
                                         ${isError ? `
                                             <div style="padding: 10px; color: #dc3545; background: #f8d7da; border-radius: 4px; margin: 10px 0;">
                                                 ❌ Error: ${modeResults.error || 'Unknown error'}

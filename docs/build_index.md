@@ -11,6 +11,7 @@
 | **Preprocessing (run once)** | **Build modelcard index** — encode full corpus → `.npz` + `.faiss`; optional `.jsonl`. | Before query2modelcard / card2card. |
 | | **Build sparse index** — Pyserini Lucene BM25 → `data/card2card_sparse_index` (1.1b). | Train once; inference then only loads index. |
 | | **Blend + data** — clone/symlink Blend_internal and data dirs. | Once per env. |
+| | **Valid model IDs txt** — `scripts/build_valid_model_ids_txt.py` → `data/valid_model_ids_with_tables.txt`. | Optional; before demo “Narrow down” (seed with tables). |
 | | **DuckDB table index** — `create_index_duckdb` → `data/modellake.db` with `modellake_index`. | Before card2tab2card, tab2tab, tab2tab_by_type. |
 | | **Table classification (batch)** — `classification --mode batch` → `data/table_classifications.json`. Uses **tab2know inference** per table (tab2know’s own “training” is in TabKnow repo; we only run its pretrained type/column models here). | Once; required only for **by_type** flows (card2tab2card by_type, tab2tab_by_type). |
 | | **Baseline2** — mapping scripts + pyserini Lucene index (`data/tmp/index`). | Before baseline2 search. |
@@ -54,6 +55,16 @@ This copies the JSONL into `corpus_dir` and runs `pyserini.index.lucene` (JsonCo
 git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
 # ln -s /path/to/ModelTables/data data_citationlake
 ```
+
+## 1.2b Valid model IDs for Table Search (optional; for demo “Narrow down”)
+
+Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
+
+```bash
+python scripts/build_valid_model_ids_txt.py --parquet data_citationlake/processed/modelcard_step3_dedup.parquet --output data/valid_model_ids_with_tables.txt
+```
+
+Output: `data/valid_model_ids_with_tables.txt` (one model_id per line). Demo backend “Narrow down” reads this file only; it does not read parquet at request time.
 
 ## 1.3 DuckDB table index
 

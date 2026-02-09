@@ -87,24 +87,20 @@ def _read_json(path: str) -> Optional[Dict]:
         return json.load(f)
 
 
-def _model_has_tables(parquet_path: str, model_id: str) -> bool:
-    """Return True if model_id has at least one row with csv_basename in relationship parquet."""
-    if not os.path.isfile(parquet_path) or not model_id:
-        return False
+# Valid model IDs (have tables): built by scripts/build_valid_model_ids_txt.py (Part 1); inference only loads
+VALID_MODEL_IDS_TXT = "data/valid_model_ids_with_tables.txt"
+
+
+def _load_valid_model_ids_with_tables(txt_path: Optional[str] = None) -> set:
+    """Load set of model_id that have tables. Txt is produced by scripts/build_valid_model_ids_txt.py (Part 1)."""
+    path = txt_path or os.path.join(REPO_ROOT, VALID_MODEL_IDS_TXT)
+    if not os.path.isfile(path):
+        return set()
     try:
-        import pandas as pd
-        df = pd.read_parquet(parquet_path, columns=None)
-        # Column may be modelId or model_id
-        id_col = "modelId" if "modelId" in df.columns else ("model_id" if "model_id" in df.columns else None)
-        base_col = "csv_basename" if "csv_basename" in df.columns else None
-        if id_col is None or base_col is None:
-            return False
-        subset = df[df[id_col].astype(str).str.strip() == str(model_id).strip()]
-        if subset.empty:
-            return False
-        return subset[base_col].notna().any() and (subset[base_col].astype(str).str.strip() != "").any()
+        with open(path, "r", encoding="utf-8") as f:
+            return {line.strip() for line in f if line.strip()}
     except Exception:
-        return False
+        return set()
 
 
 def run_search_pipeline(
@@ -177,7 +173,10 @@ def _run_pipeline_body(
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
         logger.log(f"query2modelcard input query: {query!r}")
         q2m_out = os.path.join(job_dir, "query2modelcard.json")
-        q2m_top_k = 20 if require_seed_has_tables else 1  # narrow down: get more candidates to pick first with tables
+        # Narrow down: fetch 10× user top_k (cap 500), then postprocess to pick first with tables
+        q2m_top_k = min(500, 10 * top_k) if require_seed_has_tables else 1
+        if require_seed_has_tables:
+            logger.log(f"Require seed has tables: query2modelcard top_k={q2m_top_k} (10× of {top_k}), then pick first with tables.")
         # Run as script to avoid importing whole src.search (card2card, FAISS, etc.) and RuntimeWarning/segfault
         q2m_script = os.path.join(REPO_ROOT, "src", "search", "query2modelcard.py")
         cmd = [
@@ -204,25 +203,27 @@ def _run_pipeline_body(
         stored_query = data.get("query", "")
 
         if require_seed_has_tables:
-            rel_path = os.path.join(REPO_ROOT, DEFAULT_RELATIONSHIP_PARQUET)
+            # Valid = model_id that have tables (built by scripts/build_valid_model_ids_txt.py; inference only loads)
+            valid_model_ids = _load_valid_model_ids_with_tables()
+            logger.log(f"Narrow down: valid model IDs (have tables) = {len(valid_model_ids)} (from {VALID_MODEL_IDS_TXT})")
             chosen = None
             for i, r in enumerate(results_list):
                 mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
                 if not mid:
                     continue
-                if _model_has_tables(rel_path, mid):
-                    chosen = mid
-                    logger.log(f"Narrow down: first model with tables in parquet is #{i+1}: {chosen}")
+                if str(mid).strip() in valid_model_ids:
+                    chosen = str(mid).strip()
+                    logger.log(f"Narrow down: first result in valid set is #{i+1}: {chosen}")
                     break
             if chosen is not None:
                 model_id = chosen
                 logger.log(f"Extracted model (with tables): {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
             else:
-                # Cross: none of top-K have tables; use first for Card2Card only, skip Table Search
+                # Cross: none of top-K are in valid set; use raw top-1 for Card2Card only, skip Table Search
                 first = results_list[0]
                 model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
                 seed_no_tables_skip_table_search = True
-                logger.log(f"Require seed has tables: none of top-{len(results_list)} models have tables in dataset. Using top-1 for Card2Card only; Table Search skipped.")
+                logger.log(f"Require seed has tables: none of top-{len(results_list)} in valid set (have tables). Using top-1 for Card2Card only; Table Search skipped.")
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
         else:
             first = results_list[0]
