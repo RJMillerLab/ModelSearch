@@ -306,9 +306,6 @@ HTML_TEMPLATE = """
         <h1>🔍 ModelSearch Demo</h1>
         <p>Compare <span class="number-badge">1</span> Card2Card (dense semantic) vs <span class="number-badge">2</span> Card2Tab2Card (table-based) search</p>
         
-        <div id="backendUnreachableBanner" style="display: none; margin-bottom: 15px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; color: #856404;">
-            <strong>⚠️ Backend unreachable (port 5002).</strong> "Failed to fetch" usually means the backend is not running on the server. With SSH tunnel: on the <strong>server</strong> run <code>python -m src.demo.backend</code> in one terminal, then <code>python -m src.demo.frontend</code> in another. Keep both running and ensure your SSH has <code>-L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002</code>.
-        </div>
         <div class="input-section">
             <div style="margin-bottom: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
                 <label style="display: flex; align-items: center; cursor: pointer;">
@@ -453,25 +450,8 @@ HTML_TEMPLATE = """
             }
         }
         
-        async function checkBackendHealth() {
-            const banner = document.getElementById('backendUnreachableBanner');
-            if (!banner) return;
-            try {
-                const response = await fetch('{{BACKEND_URL}}/api/health');
-                const data = response.ok ? await response.json() : null;
-                if (data && data.status === 'ok') {
-                    banner.style.display = 'none';
-                    return;
-                }
-            } catch (e) {
-                console.warn('Backend health check failed:', e);
-            }
-            banner.style.display = 'block';
-        }
-        
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', function() {
-            checkBackendHealth();
             // Ensure "Load Previous Search" is unchecked by default
             const loadPreviousCheckbox = document.getElementById('load_previous_search');
             if (loadPreviousCheckbox) {
@@ -1799,10 +1779,10 @@ HTML_TEMPLATE = """
                 // Handle "Show more" / "Hide more" text if present
                 const currentText = toggleElement.textContent;
                 if (currentText.includes('Show')) {
-                    const count = currentText.match(/Show (\d+)/)[1];
+                    const count = currentText.match(/Show (\\d+)/)[1];
                     toggleElement.textContent = `Hide ${count} more`;
                 } else if (currentText.includes('Hide')) {
-                    const count = currentText.match(/Hide (\d+)/)[1];
+                    const count = currentText.match(/Hide (\\d+)/)[1];
                     toggleElement.textContent = `Show ${count} more`;
                 }
             }
