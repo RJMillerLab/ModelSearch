@@ -645,10 +645,24 @@ HTML_TEMPLATE = """
             const container = document.getElementById('integrationResultsContainer');
             const leftDiv = document.getElementById('integrationModelSearchResults');
             const rightDiv = document.getElementById('integrationResults');
+            if (!container || !leftDiv || !rightDiv) return;
+            if (data.integration_runs && data.integration_runs.length > 0) {
+                window.__integrationRuns = data.integration_runs;
+                window.__selectedIntegrationKey = data.integration_runs[0].key;
+                renderIntegrationTabs();
+                showIntegrationRunContent(data.integration_runs[0]);
+                const first = data.integration_runs[0];
+                setIntegrationDropdownsFromSaved(first.model_result, first.table_result);
+                return;
+            }
             const hasModel = data.integration_model_search && data.integration_model_search.status === 'success' && data.integration_model_search.integrated_table;
             const hasTable = data.integration_table_search && data.integration_table_search.status === 'success' && data.integration_table_search.integrated_table;
-            if ((hasModel || hasTable) && container && leftDiv && rightDiv) {
+            if (hasModel || hasTable) {
                 container.style.display = 'block';
+                window.__integrationRuns = [];
+                window.__selectedIntegrationKey = null;
+                const bar = document.getElementById('integrationTabsBar');
+                if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
                 if (hasModel) {
                     const modelRes = data.integration_model_search;
                     const stats = modelRes.stats || {};
@@ -1265,6 +1279,7 @@ HTML_TEMPLATE = """
                         </select></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
                     </div>
+                    <div id="integrationTabsBar" style="margin-top: 8px; display: none; flex-wrap: wrap; gap: 6px;"></div>
                     <div id="integrationResultsContainer" style="margin-top: 12px; display: none;">
                         <div style="margin-bottom: 10px;">
                             <h4 style="margin: 0 0 4px 0; font-size: 13px; color: #495057;">From Model Search</h4>
@@ -1329,11 +1344,75 @@ HTML_TEMPLATE = """
             `;
             
             container.innerHTML = html;
+            window.__integrationRuns = [];
+            window.__selectedIntegrationKey = null;
             document.getElementById('resultsSection').classList.add('active');
         }
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         window.__integrationTables = window.__integrationTables || {};
+        window.__integrationRuns = window.__integrationRuns || [];
+        window.__selectedIntegrationKey = window.__selectedIntegrationKey || null;
+        
+        function getIntegrationRunKey(integrationType, searchType, card2cardMode) {
+            const parts = [(integrationType || 'union'), (searchType || 'single_column'), (card2cardMode || 'dense')];
+            return parts.map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_') || 'run';
+        }
+        
+        function renderIntegrationTabs() {
+            const bar = document.getElementById('integrationTabsBar');
+            if (!bar) return;
+            const runs = window.__integrationRuns || [];
+            if (runs.length === 0) {
+                bar.style.display = 'none';
+                bar.innerHTML = '';
+                return;
+            }
+            bar.style.display = 'flex';
+            bar.innerHTML = runs.map(run => {
+                const label = [run.integration_type || 'union', run.search_type || 'single_column', run.card2card_retrieval_mode || 'dense'].join(' / ');
+                const active = run.key === window.__selectedIntegrationKey;
+                return `<button type="button" class="integration-tab-btn" data-key="${run.key}" style="padding: 6px 12px; font-size: 12px; border-radius: 6px; border: 1px solid ${active ? '#007bff' : '#dee2e6'}; background: ${active ? '#e7f3ff' : '#fff'}; color: ${active ? '#007bff' : '#495057'}; cursor: pointer;">${label}</button>`;
+            }).join('');
+            bar.querySelectorAll('.integration-tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const key = btn.getAttribute('data-key');
+                    const run = runs.find(r => r.key === key);
+                    if (run) {
+                        window.__selectedIntegrationKey = key;
+                        showIntegrationRunContent(run);
+                        renderIntegrationTabs();
+                    }
+                });
+            });
+        }
+        
+        function showIntegrationRunContent(run) {
+            const leftDiv = document.getElementById('integrationModelSearchResults');
+            const rightDiv = document.getElementById('integrationResults');
+            const container = document.getElementById('integrationResultsContainer');
+            if (!leftDiv || !rightDiv || !container) return;
+            container.style.display = 'block';
+            const modelRes = run.model_result;
+            const tableRes = run.table_result;
+            if (modelRes && modelRes.status === 'success' && modelRes.integrated_table) {
+                const stats = modelRes.stats || {};
+                let extra = '';
+                if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
+                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${modelRes.models_with_tables.slice(0, 5).join(', ')}${modelRes.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
+                }
+                leftDiv.innerHTML = renderIntegrationTable(modelRes.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search-' + (run.key || '') });
+            } else {
+                leftDiv.innerHTML = modelRes ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${modelRes.message || 'Integration failed'}</div>` : '';
+            }
+            if (tableRes && tableRes.status === 'success' && tableRes.integrated_table) {
+                rightDiv.innerHTML = renderIntegrationTable(tableRes.integrated_table, tableRes.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search-' + (run.key || '') });
+            } else {
+                rightDiv.innerHTML = tableRes ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>` : '';
+            }
+            initTablePanZoom(leftDiv);
+            initTablePanZoom(rightDiv);
+        }
         
         function initTablePanZoom(root) {}
         
@@ -1498,6 +1577,20 @@ HTML_TEMPLATE = """
                     rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>`;
                 }
                 initTablePanZoom(rightDiv);
+                if (modelRes.status === 'success' && tableRes.status === 'success') {
+                    const key = getIntegrationRunKey(integrationType, searchType, modelSearchMode);
+                    const runPayload = { job_id: jobId, key, integration_type: integrationType, search_type: searchType, card2card_retrieval_mode: modelSearchMode, k, max_models: maxModels, model_result: modelRes, table_result: tableRes };
+                    try {
+                        await fetch('{{BACKEND_URL}}/api/save-integration-run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(runPayload) });
+                    } catch (e) {}
+                    let runs = window.__integrationRuns || [];
+                    const idx = runs.findIndex(r => r.key === key);
+                    if (idx >= 0) runs[idx] = runPayload; else runs = [...runs, runPayload];
+                    window.__integrationRuns = runs;
+                    window.__selectedIntegrationKey = key;
+                    renderIntegrationTabs();
+                    showIntegrationRunContent(runPayload);
+                }
             } catch (err) {
                 leftDiv.innerHTML = `<div style="padding: 10px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${err.message}</div>`;
                 rightDiv.innerHTML = `<div style="padding: 10px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${err.message}</div>`;

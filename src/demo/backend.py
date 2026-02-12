@@ -19,7 +19,9 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
 import math
+import re
 import numpy as np
+import pandas as pd
 
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -46,6 +48,14 @@ DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedu
 
 # All job outputs (search results, integration, evaluation, QA) live under data/jobs/<job_id>
 JOBS_DIR = os.path.join(REPO_ROOT, "data", "jobs")
+
+
+def _integration_run_key(integration_type: str, search_type: str, card2card_mode: str) -> str:
+    """Slug for integration run filename: e.g. union_single_column_dense."""
+    import re
+    parts = [integration_type or "union", search_type or "single_column", card2card_mode or "dense"]
+    return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
+
 
 app = Flask(__name__)
 CORS(app)
@@ -513,6 +523,34 @@ def search():
                             out[key] = json.load(f)
                     except Exception:
                         pass
+            integration_runs = []
+            for fname in os.listdir(base_dir):
+                if fname.startswith("integration_run_") and fname.endswith(".json"):
+                    try:
+                        with open(os.path.join(base_dir, fname), "r", encoding="utf-8") as f:
+                            run_data = json.load(f)
+                        integration_runs.append(run_data)
+                    except Exception:
+                        pass
+            if integration_runs:
+                out["integration_runs"] = integration_runs
+            elif out.get("integration_model_search") and out.get("integration_table_search"):
+                m, t = out["integration_model_search"], out["integration_table_search"]
+                if m.get("status") == "success" and t.get("status") == "success":
+                    out["integration_runs"] = [{
+                        "key": _integration_run_key(
+                            m.get("integration_type") or "union",
+                            t.get("search_type") or "single_column",
+                            m.get("card2card_retrieval_mode") or "dense",
+                        ),
+                        "integration_type": m.get("integration_type") or t.get("integration_type"),
+                        "search_type": t.get("search_type"),
+                        "card2card_retrieval_mode": m.get("card2card_retrieval_mode"),
+                        "k": m.get("k") or t.get("k"),
+                        "max_models": m.get("max_models") or t.get("max_models"),
+                        "model_result": m,
+                        "table_result": t,
+                    }]
         return jsonify(out)
 
     mode = data.get("mode", "query")
@@ -801,6 +839,26 @@ def evaluate():
 @app.route("/api/qa", methods=["POST"])
 def qa():
     return jsonify({"status": "error", "message": "Use legacy backend for QA"}), 501
+
+
+@app.route("/api/save-integration-run", methods=["POST"])
+def save_integration_run():
+    """Save one integration run to job_dir as integration_run_<key>.json for tabs. Creates job_dir if missing."""
+    data = request.get_json() or {}
+    job_id = data.get("job_id")
+    key = data.get("key")
+    if not job_id or not key:
+        return jsonify({"status": "error", "message": "job_id and key required"}), 400
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    safe_key = re.sub(r"[^a-z0-9_]", "_", (key or "").lower().strip()) or "run"
+    path = os.path.join(job_dir, f"integration_run_{safe_key}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=0)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/save-evaluation", methods=["POST"])
