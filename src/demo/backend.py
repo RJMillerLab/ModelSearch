@@ -534,20 +534,21 @@ def search():
                         pass
             if integration_runs:
                 out["integration_runs"] = integration_runs
-            elif out.get("integration_model_search") and out.get("integration_table_search"):
-                m, t = out["integration_model_search"], out["integration_table_search"]
-                if m.get("status") == "success" and t.get("status") == "success":
+            else:
+                m = out.get("integration_model_search")
+                t = out.get("integration_table_search")
+                if m or t:
+                    # Build one run from legacy files so load shows one tab (even if only one side succeeded)
+                    itype = (m or t).get("integration_type") or "union"
+                    stype = t.get("search_type") if t else "single_column"
+                    cmode = m.get("card2card_retrieval_mode") if m else "dense"
                     out["integration_runs"] = [{
-                        "key": _integration_run_key(
-                            m.get("integration_type") or "union",
-                            t.get("search_type") or "single_column",
-                            m.get("card2card_retrieval_mode") or "dense",
-                        ),
-                        "integration_type": m.get("integration_type") or t.get("integration_type"),
-                        "search_type": t.get("search_type"),
-                        "card2card_retrieval_mode": m.get("card2card_retrieval_mode"),
-                        "k": m.get("k") or t.get("k"),
-                        "max_models": m.get("max_models") or t.get("max_models"),
+                        "key": _integration_run_key(itype, stype, cmode),
+                        "integration_type": itype,
+                        "search_type": stype,
+                        "card2card_retrieval_mode": cmode,
+                        "k": (m or t).get("k"),
+                        "max_models": (m or t).get("max_models"),
                         "model_result": m,
                         "table_result": t,
                     }]
@@ -656,28 +657,35 @@ def list_saved_searches():
     if not os.path.isdir(jobs_parent):
         os.makedirs(jobs_parent, exist_ok=True)
         return jsonify({"status": "success", "searches": [], "template_available": template_available})
-    searches = []
-    for name in sorted(os.listdir(jobs_parent), reverse=True)[:50]:
+    # Collect (name, path, mtime) for valid job dirs, sort by mtime descending (newest first)
+    candidates = []
+    for name in os.listdir(jobs_parent):
         path = os.path.join(jobs_parent, name)
         json_path = os.path.join(path, "search_results.json")
         if os.path.isdir(path) and os.path.isfile(json_path):
-            entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None}
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    saved = json.load(f)
-                entry["query"] = saved.get("query") or ""
-                entry["model_id"] = saved.get("model_id") or ""
-                ts = saved.get("timestamp")
-                if ts:
-                    try:
-                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        entry["timestamp_str"] = dt.strftime("%Y-%m-%d %H:%M")
-                    except Exception:
-                        entry["timestamp_str"] = str(ts)[:16]
-                entry["top_k"] = saved.get("top_k")
-            except Exception:
-                pass
-            searches.append(entry)
+            mtime = os.path.getmtime(json_path)
+            candidates.append((name, path, mtime))
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    searches = []
+    for name, path, _ in candidates[:50]:
+        json_path = os.path.join(path, "search_results.json")
+        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None}
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            entry["query"] = saved.get("query") or ""
+            entry["model_id"] = saved.get("model_id") or ""
+            ts = saved.get("timestamp")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    entry["timestamp_str"] = dt.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    entry["timestamp_str"] = str(ts)[:16]
+            entry["top_k"] = saved.get("top_k")
+        except Exception:
+            pass
+        searches.append(entry)
     return jsonify({"status": "success", "searches": searches, "template_available": template_available})
 
 
