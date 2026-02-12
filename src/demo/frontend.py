@@ -612,14 +612,53 @@ HTML_TEMPLATE = """
                 
                 if (data.status === 'completed' || data.status === 'success') {
                     currentJobId = data.job_id;
-                    // Display results directly
                     displayResults(data.results || data);
+                    restoreIntegrationEvaluationQA(data);
                     document.getElementById('progressSection').classList.remove('active');
                 } else {
                     showError(data.message || 'Failed to load saved search');
                 }
             } catch (error) {
                 showError('Error: ' + error.message);
+            }
+        }
+        
+        function restoreIntegrationEvaluationQA(data) {
+            const container = document.getElementById('integrationResultsContainer');
+            const leftDiv = document.getElementById('integrationModelSearchResults');
+            const rightDiv = document.getElementById('integrationResults');
+            if (data.integration_model_search && data.integration_table_search && container && leftDiv && rightDiv) {
+                const modelRes = data.integration_model_search;
+                const tableRes = data.integration_table_search;
+                container.style.display = 'block';
+                if (modelRes.status === 'success' && modelRes.integrated_table) {
+                    const stats = modelRes.stats || {};
+                    let extra = '';
+                    if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${modelRes.models_with_tables.slice(0, 5).join(', ')}${modelRes.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
+                    }
+                    leftDiv.innerHTML = renderIntegrationTable(modelRes.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
+                    initTablePanZoom(leftDiv);
+                }
+                if (tableRes.status === 'success' && tableRes.integrated_table) {
+                    rightDiv.innerHTML = renderIntegrationTable(tableRes.integrated_table, tableRes.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
+                    initTablePanZoom(rightDiv);
+                }
+            }
+            if (data.evaluation_results && data.evaluation_results.evaluation) {
+                const resultsDiv = document.getElementById('evaluationResults');
+                if (resultsDiv) {
+                    resultsDiv.style.display = 'block';
+                    displayEvaluationResults(data.evaluation_results.evaluation, resultsDiv, data.evaluation_results.table1 || null, data.evaluation_results.table2 || null);
+                }
+            }
+            if (data.qa_results) {
+                const afterClick = document.getElementById('qa_after_click');
+                const divTable = document.getElementById('qaResultsTableSearch');
+                const divModel = document.getElementById('qaResultsModelSearch');
+                if (afterClick) afterClick.style.display = 'block';
+                if (data.qa_results.table_search && divTable) displayQAResults(data.qa_results.table_search.qa, data.qa_results.table_search.query || '', divTable);
+                if (data.qa_results.model_search && divModel) displayQAResults(data.qa_results.model_search.qa, data.qa_results.model_search.query || '', divModel);
             }
         }
         
@@ -649,8 +688,8 @@ HTML_TEMPLATE = """
                 
                 if (data.status === 'completed' || data.status === 'success') {
                     currentJobId = data.job_id;
-                    // Display results directly
                     displayResults(data.results || data);
+                    restoreIntegrationEvaluationQA(data);
                     document.getElementById('progressSection').classList.remove('active');
                 } else {
                     showError(data.message || 'Failed to load template');
@@ -696,8 +735,8 @@ HTML_TEMPLATE = """
                 
                 if (data.status === 'completed' || data.status === 'success') {
                     currentJobId = data.job_id;
-                    // Display results directly
                     displayResults(data.results || data);
+                    restoreIntegrationEvaluationQA(data);
                     document.getElementById('progressSection').classList.remove('active');
                 } else {
                     showError(data.message || 'Failed to load saved search');
@@ -1865,6 +1904,9 @@ HTML_TEMPLATE = """
                     const table1Data = data.table1 || null;
                     const table2Data = data.table2 || null;
                     displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data);
+                    if (currentJobId) {
+                        fetch('{{BACKEND_URL}}/api/save-evaluation', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ job_id: currentJobId, evaluation: data.evaluation, table1: data.table1, table2: data.table2 }) }).catch(() => {});
+                    }
                 } else {
                     // Handle error status in response
                     const errorMessage = data.error || data.message || 'Unknown error';
@@ -2136,10 +2178,13 @@ HTML_TEMPLATE = """
                 const bodyTable = { job_id: jobId, use_table_search: true, use_fake: useFake };
                 const bodyModel = { job_id: jobId, use_table_search: false, use_fake: useFake };
                 if (fakeContent) { bodyTable.fake_response_content = fakeContent; bodyModel.fake_response_content = fakeContent; }
-                await Promise.all([
+                const [tableRes, modelRes] = await Promise.all([
                     sendQARequest(bodyTable, resultsDivTable, null),
                     sendQARequest(bodyModel, resultsDivModel, null)
                 ]);
+                if (jobId && (tableRes || modelRes)) {
+                    fetch('{{BACKEND_URL}}/api/save-qa', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ job_id: jobId, table_search: tableRes || null, model_search: modelRes || null }) }).catch(() => {});
+                }
             } catch (error) {
                 resultsDivTable.innerHTML = resultsDivTable.innerHTML.indexOf('❌') >= 0 ? resultsDivTable.innerHTML : '<div style="padding: 12px; color: #dc3545;">❌ ' + error.message + '</div>';
                 resultsDivModel.innerHTML = resultsDivModel.innerHTML.indexOf('❌') >= 0 ? resultsDivModel.innerHTML : '<div style="padding: 12px; color: #dc3545;">❌ ' + error.message + '</div>';
@@ -2169,21 +2214,24 @@ HTML_TEMPLATE = """
                         </div>
                     `;
                     if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer'; }
-                    return;
+                    return null;
                 }
                 
                 const data = await response.json();
                 
                 if (data.status === 'success') {
                     displayQAResults(data.qa, data.query, resultsDiv);
+                    if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
+                    return { qa: data.qa, query: data.query };
                 } else {
                     resultsDiv.innerHTML = `
                         <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
                             <strong>❌ QA Failed:</strong> ${data.message || 'Unknown error'}
                         </div>
                     `;
+                    if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
+                    return null;
                 }
-                if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
             } catch (error) {
                 resultsDiv.innerHTML = `
                     <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
@@ -2191,6 +2239,7 @@ HTML_TEMPLATE = """
                     </div>
                 `;
                 if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
+                return null;
             }
         }
         

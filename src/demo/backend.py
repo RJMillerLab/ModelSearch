@@ -2,7 +2,7 @@
 Backend API for ModelSearch Demo (CLI-based)
 
 Runs search via subprocess commands from docs/build_index.md.
-All outputs go to a single job dir; no scanning of JSON paths.
+All job outputs (search results, integration, evaluation, QA) go under data/jobs/<job_id>.
 Minimal imports for fast startup.
 """
 
@@ -43,6 +43,9 @@ DEFAULT_SPARSE_INDEX = "data/card2card_sparse_index"
 DEFAULT_DB_PATH = "data/modellake.db"
 # Card2Tab2Card needs this to map model_id -> tables (default from card2tab2card CLI)
 DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
+
+# All job outputs (search results, integration, evaluation, QA) live under data/jobs/<job_id>
+JOBS_DIR = os.path.join(REPO_ROOT, "data", "jobs")
 
 app = Flask(__name__)
 CORS(app)
@@ -133,7 +136,7 @@ def run_search_pipeline(
     if not logger:
         return
 
-    job_dir = os.path.join(REPO_ROOT, "data", job_id)
+    job_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
     start_time = time.time()
 
@@ -476,18 +479,41 @@ def search():
         if not folder_name:
             return jsonify({"status": "error", "message": "folder_name required for mimic"}), 400
         if folder_name == "template":
-            path = os.path.join(REPO_ROOT, "config", "demo_template", "search_results.json")
+            base_dir = os.path.join(REPO_ROOT, "config", "demo_template")
+            search_path = os.path.join(base_dir, "search_results.json")
         else:
-            path = os.path.join(REPO_ROOT, "data", folder_name, "search_results.json")
-        if not os.path.exists(path):
+            base_dir = os.path.join(JOBS_DIR, folder_name)
+            search_path = os.path.join(base_dir, "search_results.json")
+        if not os.path.exists(search_path):
             return jsonify({"status": "error", "message": f"Saved results not found: {folder_name}"}), 404
-        with open(path, "r", encoding="utf-8") as f:
+        with open(search_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
-        job_id = str(uuid.uuid4())
+        # For saved searches under data/jobs/, use folder_name as job_id so integrate/eval/qa use same folder
+        # For template (config/demo_template), use new uuid so we do not write into config
+        if folder_name == "template":
+            job_id = str(uuid.uuid4())
+            base_dir = None  # no optional files for template
+        else:
+            job_id = folder_name
         jobs[job_id] = JobLogger(job_id)
         jobs[job_id].set_results(saved)
         jobs[job_id].set_status("completed")
-        return jsonify({"status": "completed", "job_id": job_id, "results": saved})
+        out = {"status": "completed", "job_id": job_id, "results": saved}
+        if base_dir and os.path.isdir(base_dir):
+            for key, filename in [
+                ("integration_model_search", "integration_model_search.json"),
+                ("integration_table_search", "integration_table_search.json"),
+                ("evaluation_results", "evaluation_results.json"),
+                ("qa_results", "qa_results.json"),
+            ]:
+                p = os.path.join(base_dir, filename)
+                if os.path.isfile(p):
+                    try:
+                        with open(p, "r", encoding="utf-8") as f:
+                            out[key] = json.load(f)
+                    except Exception:
+                        pass
+        return jsonify(out)
 
     mode = data.get("mode", "query")
     top_k = int(data.get("top_k", 20))
@@ -586,16 +612,15 @@ def get_table_preview():
 
 @app.route("/api/saved-searches", methods=["GET"])
 def list_saved_searches():
-    data_dir = os.path.join(REPO_ROOT, "data")
+    jobs_parent = JOBS_DIR
     template_path = os.path.join(REPO_ROOT, "config", "demo_template", "search_results.json")
     template_available = os.path.isfile(template_path)
-    if not os.path.isdir(data_dir):
+    if not os.path.isdir(jobs_parent):
+        os.makedirs(jobs_parent, exist_ok=True)
         return jsonify({"status": "success", "searches": [], "template_available": template_available})
     searches = []
-    for name in sorted(os.listdir(data_dir), reverse=True)[:50]:
-        if name == "template":
-            continue
-        path = os.path.join(data_dir, name)
+    for name in sorted(os.listdir(jobs_parent), reverse=True)[:50]:
+        path = os.path.join(jobs_parent, name)
         json_path = os.path.join(path, "search_results.json")
         if os.path.isdir(path) and os.path.isfile(json_path):
             entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None}
@@ -632,18 +657,14 @@ def integrate():
     if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
     
-    # Find job results file
-    job_dir = os.path.join(REPO_ROOT, "data", job_id)
+    job_dir = os.path.join(JOBS_DIR, job_id)
     results_file = os.path.join(job_dir, "search_results.json")
-    
     if not os.path.exists(results_file):
         return jsonify({"status": "error", "message": f"Results file not found for job {job_id}"}), 404
-    
+    os.makedirs(job_dir, exist_ok=True)
     try:
-        # Import integration module
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from integration.table_integration import integrate_tables_from_search_results
-        
         result = integrate_tables_from_search_results(
             search_results_json=results_file,
             search_type=search_type,
@@ -669,11 +690,17 @@ def integrate():
                 csv_name = "integrated_table_search.csv"
                 save_path = os.path.join(job_dir, csv_name)
                 integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-                saved_path = os.path.join("data", job_id, csv_name)
+                saved_path = os.path.join("data", "jobs", job_id, csv_name)
             except Exception:
                 pass
         if saved_path:
             result["saved_path"] = saved_path
+        try:
+            save_json = os.path.join(job_dir, "integration_table_search.json")
+            with open(save_json, "w", encoding="utf-8") as f:
+                json.dump({"status": "success", **result}, f, ensure_ascii=False, indent=0)
+        except Exception:
+            pass
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback
@@ -693,16 +720,12 @@ def integrate_model_search():
 
     if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
-    
-    # Find job results file
-    job_dir = os.path.join(REPO_ROOT, "data", job_id)
+    job_dir = os.path.join(JOBS_DIR, job_id)
     results_file = os.path.join(job_dir, "search_results.json")
-    
     if not os.path.exists(results_file):
         return jsonify({"status": "error", "message": f"Results file not found for job {job_id}"}), 404
-    
+    os.makedirs(job_dir, exist_ok=True)
     try:
-        # Import integration module
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from integration.table_integration import integrate_tables_from_model_search_results
         
@@ -736,11 +759,17 @@ def integrate_model_search():
                 csv_name = "integrated_model_search.csv"
                 save_path = os.path.join(job_dir, csv_name)
                 integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-                saved_path = os.path.join("data", job_id, csv_name)
+                saved_path = os.path.join("data", "jobs", job_id, csv_name)
             except Exception:
                 pass
         if saved_path:
             result["saved_path"] = saved_path
+        try:
+            save_json = os.path.join(job_dir, "integration_model_search.json")
+            with open(save_json, "w", encoding="utf-8") as f:
+                json.dump({"status": "success", **result}, f, ensure_ascii=False, indent=0)
+        except Exception:
+            pass
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback
@@ -756,6 +785,42 @@ def evaluate():
 @app.route("/api/qa", methods=["POST"])
 def qa():
     return jsonify({"status": "error", "message": "Use legacy backend for QA"}), 501
+
+
+@app.route("/api/save-evaluation", methods=["POST"])
+def save_evaluation():
+    """Save evaluation result to job_dir for load-previous restore. Creates job_dir if missing."""
+    data = request.get_json() or {}
+    job_id = data.get("job_id")
+    if not job_id:
+        return jsonify({"status": "error", "message": "job_id required"}), 400
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    path = os.path.join(job_dir, "evaluation_results.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=0)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/save-qa", methods=["POST"])
+def save_qa():
+    """Save QA result to job_dir for load-previous restore. Creates job_dir if missing."""
+    data = request.get_json() or {}
+    job_id = data.get("job_id")
+    if not job_id:
+        return jsonify({"status": "error", "message": "job_id required"}), 400
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    path = os.path.join(job_dir, "qa_results.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=0)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 if __name__ == "__main__":
