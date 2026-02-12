@@ -316,26 +316,17 @@ HTML_TEMPLATE = """
         
         <div class="input-section">
             <div style="margin-bottom: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: flex; align-items: center; cursor: pointer; flex-wrap: wrap; gap: 6px; font-size: 13px;">
+                <label style="display: flex; align-items: center; cursor: pointer; gap: 6px; font-size: 13px;">
                     <input type="checkbox" id="load_previous_search" onchange="toggleLoadPrevious()" style="margin-right: 4px; width: 16px; height: 16px;">
                     <span style="font-weight: 500;">Load Previous Search</span>
-                    <span style="color: #666; font-weight: normal;">— Check to load a previously saved search instead of running a new search.</span>
                 </label>
             </div>
             
             <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
-                <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                    <button onclick="loadDemoExample()" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500;">
-                        🎨 Load Demo Example
-                    </button>
-                    <span style="font-size: 12px; color: #666;">Or pick a saved search:</span>
-                </div>
+                <p style="margin-bottom: 6px; font-size: 12px; color: #666;">Pick a saved search.</p>
                 <div id="saved_searches_list" style="max-height: 180px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 6px; background: #f8f9fa;">
                     <div style="text-align: center; color: #666; padding: 12px;">Loading saved searches...</div>
                 </div>
-                <p style="margin-top: 6px; font-size: 12px;">
-                    <a href="#" onclick="document.getElementById('load_previous_search').checked = false; toggleLoadPrevious(); return false;">Or run a new search</a>
-                </p>
             </div>
             
             <div id="new-search-inputs">
@@ -754,7 +745,7 @@ HTML_TEMPLATE = """
             const loadPrevious = document.getElementById('load_previous_search').checked;
             
             if (loadPrevious) {
-                showError('Please select a saved search from the list above, or use "Load Demo Example" button');
+                showError('Please select a saved search.');
                 return;
             }
             
@@ -929,11 +920,12 @@ HTML_TEMPLATE = """
                 : '';
             // Seed model + Tables note: same row, two columns (aligned with the two result cards below)
             const seedModelId = results.model_id || null;
+            const headerStyle = 'font-size: 12px; color: #666;';
             const seedModelCell = results.error ? '' : (seedModelId
-                ? `<strong>Seed model (from query):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a>`
-                : `<span style="color: #856404;">⚠️ Model ID missing</span>`);
-            const tablesNoteCell = '<span style="font-size: 12px; color: #666;">Tables are presented under each item.</span>';
-            const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; font-size: 13px; align-items: center;">
+                ? `<span style="${headerStyle}"><strong>Seed model (from query):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a></span>`
+                : `<span style="font-size: 12px; color: #856404;">⚠️ Model ID missing</span>`);
+            const tablesNoteCell = `<span style="${headerStyle}">Tables are presented under each item.</span>`;
+            const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; align-items: center;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
             </div>`;
@@ -994,7 +986,6 @@ HTML_TEMPLATE = """
                                                 ❌ Error: ${modeResults.error || 'Unknown error'}
                                             </div>
                                         ` : resultList.length > 0 ? `
-                                            <p style="font-size: 11px; color: #666; margin: 10px 0 5px 0;">${modeInfo.desc}</p>
                                             <ul class="result-list" style="list-style: none; padding: 0;">
                                                 ${resultList.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
                                                 ${resultList.length > 10 ? `
@@ -1254,59 +1245,27 @@ HTML_TEMPLATE = """
                 </div>
             `;
             
-            // Add Evaluation Section - comparison merged into same card, then evaluation
             html += `
                 <div class="evaluation-section" style="margin-top: 16px; padding: 12px; background: #fff3cd; border-radius: 6px; border: 2px solid #ffc107;">
                     ${comparisonHtml}
-                    <h3 style="margin-top: 0; margin-bottom: 6px; color: #856404; font-size: 15px;">📊 Evaluation on Integrated Tables</h3>
-                    <p style="font-size: 12px; color: #666; margin-bottom: 8px;">Evaluate diversity between Table Search and Model Search integration results using LLM.</p>
-                    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                        <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
-                            <input type="radio" name="evaluation_mode" value="generate" id="eval_mode_generate" checked onchange="toggleEvaluationMode()" style="width: 16px; height: 16px;">
-                            <span>Generate New Response</span>
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
-                            <input type="radio" name="evaluation_mode" value="use_fake" id="eval_mode_fake" onchange="toggleEvaluationMode()" style="width: 16px; height: 16px;">
-                            <span>Use Fake Response</span>
-                        </label>
-                        <div id="evaluation_generate_options" style="display: block;">
-                            <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
-                                    style="padding: 6px 14px; font-size: 13px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                📊 Generate Evaluation
-                            </button>
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                        <div>
+                            <h3 style="margin: 0 0 4px 0; color: #856404; font-size: 15px;">📊 Evaluation on Integrated Tables</h3>
+                            <p style="font-size: 12px; color: #666; margin: 0;">Evaluate diversity between Table Search and Model Search integration results using LLM.</p>
                         </div>
-                        <div id="evaluation_use_fake_options" style="display: none; align-items: center; gap: 8px;" class="eval-fake-row">
-                            <input type="file" id="evaluation_fake_file2" accept=".json" style="display: none;" onchange="handleFakeFileSelect()">
-                            <button type="button" onclick="document.getElementById('evaluation_fake_file2').click()" 
-                                    style="padding: 6px 12px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                📁 Load Fake File
-                            </button>
-                            <span id="fake_file_name2" style="font-size: 11px; color: #666;"></span>
-                            <button id="evaluationBtnFake" onclick="runEvaluation('${results.job_id || currentJobId}')" 
-                                    style="padding: 6px 14px; font-size: 13px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                📊 Use Fake Response
-                            </button>
-                        </div>
+                        <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                style="padding: 6px 14px; font-size: 13px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                            📊 Generate Evaluation
+                        </button>
                     </div>
                     <div id="evaluationResults" style="margin-top: 12px; display: none;"></div>
                     </div>
                     
-                    <!-- QA Section: options and button on same line -->
                     <div class="qa-section" style="margin-top: 16px; padding: 12px; background: #d1ecf1; border-radius: 6px; border: 2px solid #17a2b8;">
-                        <h3 style="margin-top: 0; margin-bottom: 6px; color: #0c5460; font-size: 15px;">💬 Question Answering (QA)</h3>
-                        <p style="font-size: 12px; color: #666; margin-bottom: 8px;">QA on both integrated tables. One button generates two answers for comparison.</p>
-                        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                            <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
-                                <input type="radio" name="qa_mode" value="generate" id="qa_mode_generate" checked onchange="toggleQAMode()" style="width: 16px; height: 16px;">
-                                <span>Generate New Answer</span>
-                            </label>
-                            <label style="display: flex; align-items: center; gap: 4px; font-weight: 500; font-size: 13px;">
-                                <input type="radio" name="qa_mode" value="use_fake" id="qa_mode_fake" onchange="toggleQAMode()" style="width: 16px; height: 16px;">
-                                <span>Use Fake Response</span>
-                            </label>
-                            <div id="qa_use_fake_options" style="display: none; align-items: center; gap: 8px;">
-                                <input type="file" id="qa_fake_file" accept=".json" onchange="handleQAFakeFileSelect()" style="font-size: 12px; max-width: 140px;">
-                                <span id="qa_fake_file_name" style="font-size: 11px; color: #666;"></span>
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                            <div>
+                                <h3 style="margin: 0 0 4px 0; color: #0c5460; font-size: 15px;">💬 Question Answering (QA)</h3>
+                                <p style="font-size: 12px; color: #666; margin: 0;">QA on both integrated tables. One button generates two answers for comparison.</p>
                             </div>
                             <button id="qaBtn" onclick="runQABoth('${results.job_id || currentJobId}')" 
                                     style="padding: 6px 14px; font-size: 13px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
@@ -1339,55 +1298,10 @@ HTML_TEMPLATE = """
             document.getElementById('resultsSection').classList.add('active');
         }
         
-        // Fixed viewport: table never expands the page; user scrolls inside this window only
-        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow: hidden; border: 1px solid #dee2e6; border-radius: 6px; background: #fff; position: relative; cursor: grab; user-select: none;';
+        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         window.__integrationTables = window.__integrationTables || {};
-        window.__tableViewports = window.__tableViewports || {};
         
-        function initTablePanZoom(root) {
-            if (!root) return;
-            root.querySelectorAll('.integration-table-viewport').forEach(viewport => {
-                let wrapper = viewport.querySelector('.integration-table-panzoom');
-                if (!wrapper) return;
-                let scale = 1, tx = 0, ty = 0, isDrag = false, startX = 0, startY = 0, startTx = 0, startTy = 0;
-                const apply = () => {
-                    wrapper.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-                    wrapper.style.transformOrigin = '0 0';
-                };
-                const onMove = (e) => {
-                    tx = startTx + (e.clientX - startX);
-                    ty = startTy + (e.clientY - startY);
-                    apply();
-                };
-                const onUp = () => {
-                    isDrag = false;
-                    viewport.style.cursor = 'grab';
-                    document.removeEventListener('mousemove', onMove);
-                    document.removeEventListener('mouseup', onUp);
-                };
-                viewport.addEventListener('mousedown', (e) => {
-                    if (e.button !== 0) return;
-                    isDrag = true;
-                    startX = e.clientX;
-                    startY = e.clientY;
-                    startTx = tx;
-                    startTy = ty;
-                    viewport.style.cursor = 'grabbing';
-                    document.addEventListener('mousemove', onMove);
-                    document.addEventListener('mouseup', onUp);
-                });
-                viewport.addEventListener('wheel', (e) => {
-                    e.preventDefault();
-                    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-                    scale = Math.max(0.25, Math.min(3, scale + delta));
-                    apply();
-                }, { passive: false });
-                viewport.addEventListener('mouseleave', () => {
-                    if (isDrag) onUp();
-                });
-                apply();
-            });
-        }
+        function initTablePanZoom(root) {}
         
         function showTableAsImage(tableId, downloadId) {
             const t = window.__integrationTables[downloadId];
@@ -1477,17 +1391,15 @@ HTML_TEMPLATE = """
                 <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols</div>
                 ${extraHtml}
                 <div style="position: relative;">
-                    <div class="integration-table-viewport" style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Drag to pan, scroll to zoom">
-                        <div class="integration-table-panzoom" style="transform: translate(0px,0px) scale(1); transform-origin: 0 0; display: inline-block;">
-                            <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
-                                <thead><tr style="background: #f8f9fa;">
-                                    ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap;">${col}</th>`).join('')}
-                                </tr></thead>
-                                <tbody>
-                                    ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
-                                </tbody>
-                            </table>
-                        </div>
+                    <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Scroll to view full table">
+                        <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
+                            <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
+                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap;">${col}</th>`).join('')}
+                            </tr></thead>
+                            <tbody>
+                                ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
                 <div style="margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
@@ -1514,8 +1426,8 @@ HTML_TEMPLATE = """
             btn.disabled = true;
             btn.textContent = '⏳ Integrating...';
             container.style.display = 'block';
-            leftDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Model Search integration...</div>';
-            rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">Waiting...</div>';
+            leftDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Model Search integration...</div>';
+            rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Table Search integration...</div>';
             
             try {
                 const modelRes = await fetch('{{BACKEND_URL}}/api/integrate-model-search', {
@@ -1537,7 +1449,7 @@ HTML_TEMPLATE = """
                 }
                 initTablePanZoom(leftDiv);
                 
-                rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Table Search integration...</div>';
+                rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Table Search integration...</div>';
                 const tableRes = await fetch('{{BACKEND_URL}}/api/integrate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -1626,11 +1538,7 @@ HTML_TEMPLATE = """
         let fakeResponseFile = null;
         let qaFakeResponseFile = null;
         
-        function toggleQAMode() {
-            const fakeMode = document.getElementById('qa_mode_fake')?.checked || false;
-            const fakeOptions = document.getElementById('qa_use_fake_options');
-            if (fakeOptions) fakeOptions.style.display = fakeMode ? 'flex' : 'none';
-        }
+        function toggleQAMode() {}
         
         function handleQAFakeFileSelect() {
             const fileInput = document.getElementById('qa_fake_file');
@@ -1644,20 +1552,7 @@ HTML_TEMPLATE = """
             }
         }
         
-        function toggleEvaluationMode() {
-            const generateMode = document.getElementById('eval_mode_generate').checked;
-            const fakeMode = document.getElementById('eval_mode_fake').checked;
-            const generateOptions = document.getElementById('evaluation_generate_options');
-            const fakeOptions = document.getElementById('evaluation_use_fake_options');
-            
-            if (generateMode) {
-                if (generateOptions) generateOptions.style.display = 'block';
-                if (fakeOptions) fakeOptions.style.display = 'none';
-            } else if (fakeMode) {
-                if (generateOptions) generateOptions.style.display = 'none';
-                if (fakeOptions) fakeOptions.style.display = 'flex';
-            }
-        }
+        function toggleEvaluationMode() {}
         
         function handleFakeFileSelect() {
             const fileInput = document.getElementById('evaluation_fake_file2');
@@ -1793,77 +1688,17 @@ HTML_TEMPLATE = """
         }
         
         async function runEvaluation(jobId) {
-            // Check which mode is selected
-            const generateMode = document.getElementById('eval_mode_generate')?.checked || false;
-            const fakeMode = document.getElementById('eval_mode_fake')?.checked || false;
-            const useFake = fakeMode;  // Use fake only if fake mode is selected
-            
-            // Get the appropriate button based on mode
-            const evaluationBtn = useFake ? 
-                (document.getElementById('evaluationBtnFake') || document.getElementById('evaluationBtn')) :
-                document.getElementById('evaluationBtn');
+            const evaluationBtn = document.getElementById('evaluationBtn');
             const resultsDiv = document.getElementById('evaluationResults');
-            
-            if (!evaluationBtn || !resultsDiv) {
-                console.error('Evaluation elements not found');
-                return;
-            }
-            
-            // Debug: log mode state
-            console.log('🔍 Evaluation mode state:', {
-                generateMode: generateMode,
-                fakeMode: fakeMode,
-                useFake: useFake
-            });
-            
-            // Disable button and show loading
+            if (!evaluationBtn || !resultsDiv) return;
             evaluationBtn.disabled = true;
             evaluationBtn.textContent = '⏳ Evaluating...';
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running evaluation...</div>';
-            
             try {
-                // Don't hardcode integration types - let backend auto-discover from saved integration files
-                const requestBody = {
-                    job_id: jobId,
-                    // integration1_type and integration2_type are optional - backend will auto-discover
-                    use_fake: useFake  // Explicitly set based on radio button selection
-                };
-                
-                console.log('📤 Sending evaluation request:', { use_fake: useFake, job_id: jobId });
-                
-                // If fake file is selected, read it
-                if (useFake && fakeResponseFile) {
-                    const fileReader = new FileReader();
-                    fileReader.onload = async function(e) {
-                        try {
-                            const fakeContent = e.target.result;
-                            const fakeData = JSON.parse(fakeContent);
-                            
-                            requestBody.fake_response_content = fakeData;
-                            
-                            await sendEvaluationRequest(requestBody, resultsDiv, evaluationBtn);
-                        } catch (error) {
-                            resultsDiv.innerHTML = `
-                                <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                                    <strong>❌ Error:</strong> Failed to parse fake response file: ${error.message}
-                                </div>
-                            `;
-                            evaluationBtn.disabled = false;
-                            evaluationBtn.textContent = '📊 Generate Evaluation';
-                        }
-                    };
-                    fileReader.readAsText(fakeResponseFile);
-                    return;
-                }
-                
-                await sendEvaluationRequest(requestBody, resultsDiv, evaluationBtn);
+                await sendEvaluationRequest({ job_id: jobId, use_fake: false }, resultsDiv, evaluationBtn);
             } catch (error) {
-                resultsDiv.innerHTML = `
-                    <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;">
-                        <strong>❌ Error:</strong> ${error.message}
-                    </div>
-                `;
+                resultsDiv.innerHTML = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;"><strong>❌ Error:</strong> ${error.message}</div>`;
                 evaluationBtn.disabled = false;
                 evaluationBtn.textContent = '📊 Generate Evaluation';
             }
@@ -2157,27 +1992,15 @@ HTML_TEMPLATE = """
             const afterClickDiv = document.getElementById('qa_after_click');
             const resultsDivTable = document.getElementById('qaResultsTableSearch');
             const resultsDivModel = document.getElementById('qaResultsModelSearch');
-            if (!qaBtn || !resultsDivTable || !resultsDivModel) { console.error('QA elements not found'); return; }
+            if (!qaBtn || !resultsDivTable || !resultsDivModel) return;
             if (afterClickDiv) afterClickDiv.style.display = 'block';
-            const useFake = document.getElementById('qa_mode_fake')?.checked || false;
             qaBtn.disabled = true;
             qaBtn.textContent = '⏳ Generating...';
             resultsDivTable.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
             resultsDivModel.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
-            const restoreBtn = function() { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer'; };
             try {
-                let fakeContent = null;
-                if (useFake && qaFakeResponseFile) {
-                    fakeContent = await new Promise((resolve, reject) => {
-                        const fr = new FileReader();
-                        fr.onload = () => { try { resolve(JSON.parse(fr.result)); } catch (e) { reject(e); } };
-                        fr.onerror = () => reject(new Error('Failed to read file'));
-                        fr.readAsText(qaFakeResponseFile);
-                    });
-                }
-                const bodyTable = { job_id: jobId, use_table_search: true, use_fake: useFake };
-                const bodyModel = { job_id: jobId, use_table_search: false, use_fake: useFake };
-                if (fakeContent) { bodyTable.fake_response_content = fakeContent; bodyModel.fake_response_content = fakeContent; }
+                const bodyTable = { job_id: jobId, use_table_search: true, use_fake: false };
+                const bodyModel = { job_id: jobId, use_table_search: false, use_fake: false };
                 const [tableRes, modelRes] = await Promise.all([
                     sendQARequest(bodyTable, resultsDivTable, null),
                     sendQARequest(bodyModel, resultsDivModel, null)
@@ -2189,7 +2012,8 @@ HTML_TEMPLATE = """
                 resultsDivTable.innerHTML = resultsDivTable.innerHTML.indexOf('❌') >= 0 ? resultsDivTable.innerHTML : '<div style="padding: 12px; color: #dc3545;">❌ ' + error.message + '</div>';
                 resultsDivModel.innerHTML = resultsDivModel.innerHTML.indexOf('❌') >= 0 ? resultsDivModel.innerHTML : '<div style="padding: 12px; color: #dc3545;">❌ ' + error.message + '</div>';
             }
-            restoreBtn();
+            qaBtn.disabled = false;
+            qaBtn.textContent = '💬 Generate Answer';
         }
         
         async function sendQARequest(requestBody, resultsDiv, qaBtn) {
@@ -2221,7 +2045,7 @@ HTML_TEMPLATE = """
                 
                 if (data.status === 'success') {
                     displayQAResults(data.qa, data.query, resultsDiv);
-                    if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
+                    if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer'; }
                     return { qa: data.qa, query: data.query };
                 } else {
                     resultsDiv.innerHTML = `
@@ -2229,7 +2053,7 @@ HTML_TEMPLATE = """
                             <strong>❌ QA Failed:</strong> ${data.message || 'Unknown error'}
                         </div>
                     `;
-                    if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
+                    if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer'; }
                     return null;
                 }
             } catch (error) {
@@ -2238,7 +2062,7 @@ HTML_TEMPLATE = """
                         <strong>❌ Error:</strong> ${error.message}
                     </div>
                 `;
-                if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer' + (qaBtn.id === 'qaBtn' ? ' (both)' : ''); }
+                if (qaBtn) { qaBtn.disabled = false; qaBtn.textContent = '💬 Generate Answer'; }
                 return null;
             }
         }
