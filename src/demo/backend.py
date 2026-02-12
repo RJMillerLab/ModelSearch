@@ -696,9 +696,17 @@ def integrate():
         if saved_path:
             result["saved_path"] = saved_path
         try:
+            save_payload = {
+                "status": "success",
+                "integration_type": integration_type,
+                "search_type": search_type,
+                "k": k,
+                "max_models": max_models,
+                **result,
+            }
             save_json = os.path.join(job_dir, "integration_table_search.json")
             with open(save_json, "w", encoding="utf-8") as f:
-                json.dump({"status": "success", **result}, f, ensure_ascii=False, indent=0)
+                json.dump(save_payload, f, ensure_ascii=False, indent=0)
         except Exception:
             pass
         return jsonify({"status": "success", **result})
@@ -765,9 +773,17 @@ def integrate_model_search():
         if saved_path:
             result["saved_path"] = saved_path
         try:
+            save_payload = {
+                "status": "success",
+                "integration_type": integration_type,
+                "card2card_retrieval_mode": card2card_retrieval_mode or "dense",
+                "k": k,
+                "max_models": max_models,
+                **result,
+            }
             save_json = os.path.join(job_dir, "integration_model_search.json")
             with open(save_json, "w", encoding="utf-8") as f:
-                json.dump({"status": "success", **result}, f, ensure_ascii=False, indent=0)
+                json.dump(save_payload, f, ensure_ascii=False, indent=0)
         except Exception:
             pass
         return jsonify({"status": "success", **result})

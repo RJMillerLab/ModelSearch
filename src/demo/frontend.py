@@ -614,15 +614,43 @@ HTML_TEMPLATE = """
             }
         }
         
+        function setIntegrationDropdownsFromSaved(modelRes, tableRes) {
+            const setSelect = (id, value) => {
+                const el = document.getElementById(id);
+                if (el && value != null && value !== '') {
+                    el.value = value;
+                }
+            };
+            const setInput = (id, value) => {
+                const el = document.getElementById(id);
+                if (el && value != null && value !== '') {
+                    el.value = value;
+                }
+            };
+            if (tableRes && (tableRes.integration_type != null || tableRes.search_type != null)) {
+                setSelect('integration_type', tableRes.integration_type);
+                setSelect('integration_search_type', tableRes.search_type);
+                setInput('integration_k', tableRes.k);
+                setInput('integration_max_models', tableRes.max_models);
+            }
+            if (modelRes && (modelRes.integration_type != null || modelRes.card2card_retrieval_mode != null)) {
+                setSelect('integration_type', modelRes.integration_type);
+                setSelect('integration_model_search_mode', modelRes.card2card_retrieval_mode);
+                setInput('integration_k', modelRes.k);
+                setInput('integration_max_models', modelRes.max_models);
+            }
+        }
+        
         function restoreIntegrationEvaluationQA(data) {
             const container = document.getElementById('integrationResultsContainer');
             const leftDiv = document.getElementById('integrationModelSearchResults');
             const rightDiv = document.getElementById('integrationResults');
-            if (data.integration_model_search && data.integration_table_search && container && leftDiv && rightDiv) {
-                const modelRes = data.integration_model_search;
-                const tableRes = data.integration_table_search;
+            const hasModel = data.integration_model_search && data.integration_model_search.status === 'success' && data.integration_model_search.integrated_table;
+            const hasTable = data.integration_table_search && data.integration_table_search.status === 'success' && data.integration_table_search.integrated_table;
+            if ((hasModel || hasTable) && container && leftDiv && rightDiv) {
                 container.style.display = 'block';
-                if (modelRes.status === 'success' && modelRes.integrated_table) {
+                if (hasModel) {
+                    const modelRes = data.integration_model_search;
                     const stats = modelRes.stats || {};
                     let extra = '';
                     if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
@@ -630,11 +658,17 @@ HTML_TEMPLATE = """
                     }
                     leftDiv.innerHTML = renderIntegrationTable(modelRes.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                     initTablePanZoom(leftDiv);
+                } else {
+                    leftDiv.innerHTML = '';
                 }
-                if (tableRes.status === 'success' && tableRes.integrated_table) {
+                if (hasTable) {
+                    const tableRes = data.integration_table_search;
                     rightDiv.innerHTML = renderIntegrationTable(tableRes.integrated_table, tableRes.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                     initTablePanZoom(rightDiv);
+                } else {
+                    rightDiv.innerHTML = '';
                 }
+                setIntegrationDropdownsFromSaved(data.integration_model_search, data.integration_table_search);
             }
             if (data.evaluation_results && data.evaluation_results.evaluation) {
                 const resultsDiv = document.getElementById('evaluationResults');
