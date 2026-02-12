@@ -831,14 +831,243 @@ def integrate_model_search():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+def _load_integrated_table_from_json(job_dir: str, json_name: str) -> Optional[pd.DataFrame]:
+    """Load integrated table from integration JSON (has integrated_table with columns + data)."""
+    path = os.path.join(job_dir, json_name)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        tbl = data.get("integrated_table")
+        if not tbl:
+            return None
+        cols = tbl.get("columns") or []
+        rows = tbl.get("data") or []
+        if not cols and not rows:
+            return None
+        return pd.DataFrame(rows, columns=cols) if cols else pd.DataFrame(rows)
+    except Exception:
+        return None
+
+
+def _load_integrated_table_from_csv(job_dir: str, csv_name: str) -> Optional[pd.DataFrame]:
+    """Load integrated table from CSV file."""
+    path = os.path.join(job_dir, csv_name)
+    if not os.path.exists(path):
+        return None
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return None
+
+
 @app.route("/api/evaluate", methods=["POST"])
 def evaluate():
-    return jsonify({"status": "error", "message": "Use legacy backend for evaluation"}), 501
+    """Evaluate diversity between Table Search and Model Search integrated tables using LLM."""
+    data = request.get_json() or {}
+    job_id = data.get("job_id")
+    use_fake = bool(data.get("use_fake", False))
+
+    if not job_id:
+        return jsonify({"status": "error", "message": "job_id required"}), 400
+
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    if not os.path.isdir(job_dir):
+        return jsonify({"status": "error", "message": f"Job directory not found: {job_id}"}), 404
+
+    # Load integrated tables: table1 = Table Search, table2 = Model Search
+    table1_df = _load_integrated_table_from_json(job_dir, "integration_table_search.json")
+    if table1_df is None:
+        table1_df = _load_integrated_table_from_csv(job_dir, "integrated_table_search.csv")
+    table2_df = _load_integrated_table_from_json(job_dir, "integration_model_search.json")
+    if table2_df is None:
+        table2_df = _load_integrated_table_from_csv(job_dir, "integrated_model_search.csv")
+
+    if table1_df is None or table1_df.empty:
+        return jsonify({"status": "error", "message": "Table Search integration not found. Please run Table Search integration first."}), 400
+    if table2_df is None or table2_df.empty:
+        return jsonify({"status": "error", "message": "Model Search integration not found. Please run Model Search integration first."}), 400
+
+    # Load query from search results
+    results_file = os.path.join(job_dir, "search_results.json")
+    query = "model search query"
+    if os.path.exists(results_file):
+        try:
+            with open(results_file, "r", encoding="utf-8") as f:
+                sr = json.load(f)
+            query = sr.get("query") or query
+        except Exception:
+            pass
+
+    try:
+        sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+        from evaluation.llm import evaluate_diversity_with_llm
+
+        result = evaluate_diversity_with_llm(
+            query=query,
+            table1=table1_df,
+            table2=table2_df,
+            table1_source="Table Search Integration",
+            table2_source="Model Search Integration",
+            use_fake=use_fake,
+        )
+    except ValueError as ve:
+        # LLM API unavailable - fallback to fake
+        try:
+            from evaluation.llm import evaluate_diversity_with_llm, load_fake_response
+            result = evaluate_diversity_with_llm(
+                query=query, table1=table1_df, table2=table2_df,
+                table1_source="Table Search Integration",
+                table2_source="Model Search Integration",
+                use_fake=True,
+            )
+            if "fallback_reason" not in result:
+                result["fallback_reason"] = str(ve)
+        except Exception as e2:
+            return jsonify({"status": "error", "message": f"Evaluation failed: {str(ve)}"}), 500
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"Evaluation failed: {str(e)}"}), 500
+
+    # Convert DataFrames to frontend format for optional display
+    def _df_to_dict(df: pd.DataFrame) -> Optional[Dict]:
+        if df is None or df.empty:
+            return None
+        return {"columns": list(df.columns), "data": _sanitize_for_json(df.values.tolist())}
+
+    return jsonify({
+        "status": "success",
+        "evaluation": result,
+        "table1": _df_to_dict(table1_df),
+        "table2": _df_to_dict(table2_df),
+    })
 
 
 @app.route("/api/qa", methods=["POST"])
 def qa():
-    return jsonify({"status": "error", "message": "Use legacy backend for QA"}), 501
+    """Answer question based on integrated table using LLM."""
+    data = request.get_json() or {}
+    job_id = data.get("job_id")
+    use_table_search = bool(data.get("use_table_search", True))
+    use_fake = bool(data.get("use_fake", False))
+
+    if not job_id:
+        return jsonify({"status": "error", "message": "job_id required"}), 400
+
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    if not os.path.isdir(job_dir):
+        return jsonify({"status": "error", "message": f"Job directory not found: {job_id}"}), 404
+
+    # Load the appropriate integrated table
+    if use_table_search:
+        table_df = _load_integrated_table_from_json(job_dir, "integration_table_search.json")
+        if table_df is None:
+            table_df = _load_integrated_table_from_csv(job_dir, "integrated_table_search.csv")
+        table_source = "Table Search Integration"
+        qa_mode = "card2tab2card"
+    else:
+        table_df = _load_integrated_table_from_json(job_dir, "integration_model_search.json")
+        if table_df is None:
+            table_df = _load_integrated_table_from_csv(job_dir, "integrated_model_search.csv")
+        table_source = "Model Search Integration"
+        qa_mode = "card2card"
+
+    if table_df is None:
+        table_df = pd.DataFrame()
+
+    # Load query and search results from job
+    results_file = os.path.join(job_dir, "search_results.json")
+    query = "model search query"
+    search_results_data = None
+    model_ids_to_rank = None
+
+    if os.path.exists(results_file):
+        try:
+            with open(results_file, "r", encoding="utf-8") as f:
+                sr = json.load(f)
+            query = sr.get("query") or query
+            search_results_data = sr
+
+            # Extract model_ids for ranking
+            if use_table_search:
+                c2t2c = sr.get("card2tab2card_results") or {}
+                for stype, st_data in c2t2c.items():
+                    mids = st_data.get("model_ids") if isinstance(st_data, dict) else (st_data if isinstance(st_data, list) else [])
+                    if mids:
+                        model_ids_to_rank = list(mids)[:50]
+                        break
+            else:
+                modes = sr.get("card2card_all_modes") or {}
+                # Try retrieval_mode first (e.g. dense), then any non-empty mode
+                rmode = sr.get("card2card_retrieval_mode", "dense")
+                model_ids_to_rank = modes.get(rmode)
+                if isinstance(model_ids_to_rank, dict) and "error" in model_ids_to_rank:
+                    model_ids_to_rank = None
+                elif model_ids_to_rank is not None and not isinstance(model_ids_to_rank, list):
+                    model_ids_to_rank = list(model_ids_to_rank)[:50] if model_ids_to_rank else None
+                elif model_ids_to_rank:
+                    model_ids_to_rank = list(model_ids_to_rank)[:50]
+                if not model_ids_to_rank:
+                    for mode_key, mode_list in modes.items():
+                        if mode_list and isinstance(mode_list, list) and not (isinstance(mode_list, dict) and "error" in mode_list):
+                            model_ids_to_rank = list(mode_list)[:50]
+                            break
+
+            # Fallback: extract model_id from integrated table
+            if not model_ids_to_rank and not table_df.empty:
+                for col in ["model_id", "modelId", "model"]:
+                    if col in table_df.columns:
+                        model_ids_to_rank = table_df[col].dropna().astype(str).unique().tolist()[:50]
+                        break
+        except Exception:
+            pass
+
+    try:
+        sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+        from qa.llm import answer_question_with_llm
+
+        result = answer_question_with_llm(
+            query=query,
+            table=table_df,
+            table_source=table_source,
+            qa_mode=qa_mode,
+            model_ids_to_rank=model_ids_to_rank,
+            search_results_data=search_results_data,
+            use_fake=use_fake,
+        )
+    except ValueError as ve:
+        # LLM API unavailable - fallback to fake
+        try:
+            from qa.llm import answer_question_with_llm, load_fake_response
+            result = answer_question_with_llm(
+                query=query,
+                table=table_df,
+                table_source=table_source,
+                qa_mode=qa_mode,
+                model_ids_to_rank=model_ids_to_rank,
+                search_results_data=search_results_data,
+                use_fake=True,
+            )
+        except Exception as e2:
+            return jsonify({"status": "error", "message": f"QA failed: {str(ve)}"}), 500
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"QA failed: {str(e)}"}), 500
+
+    qa_answer = result.get("answer")
+    if isinstance(qa_answer, dict):
+        pass
+    else:
+        qa_answer = {"answer": str(qa_answer) if qa_answer else "No answer provided", "model_ranking": [], "summary": {}, "confidence": "medium", "limitations": []}
+
+    return jsonify({
+        "status": "success",
+        "qa": qa_answer,
+        "query": query,
+    })
 
 
 @app.route("/api/save-integration-run", methods=["POST"])
