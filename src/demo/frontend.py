@@ -992,7 +992,8 @@ HTML_TEMPLATE = """
             // Generate unique IDs for expandable sections
             const card2cardMoreId = 'card2card-more-' + Date.now();
             const card2tab2cardIds = {};
-            Object.keys(results.card2tab2card_results).forEach((type, idx) => {
+            const card2tab2cardResults = results.card2tab2card_results || {};
+            Object.keys(card2tab2cardResults).forEach((type, idx) => {
                 card2tab2cardIds[type] = 'card2tab2card-' + type + '-' + Date.now() + '-' + idx;
             });
             
@@ -1070,7 +1071,7 @@ HTML_TEMPLATE = """
                                 'keyword': 'keyword',
                                 'unionable': 'unionable'
                             };
-                            const entries = Object.entries(results.card2tab2card_results)
+                            const entries = Object.entries(card2tab2cardResults)
                                 .filter(([type, data]) => allowedTypes.includes(type))
                                 .map(([type, data]) => {
                                     const models = Array.isArray(data) ? data : (data.model_ids || []);
@@ -1078,8 +1079,10 @@ HTML_TEMPLATE = """
                                     return { type, displayName, data, models, count: models.length };
                                 })
                                 .sort((a, b) => b.count - a.count); // Sort by count descending
+                            const firstJoinableIdx = entries.findIndex(e => e.type === 'single_column' || e.type === 'multi_column');
+                            const isFirstJoinable = (idx) => firstJoinableIdx >= 0 && idx === firstJoinableIdx;
                             
-                            return entries.map(({type, displayName, data, models}) => {
+                            return entries.map(({type, displayName, data, models}, entryIdx) => {
                             const sectionId = card2tab2cardIds[type];
                             // Handle both old format (array) and new format (object with model_ids and intermediate)
                             const intermediate = data.intermediate || {};
@@ -1115,9 +1118,10 @@ HTML_TEMPLATE = """
                                 });
                             });
                             
+                            const shouldExpandJoinable = isFirstJoinable(entryIdx) && models.length > 0;
                             return `
                                 <div class="search-type-section">
-                                    <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
+                                    <div class="search-type-header ${shouldExpandJoinable ? 'expanded' : ''}" onclick="toggleSearchType('${sectionId}', this)" style="${shouldExpandJoinable ? 'background: #e7f3ff;' : ''}">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px;">
                                             ${displayName}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">
@@ -1125,29 +1129,35 @@ HTML_TEMPLATE = """
                                             </span>
                                         </h4>
                                     </div>
-                                    <div class="collapsible-content" id="${sectionId}">
+                                    <div class="collapsible-content ${shouldExpandJoinable ? 'expanded' : ''}" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
-                                            ${models.length > 0 ? models.map((m, idx) => {
+                                            ${models.length > 0 ? (() => {
+                                                const displayCount = 10;
+                                                const visibleModels = models.slice(0, displayCount);
+                                                const moreModels = models.slice(displayCount);
+                                                const firstModelWithTables = shouldExpandJoinable ? visibleModels.findIndex(m => {
+                                                    const mid = typeof m === 'string' ? m : (m.model_id || m);
+                                                    return (modelToTables[String(mid).trim()] || []).length > 0;
+                                                }) : -1;
+                                                return visibleModels.map((m, idx) => {
                                                 let modelId = typeof m === 'string' ? m : (m.model_id || m);
-                                                // Normalize modelId: trim whitespace and ensure it's a string
                                                 modelId = String(modelId).trim();
                                                 const modelUrl = typeof m === 'string' ? `https://huggingface.co/${modelId}` : (m.url || `https://huggingface.co/${modelId}`);
                                                 const modelTables = modelToTables[modelId] || [];
                                                 const modelExpandId = `${sectionId}-model-${idx}`;
                                                 const hasTables = modelTables.length > 0;
+                                                const expandFirstModel = shouldExpandJoinable && hasTables && firstModelWithTables === idx;
                                                 
                                                 return `
                                                     <li class="result-item" style="margin-bottom: 4px;">
                                                         <div style="display: flex; align-items: center;">
-                                                            <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 6px; ${hasTables ? '' : 'display: none;'}">
-                                                                ▶
-                                                            </span>
+                                                            <span class="expand-toggle ${expandFirstModel ? 'expanded' : ''}" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 6px; ${hasTables ? '' : 'display: none;'}">${expandFirstModel ? '▼' : '▶'}</span>
                                                             <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">
                                                                 ${modelId}
                                                             </a>
                                                         </div>
                                                         ${hasTables ? `
-                                                            <div class="collapsible-content" id="${modelExpandId}" style="margin-left: 15px; margin-top: 2px; display: none;">
+                                                            <div class="collapsible-content ${expandFirstModel ? 'expanded' : ''}" id="${modelExpandId}" style="margin-left: 15px; margin-top: 2px; ${expandFirstModel ? 'display: block;' : 'display: none;'}">
                                                                 <div style="font-size: 10px; color: #666;">
                                                                     <strong>From Tables (${modelTables.length}):</strong>
                                                                     <div style="margin-top: 2px; padding: 4px; background: #f8f9fa; border-radius: 4px; max-height: 200px; overflow-y: auto;">
@@ -1183,7 +1193,36 @@ HTML_TEMPLATE = """
                                                         ` : ''}
                                                     </li>
                                                 `;
-                                            }).join('') : '<li>No results</li>'}
+                                            }).join('')}${moreModels.length > 0 ? `
+                                                    <li>
+                                                        <div class="collapsible-content" id="${sectionId}-more" style="display: none;">
+                                                            <ul class="result-list" style="list-style: none; padding: 0; margin: 0;">
+                                                            ${moreModels.map((m, idx) => {
+                                                                const realIdx = displayCount + idx;
+                                                                let modelId = typeof m === 'string' ? m : (m.model_id || m);
+                                                                modelId = String(modelId).trim();
+                                                                const modelUrl = typeof m === 'string' ? `https://huggingface.co/${modelId}` : (m.url || `https://huggingface.co/${modelId}`);
+                                                                const modelTables = modelToTables[modelId] || [];
+                                                                const modelExpandId = `${sectionId}-model-${realIdx}`;
+                                                                const hasTables = modelTables.length > 0;
+                                                                return `<li class="result-item" style="margin-bottom: 4px;">
+                                                                    <div style="display: flex; align-items: center;">
+                                                                        <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 6px; ${hasTables ? '' : 'display: none;'}">▶</span>
+                                                                        <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">${modelId}</a>
+                                                                    </div>
+                                                                    ${hasTables ? `<div class="collapsible-content" id="${modelExpandId}" style="margin-left: 15px; margin-top: 2px; display: none;"><div style="font-size: 10px; color: #666;"><strong>From Tables (${modelTables.length}):</strong><div style="margin-top: 2px; padding: 4px; background: #f8f9fa; border-radius: 4px;">${modelTables.map(table => {
+                                                                        const esc = String(table).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                                                        return `<div style="padding: 1px 0; border-bottom: 1px solid #dee2e6;"><span style="font-size: 8px; color: #999; font-family: monospace;">${table}</span><button onclick="copyTablePath('${esc}', this)" style="padding: 2px 4px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer;">📋</button></div>`;
+                                                                    }).join('')}</div></div></div>` : ''}
+                                                                </li>`;
+                                                            }).join('')}
+                                                            </ul>
+                                                        </div>
+                                                    </li>
+                                                    <li>
+                                                        <span class="expand-toggle" onclick="toggleExpand('${sectionId}-more', this)">Show ${moreModels.length} more</span>
+                                                    </li>
+                                            ` : ''}`)() : '<li>No results</li>'}
                                         </ul>
                                     </div>
                                 </div>
