@@ -1691,120 +1691,77 @@ HTML_TEMPLATE = """
         
         function displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data) {
             if (!resultsDiv) return;
-            
             resultsDiv.style.display = 'block';
-            
-            // Get comparison scores - Note: model_search is LEFT, table_search is RIGHT
+            const totalScore = eval_result.total_quality_score || {};
             const comparisonScore = eval_result.comparison_score || {};
-            const modelSearchScore = comparisonScore.model_search_quality || eval_result.model_search_quality || 'N/A';
-            const tableSearchScore = comparisonScore.table_search_quality || eval_result.table_search_quality || 'N/A';
-            const winner = comparisonScore.winner || eval_result.winner || 'N/A';
-            const difference = comparisonScore.overall_difference || eval_result.overall_difference || 'N/A';
-            
+            const modelSearchScore = totalScore.model_search ?? comparisonScore.model_search_quality ?? eval_result.model_search_quality ?? 'N/A';
+            const tableSearchScore = totalScore.table_search ?? comparisonScore.table_search_quality ?? eval_result.table_search_quality ?? 'N/A';
+            const winner = totalScore.winner || comparisonScore.winner || eval_result.winner || 'N/A';
+            const subScores = eval_result.sub_scores || [];
             const qualityAnalysis = eval_result.quality_analysis || {};
             const modelSearchAnalysis = qualityAnalysis.model_search || {};
             const tableSearchAnalysis = qualityAnalysis.table_search || {};
-            
+            const keyDiffs = eval_result.key_differences || [];
+            const evidenceForDiffs = eval_result.evidence_for_differences || '';
             let html = `
                 <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
-                    <h4 style="margin-top: 0; color: #ffc107; margin-bottom: 15px;">📊 Quality Comparison - Table Search vs Model Search</h4>
-                    
-                    <!-- Quality Score Comparison - Left: Model Search, Right: Table Search -->
+                    <h4 style="margin-top: 0; color: #856404; margin-bottom: 15px;">📊 Quality Comparison (on user question)</h4>
                     <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                             <div style="padding: 15px; background: ${winner === 'model_search' ? '#d4edda' : '#e7f3ff'}; border-radius: 4px; border: 2px solid ${winner === 'model_search' ? '#28a745' : '#007bff'};">
-                                <div style="font-size: 14px; color: #666; margin-bottom: 5px;">Model Search Quality</div>
-                                <div style="font-size: 32px; font-weight: bold; color: ${winner === 'model_search' ? '#28a745' : '#004085'};">
-                                    ${modelSearchScore}/100
-                                </div>
-                                ${winner === 'model_search' ? '<div style="font-size: 11px; color: #28a745; margin-top: 5px;">🏆 Winner</div>' : ''}
+                                <div style="font-size: 14px; color: #666;">Model Search</div>
+                                <div style="font-size: 28px; font-weight: bold; color: ${winner === 'model_search' ? '#28a745' : '#004085';">${modelSearchScore}/100</div>
+                                ${winner === 'model_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
                             </div>
                             <div style="padding: 15px; background: ${winner === 'table_search' ? '#d4edda' : '#fff3cd'}; border-radius: 4px; border: 2px solid ${winner === 'table_search' ? '#28a745' : '#ffc107'};">
-                                <div style="font-size: 14px; color: #666; margin-bottom: 5px;">Table Search Quality</div>
-                                <div style="font-size: 32px; font-weight: bold; color: ${winner === 'table_search' ? '#28a745' : '#856404'};">
-                                    ${tableSearchScore}/100
-                                </div>
-                                ${winner === 'table_search' ? '<div style="font-size: 11px; color: #28a745; margin-top: 5px;">🏆 Winner</div>' : ''}
-                            </div>
-                        </div>
-                        <div style="text-align: center; padding: 10px; background: white; border-radius: 4px;">
-                            <div style="font-size: 14px; color: #666;">Quality Difference</div>
-                            <div style="font-size: 20px; font-weight: bold; color: #dc3545;">
-                                ${difference > 0 ? '+' : ''}${difference} points
+                                <div style="font-size: 14px; color: #666;">Table Search</div>
+                                <div style="font-size: 28px; font-weight: bold; color: ${winner === 'table_search' ? '#28a745' : '#856404';">${tableSearchScore}/100</div>
+                                ${winner === 'table_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
                             </div>
                         </div>
                     </div>
-                    
-                    <!-- Quality Analysis - Left: Model Search, Right: Table Search -->
+                    ${subScores.length > 0 ? `
+                    <div style="margin-bottom: 20px;">
+                        <h5 style="margin: 0 0 10px 0; color: #856404; font-size: 13px;">Sub-scores (Relevance, Coverage, Diversity)</h5>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            ${subScores.map(ss => `
+                                <div style="padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #ffc107;">
+                                    <div style="font-weight: 600; font-size: 12px;">${ss.name}</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-top: 4px;">
+                                        <span>Model Search: <strong>${ss.model_search ?? '–'}/100</strong></span>
+                                        <span>Table Search: <strong>${ss.table_search ?? '–'}/100</strong></span>
+                                    </div>
+                                    ${ss.evidence ? `<div style="font-size: 11px; color: #666; margin-top: 6px;">Evidence: ${ss.evidence}</div>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
                         <div style="padding: 15px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
-                            <h5 style="margin-top: 0; color: #004085;">Model Search Analysis</h5>
-                            ${modelSearchAnalysis.summary ? `<p style="font-size: 12px; margin-bottom: 10px;">${modelSearchAnalysis.summary}</p>` : ''}
-                            ${modelSearchAnalysis.strengths && modelSearchAnalysis.strengths.length > 0 ? `
-                                <div style="margin-top: 10px;">
-                                    <strong style="font-size: 12px; color: #28a745;">Strengths:</strong>
-                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
-                                        ${modelSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}
-                                    </ul>
-                                </div>
-                            ` : ''}
-                            ${modelSearchAnalysis.weaknesses && modelSearchAnalysis.weaknesses.length > 0 ? `
-                                <div style="margin-top: 10px;">
-                                    <strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong>
-                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
-                                        ${modelSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}
-                                    </ul>
-                                </div>
-                            ` : ''}
+                            <h5 style="margin-top: 0; color: #004085; font-size: 13px;">Model Search</h5>
+                            ${modelSearchAnalysis.strengths && modelSearchAnalysis.strengths.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${modelSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}</ul></div>` : ''}
+                            ${modelSearchAnalysis.weaknesses && modelSearchAnalysis.weaknesses.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${modelSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}</ul></div>` : ''}
                         </div>
                         <div style="padding: 15px; background: #fff3cd; border-radius: 4px; border-left: 4px solid #ffc107;">
-                            <h5 style="margin-top: 0; color: #856404;">Table Search Analysis</h5>
-                            ${tableSearchAnalysis.summary ? `<p style="font-size: 12px; margin-bottom: 10px;">${tableSearchAnalysis.summary}</p>` : ''}
-                            ${tableSearchAnalysis.strengths && tableSearchAnalysis.strengths.length > 0 ? `
-                                <div style="margin-top: 10px;">
-                                    <strong style="font-size: 12px; color: #28a745;">Strengths:</strong>
-                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
-                                        ${tableSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}
-                                    </ul>
-                                </div>
-                            ` : ''}
-                            ${tableSearchAnalysis.weaknesses && tableSearchAnalysis.weaknesses.length > 0 ? `
-                                <div style="margin-top: 10px;">
-                                    <strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong>
-                                    <ul style="font-size: 11px; margin: 5px 0 0 0; padding-left: 20px;">
-                                        ${tableSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}
-                                    </ul>
-                                </div>
-                            ` : ''}
+                            <h5 style="margin-top: 0; color: #856404; font-size: 13px;">Table Search</h5>
+                            ${tableSearchAnalysis.strengths && tableSearchAnalysis.strengths.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${tableSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}</ul></div>` : ''}
+                            ${tableSearchAnalysis.weaknesses && tableSearchAnalysis.weaknesses.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${tableSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}</ul></div>` : ''}
                         </div>
                     </div>
-                    
-                    <!-- Comparison Summary -->
-                    ${eval_result.comparison_summary ? `
-                        <div style="margin-top: 15px; padding: 12px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
-                            <strong>Comparison Summary:</strong>
-                            <p style="margin: 8px 0 0 0; font-size: 13px; line-height: 1.6;">${eval_result.comparison_summary}</p>
-                        </div>
+                    ${keyDiffs.length > 0 ? `
+                    <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px;">
+                        <strong style="font-size: 13px;">Key differences</strong>
+                        <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px;">${keyDiffs.map(d => `<li>${d}</li>`).join('')}</ul>
+                    </div>
                     ` : ''}
-                    ${eval_result.key_differences && eval_result.key_differences.length > 0 ? `
-                        <div style="margin-top: 15px; padding: 12px; background: #e7f3ff; border-radius: 4px;">
-                            <strong>Key Differences:</strong>
-                            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px;">
-                                ${eval_result.key_differences.map(diff => `<li>${diff}</li>`).join('')}
-                            </ul>
-                        </div>
+                    ${evidenceForDiffs ? `
+                    <div style="margin-top: 12px; padding: 12px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
+                        <strong style="font-size: 12px;">Evidence for the above</strong>
+                        <p style="margin: 6px 0 0 0; font-size: 12px; line-height: 1.5;">${evidenceForDiffs}</p>
+                    </div>
                     ` : ''}
-                    ${eval_result.recommendation ? `
-                        <div style="margin-top: 15px; padding: 12px; background: #d4edda; border-radius: 4px; border-left: 4px solid #28a745;">
-                            <strong>Recommendation:</strong>
-                            <p style="margin: 8px 0 0 0; font-size: 13px; line-height: 1.6;">${eval_result.recommendation}</p>
-                        </div>
-                    ` : ''}
-                    ${eval_result.source ? `
-                        <div style="margin-top: 10px; font-size: 11px; color: #999; font-style: italic;">
-                            Source: ${eval_result.source}
-                        </div>
-                    ` : ''}
+                    ${eval_result.source ? `<div style="margin-top: 10px; font-size: 11px; color: #999;">Source: ${eval_result.source}</div>` : ''}
                 </div>
             `;
             resultsDiv.innerHTML = html;
@@ -1826,7 +1783,9 @@ HTML_TEMPLATE = """
             qaResultsModel.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
             [btn, evaluationBtn, qaBtn].forEach(b => { if (b) { b.disabled = true; } });
             try {
-                const evalPromise = sendEvaluationRequest({ job_id: jobId, use_fake: false }, evalResultsDiv, null);
+                const evalBody = { job_id: jobId, use_fake: false };
+                if (window.__selectedIntegrationKey) evalBody.integration_run_key = window.__selectedIntegrationKey;
+                const evalPromise = sendEvaluationRequest(evalBody, evalResultsDiv, null);
                 const qaTablePromise = sendQARequest({ job_id: jobId, use_table_search: true, use_fake: false }, qaResultsTable, null);
                 const qaModelPromise = sendQARequest({ job_id: jobId, use_table_search: false, use_fake: false }, qaResultsModel, null);
                 const [, qaTableRes, qaModelRes] = await Promise.all([evalPromise, qaTablePromise, qaModelPromise]);
@@ -1852,7 +1811,9 @@ HTML_TEMPLATE = """
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running evaluation...</div>';
             try {
-                await sendEvaluationRequest({ job_id: jobId, use_fake: false }, resultsDiv, evaluationBtn);
+                const body = { job_id: jobId, use_fake: false };
+                if (window.__selectedIntegrationKey) body.integration_run_key = window.__selectedIntegrationKey;
+                await sendEvaluationRequest(body, resultsDiv, evaluationBtn);
             } catch (error) {
                 resultsDiv.innerHTML = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545;"><strong>❌ Error:</strong> ${error.message}</div>`;
                 evaluationBtn.disabled = false;

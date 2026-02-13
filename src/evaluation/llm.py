@@ -269,46 +269,34 @@ def load_fake_response(fake_response_path: Optional[str] = None) -> Dict[str, An
         fake_response_path = "data/evaluation_fake_response.json"
     
     if not os.path.exists(fake_response_path):
-        # Return default fake response with comparison format
+        # Default fake response: total + sub_scores (relevance, coverage, diversity), strengths/weaknesses, key_differences, evidence
         return {
             "success": True,
-            "comparison_score": {
-                "model_search_quality": 72,
-                "table_search_quality": 85,
-                "overall_difference": 13,
+            "total_quality_score": {
+                "table_search": 85,
+                "model_search": 72,
                 "winner": "table_search"
             },
+            "sub_scores": [
+                {"name": "Relevance", "table_search": 88, "model_search": 75, "evidence": "Table Search: 12/15 rows match query terms; Model Search: 5/10."},
+                {"name": "Coverage", "table_search": 82, "model_search": 70, "evidence": "Table Search covers 8 distinct model families vs 4 in Model Search."},
+                {"name": "Diversity", "table_search": 85, "model_search": 72, "evidence": "Table Search includes 6 table types (benchmark, metadata, etc.); Model Search 2."}
+            ],
             "quality_analysis": {
-                "model_search": {
-                    "score": 72,
-                    "strengths": [
-                        "Broader model coverage",
-                        "Includes popular models"
-                    ],
-                    "weaknesses": [
-                        "Less structured data format",
-                        "More missing values"
-                    ],
-                    "summary": "Model Search provides broader coverage but with lower data quality."
-                },
                 "table_search": {
-                    "score": 85,
-                    "strengths": [
-                        "More structured and consistent data format",
-                        "Better coverage of technical specifications"
-                    ],
-                    "weaknesses": [
-                        "Limited to models with available table data"
-                    ],
-                    "summary": "Table Search provides higher quality results with better structured data."
+                    "strengths": ["More structured data", "Better coverage of technical specs"],
+                    "weaknesses": ["Limited to models with table data"]
+                },
+                "model_search": {
+                    "strengths": ["Broader model coverage", "Includes popular models"],
+                    "weaknesses": ["Less structured format", "More missing values"]
                 }
             },
             "key_differences": [
-                "Table Search has 13% higher quality score",
-                "Table Search provides better structured data"
+                "Table Search has higher relevance and diversity for the user question.",
+                "Table Search provides more varied table types and structured columns."
             ],
-            "recommendation": "Table Search Integration is recommended for higher quality results.",
-            "comparison_summary": "Table Search outperforms Model Search by 13 points in quality.",
+            "evidence_for_differences": "Table Search integrated table has more non-null columns (8 vs 5) and rows mentioning query-related terms (12 vs 5). Diversity: 6 distinct table types in Table Search vs 2 in Model Search.",
             "source": "fake_response"
         }
     

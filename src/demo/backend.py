@@ -991,11 +991,34 @@ def _load_integrated_table_from_csv(job_dir: str, csv_name: str) -> Optional[pd.
         return None
 
 
+def _load_tables_from_integration_run(job_dir: str, run_key: str):
+    """Load (table1_df, table2_df) from integration_run_<key>.json. table1=Table Search, table2=Model Search."""
+    safe_key = re.sub(r"[^a-z0-9_]", "_", (run_key or "").lower().strip()) or "run"
+    path = os.path.join(job_dir, f"integration_run_{safe_key}.json")
+    if not os.path.isfile(path):
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            run_data = json.load(f)
+        t_res = run_data.get("table_result") or {}
+        m_res = run_data.get("model_result") or {}
+        tbl1 = (t_res.get("integrated_table") or {})
+        tbl2 = (m_res.get("integrated_table") or {})
+        cols1, rows1 = tbl1.get("columns") or [], tbl1.get("data") or []
+        cols2, rows2 = tbl2.get("columns") or [], tbl2.get("data") or []
+        df1 = pd.DataFrame(rows1, columns=cols1) if cols1 or rows1 else pd.DataFrame()
+        df2 = pd.DataFrame(rows2, columns=cols2) if cols2 or rows2 else pd.DataFrame()
+        return (df1 if not df1.empty else None), (df2 if not df2.empty else None)
+    except Exception:
+        return None, None
+
+
 @app.route("/api/evaluate", methods=["POST"])
 def evaluate():
-    """Evaluate diversity between Table Search and Model Search integrated tables using LLM."""
+    """Evaluate quality (relevance, coverage, diversity) between Table Search and Model Search integrated tables using LLM."""
     data = request.get_json() or {}
     job_id = data.get("job_id")
+    integration_run_key = data.get("integration_run_key")
     use_fake = bool(data.get("use_fake", False))
 
     if not job_id:
@@ -1006,12 +1029,16 @@ def evaluate():
         return jsonify({"status": "error", "message": f"Job directory not found: {job_id}"}), 404
 
     # Load integrated tables: table1 = Table Search, table2 = Model Search
-    table1_df = _load_integrated_table_from_json(job_dir, "integration_table_search.json")
-    if table1_df is None:
-        table1_df = _load_integrated_table_from_csv(job_dir, "integrated_table_search.csv")
-    table2_df = _load_integrated_table_from_json(job_dir, "integration_model_search.json")
-    if table2_df is None:
-        table2_df = _load_integrated_table_from_csv(job_dir, "integrated_model_search.csv")
+    table1_df, table2_df = None, None
+    if integration_run_key:
+        table1_df, table2_df = _load_tables_from_integration_run(job_dir, integration_run_key)
+    if table1_df is None or table2_df is None:
+        table1_df = _load_integrated_table_from_json(job_dir, "integration_table_search.json")
+        if table1_df is None:
+            table1_df = _load_integrated_table_from_csv(job_dir, "integrated_table_search.csv")
+        table2_df = _load_integrated_table_from_json(job_dir, "integration_model_search.json")
+        if table2_df is None:
+            table2_df = _load_integrated_table_from_csv(job_dir, "integrated_model_search.csv")
 
     if table1_df is None or table1_df.empty:
         return jsonify({"status": "error", "message": "Table Search integration not found. Please run Table Search integration first."}), 400

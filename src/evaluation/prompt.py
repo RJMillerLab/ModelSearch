@@ -1,6 +1,8 @@
 """
-Prompt templates for LLM-based evaluation
+Prompt templates for LLM-based evaluation of integrated table quality (Table Search vs Model Search).
+Metrics: Relevance, Coverage, Diversity (IR-backed); total score = composition of sub-scores.
 """
+
 
 def get_diversity_evaluation_prompt(
     query: str,
@@ -10,24 +12,13 @@ def get_diversity_evaluation_prompt(
     table2_source: str = "Model Search Integration"
 ) -> str:
     """
-    Generate prompt for evaluating diversity between two integrated tables.
-    
-    Args:
-        query: Original search query
-        table1_serialized: Serialized representation of first table (CSV format or description)
-        table2_serialized: Serialized representation of second table (CSV format or description)
-        table1_source: Description of where table1 came from
-        table2_source: Description of where table2 came from
-    
-    Returns:
-        Formatted prompt string for LLM
+    Generate prompt for quality comparison of two integrated tables given the user question.
+    Output: total_quality_score, sub_scores (relevance, coverage, diversity with evidence),
+    quality_analysis (strengths/weaknesses only), key_differences, evidence_for_differences.
     """
-    prompt = f"""You are an expert data analyst evaluating the diversity of two integrated tables from a model search system.
+    prompt = f"""You are an expert data analyst evaluating the QUALITY of two integrated tables from a model search system, given the user's question.
 
-## Task
-Compare two integrated tables and provide a diversity score (0-100) and detailed analysis.
-
-## Original Query
+## User question
 {query}
 
 ## Table 1: {table1_source}
@@ -36,54 +27,67 @@ Compare two integrated tables and provide a diversity score (0-100) and detailed
 ## Table 2: {table2_source}
 {table2_serialized}
 
-## Evaluation Criteria
-Please compare the QUALITY of results from these two search methods:
-1. **Data Quality**: Completeness, consistency, structure
-2. **Relevance**: How well results match the query
-3. **Coverage**: Breadth and depth of information
-4. **Usefulness**: Practical value for the user's needs
+## Task
+Compare the quality of the two integrated tables with respect to the user question. Use information-retrieval style metrics so conclusions are evidence-based.
 
-## Output Format
-Please provide your evaluation in the following JSON format:
+## Metrics (score each 0–100 per table; provide brief evidence)
+
+1. **Relevance**: How well does the table content match the user question? (IR: relevance of retrieved items to query.)
+2. **Coverage**: Breadth of information (distinct models, tasks, or aspects covered). (IR: recall-like.)
+3. **Diversity**: Variety and non-redundancy of content. (IR: diversity / novelty.)
+
+For each metric, give table_search and model_search scores and a short evidence sentence (e.g. counts, column names, examples).
+
+## Output format (strict JSON only)
 {{
-    "comparison_score": {{
-        "table_search_quality": <number between 0-100>,
-        "model_search_quality": <number between 0-100>,
-        "overall_difference": <difference in scores>,
+    "total_quality_score": {{
+        "table_search": <0-100>,
+        "model_search": <0-100>,
         "winner": "<table_search or model_search>"
     }},
+    "sub_scores": [
+        {{
+            "name": "Relevance",
+            "table_search": <0-100>,
+            "model_search": <0-100>,
+            "evidence": "<one short sentence with numbers or examples>"
+        }},
+        {{
+            "name": "Coverage",
+            "table_search": <0-100>,
+            "model_search": <0-100>,
+            "evidence": "<one short sentence>"
+        }},
+        {{
+            "name": "Diversity",
+            "table_search": <0-100>,
+            "model_search": <0-100>,
+            "evidence": "<one short sentence>"
+        }}
+    ],
     "quality_analysis": {{
         "table_search": {{
-            "score": <number between 0-100>,
-            "strengths": ["<strength 1>", "<strength 2>", ...],
-            "weaknesses": ["<weakness 1>", "<weakness 2>", ...],
-            "summary": "<brief summary of table search quality>"
+            "strengths": ["<strength 1>", "<strength 2>"],
+            "weaknesses": ["<weakness 1>", "<weakness 2>"]
         }},
         "model_search": {{
-            "score": <number between 0-100>,
-            "strengths": ["<strength 1>", "<strength 2>", ...],
-            "weaknesses": ["<weakness 1>", "<weakness 2>", ...],
-            "summary": "<brief summary of model search quality>"
+            "strengths": ["<strength 1>", "<strength 2>"],
+            "weaknesses": ["<weakness 1>", "<weakness 2>"]
         }}
     }},
     "key_differences": [
         "<difference 1>",
-        "<difference 2>",
-        ...
+        "<difference 2>"
     ],
-    "recommendation": "<recommendation on which method is better and why>",
-    "comparison_summary": "<brief overall comparison summary>"
+    "evidence_for_differences": "<Short paragraph or bullets with evidence (counts, column names, examples) that support the key differences.>"
 }}
 
 ## Instructions
-- Compare the QUALITY of results from both search methods
-- Assign quality scores (0-100) to each method
-- Identify which method performs better and by how much
-- List specific strengths and weaknesses of each method
-- Provide actionable recommendation on which to use
-- Focus on data quality, relevance, and usefulness, not just diversity
+- Score each metric 0–100 for both tables. Total quality can be the average of the three sub-scores or your overall judgment; keep total_quality_score.table_search and total_quality_score.model_search consistent with sub_scores.
+- Provide brief, concrete evidence for each sub_score and for evidence_for_differences.
+- In quality_analysis give only strengths and weaknesses (no long summary).
+- Do not include recommendation, comparison_summary, or quality_difference.
 
-Please provide your evaluation now:"""
+Output valid JSON only, no markdown."""
 
     return prompt
-
