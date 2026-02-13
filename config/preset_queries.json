@@ -24,6 +24,26 @@
       "id": "code_completion",
       "title": "Code completion model",
       "query": "code completion programming assistant"
+    },
+    {
+      "id": "paper_with_code_benchmark",
+      "title": "Paper with Code benchmark comparison",
+      "query": "For task of text-to-SQL, which models have the most complete and comparable benchmark results (same datasets/metrics) so I can compare them fairly?"
+    },
+    {
+      "id": "resource_constrained_code_gen",
+      "title": "Resource-constrained code generation (32B limit)",
+      "query": "I have one server that can run up to a 32B model. For the task of code generation, which models give the best quality under this size limit?"
+    },
+    {
+      "id": "customer_support_chat_safety",
+      "title": "Customer support chat (helpfulness + safety)",
+      "query": "I need a model for customer-support chat. Which models are strong on helpfulness but also show low toxicity or safer behavior in reported evaluations?"
+    },
+    {
+      "id": "quantization_accuracy",
+      "title": "Quantization accuracy (4-bit)",
+      "query": "I'm deploying with 4-bit quantization. Which models keep strong accuracy after quantization, and what benchmarks show the drop?"
     }
   ]
 }
