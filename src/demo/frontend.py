@@ -604,7 +604,7 @@ HTML_TEMPLATE = """
                 if (data.status === 'completed' || data.status === 'success') {
                     currentJobId = data.job_id;
                     displayResults({ ...(data.results || data), job_id: data.job_id });
-                    restoreIntegrationEvaluationQA(data);
+                    await restoreIntegrationEvaluationQA(data);
                     document.getElementById('progressSection').classList.remove('active');
                 } else {
                     showError(data.message || 'Failed to load saved search');
@@ -617,72 +617,71 @@ HTML_TEMPLATE = """
         function setIntegrationDropdownsFromSaved(modelRes, tableRes) {
             const setSelect = (id, value) => {
                 const el = document.getElementById(id);
-                if (el && value != null && value !== '') {
-                    el.value = value;
-                }
+                if (el && value != null && value !== '') el.value = value;
             };
             const setInput = (id, value) => {
                 const el = document.getElementById(id);
-                if (el && value != null && value !== '') {
-                    el.value = value;
-                }
+                if (el && value != null && value !== '') el.value = value;
             };
-            if (tableRes && (tableRes.integration_type != null || tableRes.search_type != null)) {
-                setSelect('integration_type', tableRes.integration_type);
-                setSelect('integration_search_type', tableRes.search_type);
-                setInput('integration_k', tableRes.k);
-                setInput('integration_max_models', tableRes.max_models);
-            }
-            if (modelRes && (modelRes.integration_type != null || modelRes.card2card_retrieval_mode != null)) {
+            if (modelRes) {
                 setSelect('integration_type', modelRes.integration_type);
                 setSelect('integration_model_search_mode', modelRes.card2card_retrieval_mode);
                 setInput('integration_k', modelRes.k);
                 setInput('integration_max_models', modelRes.max_models);
             }
+            if (tableRes) {
+                setSelect('integration_type', tableRes.integration_type);
+                setSelect('integration_search_type', tableRes.search_type);
+                setInput('integration_k', tableRes.k);
+                setInput('integration_max_models', tableRes.max_models);
+            }
         }
         
-        function restoreIntegrationEvaluationQA(data) {
+        async function restoreIntegrationEvaluationQA(data) {
             const container = document.getElementById('integrationResultsContainer');
             const leftDiv = document.getElementById('integrationModelSearchResults');
             const rightDiv = document.getElementById('integrationResults');
             if (!container || !leftDiv || !rightDiv) return;
-            if (data.integration_runs && data.integration_runs.length > 0) {
-                window.__integrationRuns = data.integration_runs;
-                window.__selectedIntegrationKey = data.integration_runs[0].key;
-                renderIntegrationTabs();
-                showIntegrationRunContent(data.integration_runs[0]);
-                const first = data.integration_runs[0];
-                setIntegrationDropdownsFromSaved(first.model_result, first.table_result);
+            const jobId = data.job_id || currentJobId;
+            let modelRuns = data.model_search_runs || [];
+            let tableRuns = data.table_search_runs || [];
+            if (modelRuns.length === 0 && tableRuns.length === 0 && jobId) {
+                try {
+                    const r = await fetch('{{BACKEND_URL}}/api/integration-runs/' + jobId);
+                    const apiData = await r.json();
+                    if (apiData.status === 'success') {
+                        modelRuns = apiData.model_search_runs || [];
+                        tableRuns = apiData.table_search_runs || [];
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            window.__modelSearchRuns = modelRuns;
+            window.__tableSearchRuns = tableRuns;
+            if (modelRuns.length > 0 || tableRuns.length > 0) {
+                container.style.display = 'block';
+                if (modelRuns.length > 0) setIntegrationDropdownsFromSaved(modelRuns[0], null);
+                if (tableRuns.length > 0) setIntegrationDropdownsFromSaved(null, tableRuns[0]);
+                syncModelSearchDisplay();
+                syncTableSearchDisplay();
                 return;
             }
             const hasModel = data.integration_model_search && data.integration_model_search.status === 'success' && data.integration_model_search.integrated_table;
             const hasTable = data.integration_table_search && data.integration_table_search.status === 'success' && data.integration_table_search.integrated_table;
             if (hasModel || hasTable) {
                 container.style.display = 'block';
-                window.__integrationRuns = [];
-                window.__selectedIntegrationKey = null;
-                const bar = document.getElementById('integrationTabsBar');
-                if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
                 if (hasModel) {
-                    const modelRes = data.integration_model_search;
-                    const stats = modelRes.stats || {};
-                    let extra = '';
-                    if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${modelRes.models_with_tables.slice(0, 5).join(', ')}${modelRes.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
-                    }
-                    leftDiv.innerHTML = renderIntegrationTable(modelRes.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
-                    initTablePanZoom(leftDiv);
-                } else {
-                    leftDiv.innerHTML = '';
+                    const m = data.integration_model_search;
+                    const key = getModelSearchKey(m.integration_type, m.card2card_retrieval_mode);
+                    window.__modelSearchRuns = [{ key, ...m }];
                 }
                 if (hasTable) {
-                    const tableRes = data.integration_table_search;
-                    rightDiv.innerHTML = renderIntegrationTable(tableRes.integrated_table, tableRes.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
-                    initTablePanZoom(rightDiv);
-                } else {
-                    rightDiv.innerHTML = '';
+                    const t = data.integration_table_search;
+                    const key = getTableSearchKey(t.integration_type, t.search_type);
+                    window.__tableSearchRuns = [{ key, ...t }];
                 }
                 setIntegrationDropdownsFromSaved(data.integration_model_search, data.integration_table_search);
+                syncModelSearchDisplay();
+                syncTableSearchDisplay();
             }
             if (data.evaluation_results && data.evaluation_results.evaluation) {
                 const resultsDiv = document.getElementById('evaluationResults');
@@ -775,7 +774,7 @@ HTML_TEMPLATE = """
                 if (data.status === 'completed' || data.status === 'success') {
                     currentJobId = data.job_id;
                     displayResults({ ...(data.results || data), job_id: data.job_id });
-                    restoreIntegrationEvaluationQA(data);
+                    await restoreIntegrationEvaluationQA(data);
                     document.getElementById('progressSection').classList.remove('active');
                 } else {
                     showError(data.message || 'Failed to load saved search');
@@ -948,7 +947,7 @@ HTML_TEMPLATE = """
                     if (data.status === 'success') {
                         clearInterval(interval);
                         displayResults(data.results);
-                        restoreIntegrationEvaluationQA(data);
+                        await restoreIntegrationEvaluationQA(data);
                         document.getElementById('searchBtn').disabled = false;
                     } else if (data.status === 'error') {
                         clearInterval(interval);
@@ -1226,53 +1225,55 @@ HTML_TEMPLATE = """
                 </div>
             ` : '';
             
-            // Table Integration: one row settings, one button "Integrated", results stacked (Model Search top, Table Search bottom)
+            // Table Integration: Model Search and Table Search SEPARATE - each has its own params and dropdown switching
             const integrationCardStyle = 'padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 8px; border: 1px solid #dee2e6; font-size: 13px; color: #212529; min-width: 0;';
             const integrationTitleStyle = 'margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;';
             const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
             html += `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 16px;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
-                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 8px;">Run <span class="number-badge">1</span> Card2Card + <span class="number-badge">2</span> Card2Tab2Card with shared settings; one button runs both (Model Search then Table Search).</p>
-                    <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
-                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncIntegrationSelectionToRun()" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Model Search and Table Search are saved separately. Switch via dropdowns to view different saved results. One <strong>Integrated</strong> button runs both.</p>
+                    <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
+                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncModelSearchDisplay(); syncTableSearchDisplay();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="union">Union</option>
                             <option value="intersection">Intersection</option>
                             <option value="alite">ALITE</option>
                             <option value="outer_join">Outer Join</option>
                         </select></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;"></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;"></div>
-                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Model Search:</label><select id="integration_model_search_mode" class="form-control" onchange="syncIntegrationSelectionToRun()" style="width: 90px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
-                            <option value="dense">Dense</option>
-                            <option value="sparse">Sparse</option>
-                            <option value="hybrid">Hybrid</option>
-                        </select></div>
-                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Table Search:</label><select id="integration_search_type" class="form-control" onchange="syncIntegrationSelectionToRun()" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
-                            <option value="single_column">Single Column</option>
-                            <option value="keyword">Keyword</option>
-                            <option value="multi_column">Multi Column</option>
-                            <option value="unionable">Unionable</option>
-                            <option value="complex">Complex</option>
-                            <option value="correlation">Correlation</option>
-                            <option value="imputation">Imputation</option>
-                            <option value="augmentation">Augmentation</option>
-                            <option value="dependent_data">Dependent Data</option>
-                            <option value="feature_for_ml">Feature for ML</option>
-                            <option value="multi_column_collinearity">Multi-Column Collinearity</option>
-                            <option value="negative_example">Negative Example</option>
-                        </select></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncModelSearchDisplay(); syncTableSearchDisplay();"></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncModelSearchDisplay(); syncTableSearchDisplay();"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
                     </div>
-                    <div id="integrationTabsBar" style="margin-top: 8px; display: none; flex-wrap: wrap; gap: 6px;"></div>
                     <div id="integrationResultsContainer" style="margin-top: 12px; display: none;">
-                        <div style="margin-bottom: 10px;">
-                            <h4 style="margin: 0 0 4px 0; font-size: 13px; color: #495057;">From Model Search</h4>
+                        <div style="margin-bottom: 16px; padding: 10px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #007bff;">
+                            <h4 style="margin: 0 0 6px 0; font-size: 13px; color: #004085;">Model Search</h4>
+                            <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
+                                <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">retrieval mode:</label><select id="integration_model_search_mode" class="form-control" onchange="syncModelSearchDisplay()" style="width: 90px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                                    <option value="dense">Dense</option>
+                                    <option value="sparse">Sparse</option>
+                                    <option value="hybrid">Hybrid</option>
+                                </select></div>
+                            </div>
                             <div id="integrationModelSearchResults"></div>
                         </div>
-                        <div>
-                            <h4 style="margin: 0 0 4px 0; font-size: 13px; color: #495057;">From Table Search</h4>
-                            <p style="margin: 0 0 4px 0; font-size: 11px; color: #666;">Tables are presented under each item.</p>
+                        <div style="padding: 10px; background: #d4edda; border-radius: 6px; border-left: 4px solid #28a745;">
+                            <h4 style="margin: 0 0 6px 0; font-size: 13px; color: #155724;">Table Search</h4>
+                            <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
+                                <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">search type:</label><select id="integration_search_type" class="form-control" onchange="syncTableSearchDisplay()" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                                    <option value="single_column">Single Column</option>
+                                    <option value="keyword">Keyword</option>
+                                    <option value="multi_column">Multi Column</option>
+                                    <option value="unionable">Unionable</option>
+                                    <option value="complex">Complex</option>
+                                    <option value="correlation">Correlation</option>
+                                    <option value="imputation">Imputation</option>
+                                    <option value="augmentation">Augmentation</option>
+                                    <option value="dependent_data">Dependent Data</option>
+                                    <option value="feature_for_ml">Feature for ML</option>
+                                    <option value="multi_column_collinearity">Multi-Column Collinearity</option>
+                                    <option value="negative_example">Negative Example</option>
+                                </select></div>
+                            </div>
                             <div id="integrationResults"></div>
                         </div>
                     </div>
@@ -1329,100 +1330,62 @@ HTML_TEMPLATE = """
             `;
             
             container.innerHTML = html;
-            window.__integrationRuns = [];
-            window.__selectedIntegrationKey = null;
+            window.__modelSearchRuns = [];
+            window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
         }
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         window.__integrationTables = window.__integrationTables || {};
-        window.__integrationRuns = window.__integrationRuns || [];
-        window.__selectedIntegrationKey = window.__selectedIntegrationKey || null;
+        window.__modelSearchRuns = window.__modelSearchRuns || [];
+        window.__tableSearchRuns = window.__tableSearchRuns || [];
         
-        function getIntegrationRunKey(integrationType, searchType, card2cardMode) {
-            const parts = [(integrationType || 'union'), (searchType || 'single_column'), (card2cardMode || 'dense')];
-            return parts.map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_') || 'run';
+        function getModelSearchKey(integrationType, card2cardMode) {
+            return [(integrationType || 'union'), (card2cardMode || 'dense')].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
+        }
+        function getTableSearchKey(integrationType, searchType) {
+            return [(integrationType || 'union'), (searchType || 'single_column')].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
         }
         
-        function renderIntegrationTabs() {
-            const bar = document.getElementById('integrationTabsBar');
-            if (!bar) return;
-            const runs = window.__integrationRuns || [];
-            if (runs.length === 0) {
-                bar.style.display = 'none';
-                bar.innerHTML = '';
-                return;
-            }
-            bar.style.display = 'flex';
-            bar.innerHTML = runs.map(run => {
-                const label = [run.integration_type || 'union', run.search_type || 'single_column', run.card2card_retrieval_mode || 'dense'].join(' / ');
-                const active = run.key === window.__selectedIntegrationKey;
-                return `<button type="button" class="integration-tab-btn" data-key="${run.key}" style="padding: 6px 12px; font-size: 12px; border-radius: 6px; border: 1px solid ${active ? '#007bff' : '#dee2e6'}; background: ${active ? '#e7f3ff' : '#fff'}; color: ${active ? '#007bff' : '#495057'}; cursor: pointer;">${label}</button>`;
-            }).join('');
-            bar.querySelectorAll('.integration-tab-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const key = btn.getAttribute('data-key');
-                    const run = runs.find(r => r.key === key);
-                    if (run) {
-                        window.__selectedIntegrationKey = key;
-                        showIntegrationRunContent(run);
-                        setIntegrationDropdownsFromSaved(run.model_result, run.table_result);
-                        renderIntegrationTabs();
-                    }
-                });
-            });
-        }
-        
-        function syncIntegrationSelectionToRun() {
+        function syncModelSearchDisplay() {
+            const leftDiv = document.getElementById('integrationModelSearchResults');
+            const container = document.getElementById('integrationResultsContainer');
+            if (!leftDiv || !container) return;
+            container.style.display = 'block';
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
-            const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
-            const modelSearchMode = (document.getElementById('integration_model_search_mode') || {}).value || 'dense';
-            const key = getIntegrationRunKey(integrationType, searchType, modelSearchMode);
-            const runs = window.__integrationRuns || [];
-            const run = runs.find(r => r.key === key);
-            const container = document.getElementById('integrationResultsContainer');
-            const leftDiv = document.getElementById('integrationModelSearchResults');
-            const rightDiv = document.getElementById('integrationResults');
-            if (!container || !leftDiv || !rightDiv) return;
-            container.style.display = 'block';
-            const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this mode. Click <strong>Integrated</strong> to run.</div>';
-            if (run) {
-                window.__selectedIntegrationKey = key;
-                showIntegrationRunContent(run);
-                renderIntegrationTabs();
+            const card2cardMode = (document.getElementById('integration_model_search_mode') || {}).value || 'dense';
+            const key = getModelSearchKey(integrationType, card2cardMode);
+            const runs = window.__modelSearchRuns || [];
+            const run = runs.find(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === key);
+            const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
+            const noResultMsg = placeholder;
+            if (run && run.status === 'success' && run.integrated_table) {
+                const stats = run.stats || {};
+                let extra = (run.models_with_tables && run.models_with_tables.length > 0) ? `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${run.models_with_tables.slice(0, 5).join(', ')}${run.models_with_tables.length > 5 ? ' ...' : ''}</div>` : '';
+                leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
             } else {
-                window.__selectedIntegrationKey = null;
-                leftDiv.innerHTML = placeholder;
-                rightDiv.innerHTML = placeholder;
-                renderIntegrationTabs();
-            }
-        }
-        
-        function showIntegrationRunContent(run) {
-            const leftDiv = document.getElementById('integrationModelSearchResults');
-            const rightDiv = document.getElementById('integrationResults');
-            const container = document.getElementById('integrationResultsContainer');
-            const noResultMsg = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this mode. Click <strong>Integrated</strong> to run.</div>';
-            if (!leftDiv || !rightDiv || !container) return;
-            container.style.display = 'block';
-            const modelRes = run.model_result;
-            const tableRes = run.table_result;
-            if (modelRes && modelRes.status === 'success' && modelRes.integrated_table) {
-                const stats = modelRes.stats || {};
-                let extra = '';
-                if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
-                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${modelRes.models_with_tables.slice(0, 5).join(', ')}${modelRes.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
-                }
-                leftDiv.innerHTML = renderIntegrationTable(modelRes.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search-' + (run.key || '') });
-            } else {
-                leftDiv.innerHTML = modelRes && modelRes.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${modelRes.message || 'Integration failed'}</div>` : noResultMsg;
-            }
-            if (tableRes && tableRes.status === 'success' && tableRes.integrated_table) {
-                rightDiv.innerHTML = renderIntegrationTable(tableRes.integrated_table, tableRes.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search-' + (run.key || '') });
-            } else {
-                rightDiv.innerHTML = tableRes && tableRes.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>` : noResultMsg;
+                leftDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || 'Integration failed'}</div>` : noResultMsg;
             }
             initTablePanZoom(leftDiv);
+        }
+        
+        function syncTableSearchDisplay() {
+            const rightDiv = document.getElementById('integrationResults');
+            const container = document.getElementById('integrationResultsContainer');
+            if (!rightDiv || !container) return;
+            container.style.display = 'block';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
+            const key = getTableSearchKey(integrationType, searchType);
+            const runs = window.__tableSearchRuns || [];
+            const run = runs.find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type)) === key);
+            const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
+            const noResultMsg = placeholder;
+            if (run && run.status === 'success' && run.integrated_table) {
+                rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
+            } else {
+                rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || 'Integration failed'}</div>` : noResultMsg;
+            }
             initTablePanZoom(rightDiv);
         }
         
@@ -1589,19 +1552,25 @@ HTML_TEMPLATE = """
                     rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>`;
                 }
                 initTablePanZoom(rightDiv);
-                if (modelRes.status === 'success' && tableRes.status === 'success') {
-                    const key = getIntegrationRunKey(integrationType, searchType, modelSearchMode);
-                    const runPayload = { job_id: jobId, key, integration_type: integrationType, search_type: searchType, card2card_retrieval_mode: modelSearchMode, k, max_models: maxModels, model_result: modelRes, table_result: tableRes };
-                    try {
-                        await fetch('{{BACKEND_URL}}/api/save-integration-run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(runPayload) });
-                    } catch (e) {}
-                    let runs = window.__integrationRuns || [];
-                    const idx = runs.findIndex(r => r.key === key);
-                    if (idx >= 0) runs[idx] = runPayload; else runs = [...runs, runPayload];
-                    window.__integrationRuns = runs;
-                    window.__selectedIntegrationKey = key;
-                    renderIntegrationTabs();
-                    showIntegrationRunContent(runPayload);
+                if (modelRes.status === 'success' || tableRes.status === 'success') {
+                    const modelKey = getModelSearchKey(integrationType, modelSearchMode);
+                    const tableKey = getTableSearchKey(integrationType, searchType);
+                    if (modelRes.status === 'success') {
+                        let runs = window.__modelSearchRuns || [];
+                        const mPayload = { key: modelKey, integration_type: integrationType, card2card_retrieval_mode: modelSearchMode, k, max_models: maxModels, ...modelRes };
+                        const idx = runs.findIndex(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === modelKey);
+                        if (idx >= 0) runs[idx] = mPayload; else runs = [...runs, mPayload];
+                        window.__modelSearchRuns = runs;
+                    }
+                    if (tableRes.status === 'success') {
+                        let runs = window.__tableSearchRuns || [];
+                        const tPayload = { key: tableKey, integration_type: integrationType, search_type: searchType, k, max_models: maxModels, ...tableRes };
+                        const idx = runs.findIndex(r => (r.key || getTableSearchKey(r.integration_type, r.search_type)) === tableKey);
+                        if (idx >= 0) runs[idx] = tPayload; else runs = [...runs, tPayload];
+                        window.__tableSearchRuns = runs;
+                    }
+                    syncModelSearchDisplay();
+                    syncTableSearchDisplay();
                 }
             } catch (err) {
                 leftDiv.innerHTML = `<div style="padding: 10px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${err.message}</div>`;

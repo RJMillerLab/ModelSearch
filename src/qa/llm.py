@@ -55,10 +55,10 @@ def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = Non
     Returns:
         LLM response text
     """
-    # Use CitationLake's LLM_response function
+    # Use CitationLake's LLM_response function (absolute import to avoid "beyond top-level package" when qa is top-level)
     print(f"🔍 Importing CitationLake LLM module...")
     try:
-        from ..evaluation.llm_citationlake import LLM_response, setup_openai
+        from evaluation.llm_citationlake import LLM_response, setup_openai
         print(f"✅ CitationLake LLM module imported successfully")
     except ImportError as import_err:
         print(f"⚠️  CitationLake LLM module import failed: {import_err}")

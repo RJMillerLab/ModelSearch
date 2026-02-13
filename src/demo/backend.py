@@ -51,9 +51,20 @@ JOBS_DIR = os.path.join(REPO_ROOT, "data", "jobs")
 
 
 def _integration_run_key(integration_type: str, search_type: str, card2card_mode: str) -> str:
-    """Slug for integration run filename: e.g. union_single_column_dense."""
-    import re
+    """Slug for combined integration run (legacy): e.g. union_single_column_dense."""
     parts = [integration_type or "union", search_type or "single_column", card2card_mode or "dense"]
+    return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
+
+
+def _model_search_key(integration_type: str, card2card_mode: str) -> str:
+    """Slug for Model Search only: e.g. alite_dense. Params: integration_type, card2card_mode."""
+    parts = [integration_type or "union", card2card_mode or "dense"]
+    return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
+
+
+def _table_search_key(integration_type: str, search_type: str) -> str:
+    """Slug for Table Search only: e.g. alite_single_column. Params: integration_type, search_type."""
+    parts = [integration_type or "union", search_type or "single_column"]
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
 
 
@@ -510,48 +521,8 @@ def search():
         jobs[job_id].set_status("completed")
         out = {"status": "completed", "job_id": job_id, "results": saved}
         if base_dir and os.path.isdir(base_dir):
-            for key, filename in [
-                ("integration_model_search", "integration_model_search.json"),
-                ("integration_table_search", "integration_table_search.json"),
-                ("evaluation_results", "evaluation_results.json"),
-                ("qa_results", "qa_results.json"),
-            ]:
-                p = os.path.join(base_dir, filename)
-                if os.path.isfile(p):
-                    try:
-                        with open(p, "r", encoding="utf-8") as f:
-                            out[key] = json.load(f)
-                    except Exception:
-                        pass
-            integration_runs = []
-            for fname in os.listdir(base_dir):
-                if fname.startswith("integration_run_") and fname.endswith(".json"):
-                    try:
-                        with open(os.path.join(base_dir, fname), "r", encoding="utf-8") as f:
-                            run_data = json.load(f)
-                        integration_runs.append(run_data)
-                    except Exception:
-                        pass
-            if integration_runs:
-                out["integration_runs"] = integration_runs
-            else:
-                m = out.get("integration_model_search")
-                t = out.get("integration_table_search")
-                if m or t:
-                    # Build one run from legacy files so load shows one tab (even if only one side succeeded)
-                    itype = (m or t).get("integration_type") or "union"
-                    stype = t.get("search_type") if t else "single_column"
-                    cmode = m.get("card2card_retrieval_mode") if m else "dense"
-                    out["integration_runs"] = [{
-                        "key": _integration_run_key(itype, stype, cmode),
-                        "integration_type": itype,
-                        "search_type": stype,
-                        "card2card_retrieval_mode": cmode,
-                        "k": (m or t).get("k"),
-                        "max_models": (m or t).get("max_models"),
-                        "model_result": m,
-                        "table_result": t,
-                    }]
+            extras = _load_job_extras(job_id, base_dir=base_dir)
+            out.update(extras)
         return jsonify(out)
 
     mode = data.get("mode", "query")
@@ -597,16 +568,86 @@ def get_status(job_id: str):
     return jsonify({"job_id": job_id, "status": logger.status, "logs": logger.get_logs()})
 
 
+def _load_job_extras(job_id: str, base_dir: Optional[str] = None) -> dict:
+    """Load model_search_runs, table_search_runs, evaluation, qa from job dir."""
+    out = {}
+    job_dir = base_dir if base_dir else os.path.join(JOBS_DIR, job_id)
+    if not os.path.isdir(job_dir):
+        return out
+    for key, filename in [
+        ("integration_model_search", "integration_model_search.json"),
+        ("integration_table_search", "integration_table_search.json"),
+        ("evaluation_results", "evaluation_results.json"),
+        ("qa_results", "qa_results.json"),
+    ]:
+        p = os.path.join(job_dir, filename)
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    out[key] = json.load(f)
+            except Exception:
+                pass
+    model_runs = []
+    table_runs = []
+    for fname in sorted(os.listdir(job_dir)):
+        if fname.startswith("integration_model_search_") and fname.endswith(".json"):
+            try:
+                with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                key = fname.replace("integration_model_search_", "").replace(".json", "")
+                model_runs.append({"key": key, **d})
+            except Exception:
+                pass
+        elif fname.startswith("integration_table_search_") and fname.endswith(".json"):
+            try:
+                with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                key = fname.replace("integration_table_search_", "").replace(".json", "")
+                table_runs.append({"key": key, **d})
+            except Exception:
+                pass
+        elif fname.startswith("integration_run_") and fname.endswith(".json"):
+            try:
+                with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
+                    run = json.load(f)
+                m, t = run.get("model_result"), run.get("table_result")
+                if m and m.get("status") == "success":
+                    mk = _model_search_key(run.get("integration_type"), run.get("card2card_retrieval_mode"))
+                    if not any(r["key"] == mk for r in model_runs):
+                        model_runs.append({"key": mk, **m})
+                if t and t.get("status") == "success":
+                    tk = _table_search_key(run.get("integration_type"), run.get("search_type"))
+                    if not any(r["key"] == tk for r in table_runs):
+                        table_runs.append({"key": tk, **t})
+            except Exception:
+                pass
+    if model_runs:
+        out["model_search_runs"] = model_runs
+    elif out.get("integration_model_search") and out["integration_model_search"].get("status") == "success":
+        m = out["integration_model_search"]
+        out["model_search_runs"] = [{"key": _model_search_key(m.get("integration_type"), m.get("card2card_retrieval_mode")), **m}]
+    if table_runs:
+        out["table_search_runs"] = table_runs
+    elif out.get("integration_table_search") and out["integration_table_search"].get("status") == "success":
+        t = out["integration_table_search"]
+        out["table_search_runs"] = [{"key": _table_search_key(t.get("integration_type"), t.get("search_type")), **t}]
+    return out
+
+
 @app.route("/api/results/<job_id>", methods=["GET"])
 def get_results(job_id: str):
     if job_id not in jobs:
         return jsonify({"status": "error", "message": "Job not found"}), 404
     logger = jobs[job_id]
     if logger.status == "error" and logger.results is not None:
-        return jsonify({"status": "success", "job_id": job_id, "results": logger.results})
+        resp = {"status": "success", "job_id": job_id, "results": logger.results}
+        resp.update(_load_job_extras(job_id))
+        return jsonify(resp)
     if logger.status != "completed":
         return jsonify({"status": logger.status, "message": "Job not completed yet"}), 202
-    return jsonify({"status": "success", "job_id": job_id, "results": logger.results})
+    resp = {"status": "success", "job_id": job_id, "results": logger.results}
+    resp.update(_load_job_extras(job_id))
+    return jsonify(resp)
 
 
 @app.route("/api/logs/<job_id>", methods=["GET"])
@@ -699,7 +740,6 @@ def integrate():
     integration_type = data.get("integration_type", "union")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
-    
     if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
     
@@ -731,9 +771,10 @@ def integrate():
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
-            # Save integrated table to job dir for reference
+            # Save with key = integration_type_search_type for unique filenames per table search combination
+            run_key = _table_search_key(integration_type, search_type)
             try:
-                csv_name = "integrated_table_search.csv"
+                csv_name = f"integrated_table_search_{run_key}.csv"
                 save_path = os.path.join(job_dir, csv_name)
                 integrated_df.to_csv(save_path, index=False, encoding="utf-8")
                 saved_path = os.path.join("data", "jobs", job_id, csv_name)
@@ -750,8 +791,11 @@ def integrate():
                 "max_models": max_models,
                 **result,
             }
-            save_json = os.path.join(job_dir, "integration_table_search.json")
+            json_name = f"integration_table_search_{run_key}.json"
+            save_json = os.path.join(job_dir, json_name)
             with open(save_json, "w", encoding="utf-8") as f:
+                json.dump(save_payload, f, ensure_ascii=False, indent=0)
+            with open(os.path.join(job_dir, "integration_table_search.json"), "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
         except Exception:
             pass
@@ -809,8 +853,9 @@ def integrate_model_search():
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
+            run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
             try:
-                csv_name = "integrated_model_search.csv"
+                csv_name = f"integrated_model_search_{run_key}.csv"
                 save_path = os.path.join(job_dir, csv_name)
                 integrated_df.to_csv(save_path, index=False, encoding="utf-8")
                 saved_path = os.path.join("data", "jobs", job_id, csv_name)
@@ -827,8 +872,11 @@ def integrate_model_search():
                 "max_models": max_models,
                 **result,
             }
-            save_json = os.path.join(job_dir, "integration_model_search.json")
+            json_name = f"integration_model_search_{run_key}.json"
+            save_json = os.path.join(job_dir, json_name)
             with open(save_json, "w", encoding="utf-8") as f:
+                json.dump(save_payload, f, ensure_ascii=False, indent=0)
+            with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
         except Exception:
             pass
@@ -1075,6 +1123,20 @@ def qa():
         "status": "success",
         "qa": qa_answer,
         "query": query,
+    })
+
+
+@app.route("/api/integration-runs/<job_id>", methods=["GET"])
+def get_integration_runs(job_id: str):
+    """Load model_search_runs and table_search_runs for a job (separate storage)."""
+    if not job_id or not job_id.strip():
+        return jsonify({"status": "success", "job_id": job_id or "", "model_search_runs": [], "table_search_runs": []})
+    out = _load_job_extras(job_id.strip())
+    return jsonify({
+        "status": "success",
+        "job_id": job_id,
+        "model_search_runs": out.get("model_search_runs", []),
+        "table_search_runs": out.get("table_search_runs", []),
     })
 
 
