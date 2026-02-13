@@ -1293,10 +1293,16 @@ HTML_TEMPLATE = """
                             <h3 style="margin: 0 0 4px 0; color: #856404; font-size: 15px;">📊 Evaluation on Integrated Tables</h3>
                             <p style="font-size: 12px; color: #666; margin: 0;">Evaluate diversity between Table Search and Model Search integration results using LLM.</p>
                         </div>
-                        <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
-                                style="padding: 6px 14px; font-size: 13px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                            📊 Generate Evaluation
-                        </button>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button id="evalQaBothBtn" onclick="runEvaluationAndQABoth('${results.job_id || currentJobId}')" 
+                                    style="padding: 6px 14px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                📊💬 Both (parallel)
+                            </button>
+                            <button id="evaluationBtn" onclick="runEvaluation('${results.job_id || currentJobId}')" 
+                                    style="padding: 6px 14px; font-size: 13px; background: #ffc107; color: #000; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
+                                📊 Evaluation
+                            </button>
+                        </div>
                     </div>
                     <div id="evaluationResults" style="margin-top: 12px; display: none;"></div>
                     </div>
@@ -1309,7 +1315,7 @@ HTML_TEMPLATE = """
                             </div>
                             <button id="qaBtn" onclick="runQABoth('${results.job_id || currentJobId}')" 
                                     style="padding: 6px 14px; font-size: 13px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                💬 Generate Answer
+                                💬 QA Only
                             </button>
                         </div>
                         <div id="qa_after_click" style="display: none; margin-top: 20px;">
@@ -1527,12 +1533,19 @@ HTML_TEMPLATE = """
             rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Table Search integration...</div>';
             
             try {
-                const modelRes = await fetch('{{BACKEND_URL}}/api/integrate-model-search', {
+                const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
+                const modelReq = fetch('{{BACKEND_URL}}/api/integrate-model-search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels, card2card_retrieval_mode: modelSearchMode })
                 }).then(r => r.json());
-                
+                const tableReq = fetch('{{BACKEND_URL}}/api/integrate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels, tables_source: tablesSource })
+                }).then(r => r.json());
+                const [modelRes, tableRes] = await Promise.all([modelReq, tableReq]);
+
                 if (modelRes.status === 'success') {
                     const stats = modelRes.stats || {};
                     const table = modelRes.integrated_table;
@@ -1545,15 +1558,7 @@ HTML_TEMPLATE = """
                     leftDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${modelRes.message || 'Integration failed'}</div>`;
                 }
                 initTablePanZoom(leftDiv);
-                
-                const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
-                rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Table Search integration...</div>';
-                const tableRes = await fetch('{{BACKEND_URL}}/api/integrate', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels, tables_source: tablesSource })
-                }).then(r => r.json());
-                
+
                 if (tableRes.status === 'success') {
                     const stats = tableRes.stats || {};
                     const table = tableRes.integrated_table;
@@ -1807,6 +1812,39 @@ HTML_TEMPLATE = """
             resultsDiv.innerHTML = html;
         }
         
+        async function runEvaluationAndQABoth(jobId) {
+            const btn = document.getElementById('evalQaBothBtn');
+            const evaluationBtn = document.getElementById('evaluationBtn');
+            const qaBtn = document.getElementById('qaBtn');
+            const evalResultsDiv = document.getElementById('evaluationResults');
+            const qaAfterClick = document.getElementById('qa_after_click');
+            const qaResultsTable = document.getElementById('qaResultsTableSearch');
+            const qaResultsModel = document.getElementById('qaResultsModelSearch');
+            if (!btn || !evalResultsDiv || !qaResultsTable || !qaResultsModel) return;
+            if (qaAfterClick) qaAfterClick.style.display = 'block';
+            evalResultsDiv.style.display = 'block';
+            evalResultsDiv.innerHTML = '<div style="padding: 15px;">⏳ Running evaluation...</div>';
+            qaResultsTable.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
+            qaResultsModel.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
+            [btn, evaluationBtn, qaBtn].forEach(b => { if (b) { b.disabled = true; } });
+            try {
+                const evalPromise = sendEvaluationRequest({ job_id: jobId, use_fake: false }, evalResultsDiv, null);
+                const qaTablePromise = sendQARequest({ job_id: jobId, use_table_search: true, use_fake: false }, qaResultsTable, null);
+                const qaModelPromise = sendQARequest({ job_id: jobId, use_table_search: false, use_fake: false }, qaResultsModel, null);
+                const [, qaTableRes, qaModelRes] = await Promise.all([evalPromise, qaTablePromise, qaModelPromise]);
+                if (jobId && (qaTableRes || qaModelRes)) {
+                    fetch('{{BACKEND_URL}}/api/save-qa', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ job_id: jobId, table_search: qaTableRes || null, model_search: qaModelRes || null }) }).catch(() => {});
+                }
+            } catch (err) {
+                if (evalResultsDiv.innerHTML.indexOf('❌') < 0) evalResultsDiv.innerHTML = `<div style="padding: 15px; color: #dc3545;">❌ ${err.message}</div>`;
+                if (qaResultsTable.innerHTML.indexOf('❌') < 0) qaResultsTable.innerHTML = `<div style="padding: 12px; color: #dc3545;">❌ ${err.message}</div>`;
+                if (qaResultsModel.innerHTML.indexOf('❌') < 0) qaResultsModel.innerHTML = `<div style="padding: 12px; color: #dc3545;">❌ ${err.message}</div>`;
+            } finally {
+                [btn, evaluationBtn, qaBtn].forEach(b => { if (b) { b.disabled = false; } });
+                if (btn) btn.textContent = '📊💬 Both (parallel)';
+            }
+        }
+
         async function runEvaluation(jobId) {
             const evaluationBtn = document.getElementById('evaluationBtn');
             const resultsDiv = document.getElementById('evaluationResults');
@@ -1847,8 +1885,7 @@ HTML_TEMPLATE = """
                             <strong>❌ Evaluation Failed:</strong> ${errorMessage}
                         </div>
                     `;
-                    evaluationBtn.disabled = false;
-                    evaluationBtn.textContent = '📊 Generate Evaluation';
+                    if (evaluationBtn) { evaluationBtn.disabled = false; evaluationBtn.textContent = '📊 Generate Evaluation'; }
                     return;
                 }
                 
@@ -1859,8 +1896,9 @@ HTML_TEMPLATE = """
                     const table1Data = data.table1 || null;
                     const table2Data = data.table2 || null;
                     displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data);
-                    if (currentJobId) {
-                        fetch('{{BACKEND_URL}}/api/save-evaluation', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ job_id: currentJobId, evaluation: data.evaluation, table1: data.table1, table2: data.table2 }) }).catch(() => {});
+                    const jid = requestBody.job_id || currentJobId;
+                    if (jid) {
+                        fetch('{{BACKEND_URL}}/api/save-evaluation', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ job_id: jid, evaluation: data.evaluation, table1: data.table1, table2: data.table2 }) }).catch(() => {});
                     }
                 } else {
                     // Handle error status in response
@@ -1878,8 +1916,7 @@ HTML_TEMPLATE = """
                     </div>
                 `;
             } finally {
-                evaluationBtn.disabled = false;
-                evaluationBtn.textContent = '📊 Generate Evaluation';
+                if (evaluationBtn) { evaluationBtn.disabled = false; evaluationBtn.textContent = '📊 Generate Evaluation'; }
             }
         }
         
