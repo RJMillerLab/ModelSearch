@@ -948,6 +948,7 @@ HTML_TEMPLATE = """
                     if (data.status === 'success') {
                         clearInterval(interval);
                         displayResults(data.results);
+                        restoreIntegrationEvaluationQA(data);
                         document.getElementById('searchBtn').disabled = false;
                     } else if (data.status === 'error') {
                         clearInterval(interval);
@@ -1114,14 +1115,6 @@ HTML_TEMPLATE = """
                                 });
                             });
                             
-                            // Debug: log the mapping
-                            console.log(`[${type}] Built modelToTables mapping:`, Object.keys(modelToTables).length, 'models with tables');
-                            console.log(`[${type}] Sample modelToTables:`, Object.entries(modelToTables).slice(0, 2));
-                            console.log(`[${type}] tableToModels keys:`, Object.keys(tableToModels));
-                            console.log(`[${type}] tableToModels sample:`, Object.entries(tableToModels).slice(0, 1));
-                            console.log(`[${type}] models count:`, models.length);
-                            console.log(`[${type}] models sample:`, models.slice(0, 2));
-                            
                             return `
                                 <div class="search-type-section">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
@@ -1142,14 +1135,6 @@ HTML_TEMPLATE = """
                                                 const modelTables = modelToTables[modelId] || [];
                                                 const modelExpandId = `${sectionId}-model-${idx}`;
                                                 const hasTables = modelTables.length > 0;
-                                                
-                                                // Debug: log if model has tables
-                                                if (hasTables) {
-                                                    console.log(`[${type}] Model ${modelId} has ${modelTables.length} tables:`, modelTables.slice(0, 2));
-                                                } else {
-                                                    console.log(`[${type}] Model ${modelId} has NO tables. modelToTables keys:`, Object.keys(modelToTables));
-                                                    console.log(`[${type}] Looking for modelId: "${modelId}" in modelToTables`);
-                                                }
                                                 
                                                 return `
                                                     <li class="result-item" style="margin-bottom: 4px;">
@@ -2226,8 +2211,10 @@ HTML_TEMPLATE = """
             
             resultsDiv.style.display = 'block';
             
-            const answer = qaResult.answer || {};
-            const answerText = answer.answer || 'No answer provided';
+            // Handle both: flat {answer:"text",model_ranking:[]} and nested {answer:{answer:"text",...}}
+            const answer = (typeof qaResult.answer === 'object' && qaResult.answer !== null)
+                ? (qaResult.answer || {}) : (qaResult || {});
+            const answerText = answer.answer || qaResult.answer || 'No answer provided';
             const modelRanking = answer.model_ranking || [];
             const summary = answer.summary || {};
             const confidence = answer.confidence || 'unknown';
