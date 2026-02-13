@@ -135,16 +135,24 @@ def _read_json(path: str) -> Optional[Dict]:
 
 # Valid model IDs (have tables): built by scripts/build_valid_model_ids_txt.py (Part 1); inference only loads
 VALID_MODEL_IDS_TXT = "data/valid_model_ids_with_tables.txt"
+_CACHED_VALID_MODEL_IDS: Optional[set] = None
+_CACHED_VALID_MODEL_IDS_MTIME: float = 0
 
 
-def _load_valid_model_ids_with_tables(txt_path: Optional[str] = None) -> set:
-    """Load set of model_id that have tables. Txt is produced by scripts/build_valid_model_ids_txt.py (Part 1)."""
+def _get_valid_model_ids_with_tables(txt_path: Optional[str] = None) -> set:
+    """Cached set of model_id that have tables. Fast O(1) lookup; loads from txt once per backend lifetime."""
+    global _CACHED_VALID_MODEL_IDS, _CACHED_VALID_MODEL_IDS_MTIME
     path = txt_path or os.path.join(REPO_ROOT, VALID_MODEL_IDS_TXT)
     if not os.path.isfile(path):
         return set()
+    mtime = os.path.getmtime(path)
+    if _CACHED_VALID_MODEL_IDS is not None and mtime == _CACHED_VALID_MODEL_IDS_MTIME:
+        return _CACHED_VALID_MODEL_IDS
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return {line.strip() for line in f if line.strip()}
+            _CACHED_VALID_MODEL_IDS = {line.strip() for line in f if line.strip()}
+        _CACHED_VALID_MODEL_IDS_MTIME = mtime
+        return _CACHED_VALID_MODEL_IDS
     except Exception:
         return set()
 
@@ -219,59 +227,84 @@ def _run_pipeline_body(
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
         logger.log(f"query2modelcard input query: {query!r}")
         q2m_out = os.path.join(job_dir, "query2modelcard.json")
-        # Narrow down: fetch 10× user top_k (cap 500), then postprocess to pick first with tables
-        q2m_top_k = min(500, 10 * top_k) if require_seed_has_tables else 1
-        if require_seed_has_tables:
-            logger.log(f"Table Search Seed Model: Pick first model with tables. query2modelcard top_k={q2m_top_k} (10× of {top_k}), then pick first with tables.")
-        # Run as script to avoid importing whole src.search (card2card, FAISS, etc.) and RuntimeWarning/segfault
         q2m_script = os.path.join(REPO_ROOT, "src", "search", "query2modelcard.py")
-        cmd = [
-            sys.executable, q2m_script,
-            "--query", query,
-            "--top_k", str(q2m_top_k),
-            "--emb_npz", DEFAULT_EMB_NPZ,
-            "--faiss_index", DEFAULT_FAISS_INDEX,
-            "--output_json", q2m_out,
-        ]
-        rc, out, err = _run_cmd(cmd, REPO_ROOT)
-        if rc != 0:
-            logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
-            logger.set_status("error")
-            logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
-            return
-        data = _read_json(q2m_out)
-        if not data or "results" not in data or not data["results"]:
-            logger.log("query2modelcard returned no results")
-            logger.set_status("error")
-            logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
-            return
-        results_list = data["results"]
-        stored_query = data.get("query", "")
 
         if require_seed_has_tables:
-            # Valid = model_id that have tables (built by scripts/build_valid_model_ids_txt.py; inference only loads)
-            valid_model_ids = _load_valid_model_ids_with_tables()
+            valid_model_ids = _get_valid_model_ids_with_tables()
             logger.log(f"Narrow down: valid model IDs (have tables) = {len(valid_model_ids)} (from {VALID_MODEL_IDS_TXT})")
-            chosen = None
-            for i, r in enumerate(results_list):
-                mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
-                if not mid:
-                    continue
-                if str(mid).strip() in valid_model_ids:
-                    chosen = str(mid).strip()
-                    logger.log(f"Narrow down: first result in valid set is #{i+1}: {chosen}")
+            # Two-phase: try 2× top_k first; if no valid model, run again with 5× (cap 200)
+            phase1_k = min(100, 2 * top_k)
+            phase2_k = min(200, 5 * top_k)
+            for phase, q2m_top_k in enumerate([phase1_k, phase2_k], 1):
+                if phase == 2 and phase2_k <= phase1_k:
                     break
-            if chosen is not None:
-                model_id = chosen
-                logger.log(f"Extracted model (with tables): {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
+                logger.log(f"query2modelcard phase {phase}: top_k={q2m_top_k}")
+                cmd = [
+                    sys.executable, q2m_script,
+                    "--query", query,
+                    "--top_k", str(q2m_top_k),
+                    "--emb_npz", DEFAULT_EMB_NPZ,
+                    "--faiss_index", DEFAULT_FAISS_INDEX,
+                    "--output_json", q2m_out,
+                ]
+                rc, out, err = _run_cmd(cmd, REPO_ROOT)
+                if rc != 0:
+                    logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
+                    logger.set_status("error")
+                    logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                    return
+                data = _read_json(q2m_out)
+                if not data or "results" not in data or not data["results"]:
+                    logger.log("query2modelcard returned no results")
+                    logger.set_status("error")
+                    logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                    return
+                results_list = data["results"]
+                chosen = None
+                for i, r in enumerate(results_list):
+                    mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
+                    if not mid:
+                        continue
+                    if str(mid).strip() in valid_model_ids:
+                        chosen = str(mid).strip()
+                        logger.log(f"Narrow down: first result in valid set is #{i+1}: {chosen} (phase {phase})")
+                        break
+                if chosen is not None:
+                    model_id = chosen
+                    stored_query = data.get("query", "")
+                    logger.log(f"Extracted model (with tables): {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
+                    break
             else:
-                # Cross: none of top-K are in valid set; use raw top-1 for Card2Card only, skip Table Search
-                first = results_list[0]
+                first = data["results"][0]
                 model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
                 seed_no_tables_skip_table_search = True
-                logger.log(f"Table Search Seed Model: Pick first model with tables - none of top-{len(results_list)} in valid set (have tables). Using top-1 for Card2Card only; Table Search skipped.")
+                logger.log(f"Table Search Seed Model: none of top-{len(results_list)} in valid set. Using top-1 for Card2Card only; Table Search skipped.")
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
         else:
+            cmd = [
+                sys.executable, q2m_script,
+                "--query", query,
+                "--top_k", "1",
+                "--emb_npz", DEFAULT_EMB_NPZ,
+                "--faiss_index", DEFAULT_FAISS_INDEX,
+                "--output_json", q2m_out,
+            ]
+            rc, out, err = _run_cmd(cmd, REPO_ROOT)
+            if rc != 0:
+                logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
+                logger.set_status("error")
+                logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                return
+            data = _read_json(q2m_out)
+            if not data or "results" not in data or not data["results"]:
+                logger.log("query2modelcard returned no results")
+                logger.set_status("error")
+                logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                return
+            results_list = data["results"]
+            stored_query = data.get("query", "")
+
+        if not require_seed_has_tables:
             first = results_list[0]
             model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
             if not model_id:

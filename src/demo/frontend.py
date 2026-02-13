@@ -1245,7 +1245,7 @@ HTML_TEMPLATE = """
                         <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncModelSearchDisplay(); syncTableSearchDisplay();"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
                     </div>
-                    <div id="integrationResultsContainer" style="margin-top: 12px; display: none;">
+                    <div id="integrationResultsContainer" style="margin-top: 12px;">
                         <div style="margin-bottom: 16px; padding: 10px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #007bff;">
                             <h4 style="margin: 0 0 6px 0; font-size: 13px; color: #004085;">Model Search</h4>
                             <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
@@ -1338,6 +1338,8 @@ HTML_TEMPLATE = """
             window.__modelSearchRuns = [];
             window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
+            syncModelSearchDisplay();
+            syncTableSearchDisplay();
         }
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
