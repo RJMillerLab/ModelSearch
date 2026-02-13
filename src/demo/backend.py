@@ -769,10 +769,27 @@ def integrate():
             tables_source=tables_source,
             relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET if tables_source == "all_from_modelcards" else None,
         )
-        
+        run_key = _table_search_key(integration_type, search_type, tables_source)
+
         if not result.get("success", False):
-            return jsonify({"status": "error", "message": result.get("error", "Integration failed")}), 500
-        
+            save_payload = {
+                "status": "no_result",
+                "integration_type": integration_type,
+                "search_type": search_type,
+                "tables_source": tables_source,
+                "k": k,
+                "max_models": max_models,
+                "error": result.get("error", "Integration failed"),
+                "message": result.get("error", "Integration failed"),
+            }
+            try:
+                json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(save_payload, f, ensure_ascii=False, indent=0)
+            except Exception:
+                pass
+            return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
+
         # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
         integrated_df = result.get("integrated_table")
         saved_path = None
@@ -782,8 +799,6 @@ def integrate():
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
-            # Save with key = integration_type_search_type for unique filenames per table search combination
-            run_key = _table_search_key(integration_type, search_type, tables_source)
             try:
                 csv_name = f"integrated_table_search_{run_key}.csv"
                 save_path = os.path.join(job_dir, csv_name)
@@ -803,9 +818,8 @@ def integrate():
                 "max_models": max_models,
                 **result,
             }
-            json_name = f"integration_table_search_{run_key}.json"
-            save_json = os.path.join(job_dir, json_name)
-            with open(save_json, "w", encoding="utf-8") as f:
+            json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
+            with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
             with open(os.path.join(job_dir, "integration_table_search.json"), "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
@@ -852,10 +866,26 @@ def integrate_model_search():
             use_citationlake=False,
             card2card_retrieval_mode=card2card_retrieval_mode,
         )
-        
+        run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
+
         if not result.get("success", False):
-            return jsonify({"status": "error", "message": result.get("error", "Integration failed")}), 500
-        
+            save_payload = {
+                "status": "no_result",
+                "integration_type": integration_type,
+                "card2card_retrieval_mode": card2card_retrieval_mode or "dense",
+                "k": k,
+                "max_models": max_models,
+                "error": result.get("error", "Integration failed"),
+                "message": result.get("error", "Integration failed"),
+            }
+            try:
+                json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(save_payload, f, ensure_ascii=False, indent=0)
+            except Exception:
+                pass
+            return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
+
         # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
         integrated_df = result.get("integrated_table")
         saved_path = None
@@ -865,7 +895,6 @@ def integrate_model_search():
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
-            run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
             try:
                 csv_name = f"integrated_model_search_{run_key}.csv"
                 save_path = os.path.join(job_dir, csv_name)
@@ -884,9 +913,8 @@ def integrate_model_search():
                 "max_models": max_models,
                 **result,
             }
-            json_name = f"integration_model_search_{run_key}.json"
-            save_json = os.path.join(job_dir, json_name)
-            with open(save_json, "w", encoding="utf-8") as f:
+            json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
+            with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
             with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)

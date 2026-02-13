@@ -1370,7 +1370,7 @@ HTML_TEMPLATE = """
                 let extra = (run.models_with_tables && run.models_with_tables.length > 0) ? `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${run.models_with_tables.slice(0, 5).join(', ')}${run.models_with_tables.length > 5 ? ' ...' : ''}</div>` : '';
                 leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
             } else {
-                leftDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || 'Integration failed'}</div>` : noResultMsg;
+                leftDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
             initTablePanZoom(leftDiv);
         }
@@ -1391,7 +1391,7 @@ HTML_TEMPLATE = """
             if (run && run.status === 'success' && run.integrated_table) {
                 rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
             } else {
-                rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || 'Integration failed'}</div>` : noResultMsg;
+                rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
             initTablePanZoom(rightDiv);
         }
@@ -1560,17 +1560,19 @@ HTML_TEMPLATE = """
                     rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>`;
                 }
                 initTablePanZoom(rightDiv);
-                if (modelRes.status === 'success' || tableRes.status === 'success') {
-                    const modelKey = getModelSearchKey(integrationType, modelSearchMode);
-                    const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
-                    if (modelRes.status === 'success') {
+                const modelKey = getModelSearchKey(integrationType, modelSearchMode);
+                const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
+                const hasModelRun = modelRes.status === 'success' || modelRes.status === 'no_result';
+                const hasTableRun = tableRes.status === 'success' || tableRes.status === 'no_result';
+                if (hasModelRun || hasTableRun) {
+                    if (hasModelRun) {
                         let runs = window.__modelSearchRuns || [];
                         const mPayload = { key: modelKey, integration_type: integrationType, card2card_retrieval_mode: modelSearchMode, k, max_models: maxModels, ...modelRes };
                         const idx = runs.findIndex(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === modelKey);
                         if (idx >= 0) runs[idx] = mPayload; else runs = [...runs, mPayload];
                         window.__modelSearchRuns = runs;
                     }
-                    if (tableRes.status === 'success') {
+                    if (hasTableRun) {
                         let runs = window.__tableSearchRuns || [];
                         const tPayload = { key: tableKey, integration_type: integrationType, search_type: searchType, tables_source: tablesSource, k, max_models: maxModels, ...tableRes };
                         const idx = runs.findIndex(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);

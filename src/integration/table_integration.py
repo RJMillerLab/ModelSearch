@@ -580,6 +580,28 @@ def integrate_tables(
                     "table_paths": loaded_paths
                 }
         
+        # Fallback: chosen method failed (ALITE/dialite missing, outer_join error, etc).
+        # Retry with union so user gets a result instead of "Integration failed".
+        if integration_type != "union":
+            fallback_df = integrate_tables_union(tables, k)
+            if fallback_df is not None and (len(fallback_df) > 0 or len(fallback_df.columns) > 0):
+                stats = {
+                    "input_tables": len(tables),
+                    "input_rows": sum(len(df) for df in tables),
+                    "output_rows": len(fallback_df),
+                    "output_columns": len(fallback_df.columns),
+                    "integration_type": "union"
+                }
+                print(f"⚠️  {integration_type} returned no result; used union as fallback")
+                return {
+                    "success": True,
+                    "integrated_table": fallback_df,
+                    "stats": stats,
+                    "table_paths": loaded_paths,
+                    "fallback": True,
+                    "fallback_reason": f"{integration_type} did not produce a result (tables may not meet its requirements); used union instead"
+                }
+        
         return {
             "success": False,
             "error": "Integration failed",
