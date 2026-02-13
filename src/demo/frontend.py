@@ -1177,21 +1177,22 @@ HTML_TEMPLATE = """
                                                                         ${modelTables.map((table, tableIdx) => {
                                                                             const tableBasename = table.split('/').pop();
                                                                             const tableExpandId = `${modelExpandId}-table-${tableIdx}`;
-                                                                            // Escape the table path for HTML attribute (handle quotes and other special chars)
-                                                                            // First escape HTML entities, then escape quotes for attribute
+                                                                            const safeTpl = (s) => String(s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$');
                                                                             const escapedTablePath = String(table)
                                                                                 .replace(/&/g, '&amp;')
                                                                                 .replace(/"/g, '&quot;')
                                                                                 .replace(/'/g, '&#39;')
                                                                                 .replace(/</g, '&lt;')
                                                                                 .replace(/>/g, '&gt;');
+                                                                            const safeTable = safeTpl(table);
+                                                                            const safeEscaped = safeTpl(escapedTablePath);
                                                                             return `
                                                                                 <div style="padding: 1px 0; border-bottom: 1px solid #dee2e6;">
                                                                                     <div style="display: flex; align-items: center; gap: 5px;">
-                                                                                        <span style="font-size: 8px; color: #999; font-family: monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2;" title="${table}">
-                                                                                            ${table}
+                                                                                        <span style="font-size: 8px; color: #999; font-family: monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2;" title="${safeTable}">
+                                                                                            ${safeTable}
                                                                                         </span>
-                                                                                        <button onclick="copyTablePath('${escapedTablePath}', this)" 
+                                                                                        <button onclick="copyTablePath('${safeEscaped}', this)" 
                                                                                                 style="padding: 2px 4px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer; min-width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
                                                                                                 title="Copy full path to clipboard">
                                                                                             📋
@@ -1717,6 +1718,7 @@ HTML_TEMPLATE = """
         function displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data) {
             if (!resultsDiv) return;
             resultsDiv.style.display = 'block';
+            const escTpl = (s) => String(s == null ? '' : s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$');
             const totalScore = eval_result.total_quality_score || {};
             const comparisonScore = eval_result.comparison_score || {};
             const modelSearchScore = (totalScore.model_search != null ? totalScore.model_search : (comparisonScore.model_search_quality != null ? comparisonScore.model_search_quality : (eval_result.model_search_quality != null ? eval_result.model_search_quality : 'N/A')));
@@ -1727,7 +1729,7 @@ HTML_TEMPLATE = """
             const modelSearchAnalysis = qualityAnalysis.model_search || {};
             const tableSearchAnalysis = qualityAnalysis.table_search || {};
             const keyDiffs = eval_result.key_differences || [];
-            const evidenceForDiffs = eval_result.evidence_for_differences || '';
+            const evidenceForDiffs = escTpl(eval_result.evidence_for_differences || '');
             let html = `
                 <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                     <h4 style="margin-top: 0; color: #856404; margin-bottom: 15px;">📊 Quality Comparison (on user question)</h4>
@@ -1751,12 +1753,12 @@ HTML_TEMPLATE = """
                         <div style="display: flex; flex-direction: column; gap: 10px;">
                             ${subScores.map(ss => `
                                 <div style="padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #ffc107;">
-                                    <div style="font-weight: 600; font-size: 12px;">${ss.name}</div>
+                                    <div style="font-weight: 600; font-size: 12px;">${escTpl(ss.name)}</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-top: 4px;">
                                         <span>Model Search: <strong>${ss.model_search != null ? ss.model_search : '–'}/100</strong></span>
                                         <span>Table Search: <strong>${ss.table_search != null ? ss.table_search : '–'}/100</strong></span>
                                     </div>
-                                    ${ss.evidence ? `<div style="font-size: 11px; color: #666; margin-top: 6px;">Evidence: ${ss.evidence}</div>` : ''}
+                                    ${ss.evidence ? '<div style="font-size: 11px; color: #666; margin-top: 6px;">Evidence: ' + escTpl(ss.evidence) + '</div>' : ''}
                                 </div>
                             `).join('')}
                         </div>
@@ -1765,28 +1767,18 @@ HTML_TEMPLATE = """
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
                         <div style="padding: 15px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
                             <h5 style="margin-top: 0; color: #004085; font-size: 13px;">Model Search</h5>
-                            ${modelSearchAnalysis.strengths && modelSearchAnalysis.strengths.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${modelSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}</ul></div>` : ''}
-                            ${modelSearchAnalysis.weaknesses && modelSearchAnalysis.weaknesses.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${modelSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}</ul></div>` : ''}
+                            ${modelSearchAnalysis.strengths && modelSearchAnalysis.strengths.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + modelSearchAnalysis.strengths.map(s => '<li>' + escTpl(s) + '</li>').join('') + '</ul></div>' : ''}
+                            ${modelSearchAnalysis.weaknesses && modelSearchAnalysis.weaknesses.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + modelSearchAnalysis.weaknesses.map(w => '<li>' + escTpl(w) + '</li>').join('') + '</ul></div>' : ''}
                         </div>
                         <div style="padding: 15px; background: #fff3cd; border-radius: 4px; border-left: 4px solid #ffc107;">
                             <h5 style="margin-top: 0; color: #856404; font-size: 13px;">Table Search</h5>
-                            ${tableSearchAnalysis.strengths && tableSearchAnalysis.strengths.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${tableSearchAnalysis.strengths.map(s => `<li>${s}</li>`).join('')}</ul></div>` : ''}
-                            ${tableSearchAnalysis.weaknesses && tableSearchAnalysis.weaknesses.length > 0 ? `<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">${tableSearchAnalysis.weaknesses.map(w => `<li>${w}</li>`).join('')}</ul></div>` : ''}
+                            ${tableSearchAnalysis.strengths && tableSearchAnalysis.strengths.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + tableSearchAnalysis.strengths.map(s => '<li>' + escTpl(s) + '</li>').join('') + '</ul></div>' : ''}
+                            ${tableSearchAnalysis.weaknesses && tableSearchAnalysis.weaknesses.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + tableSearchAnalysis.weaknesses.map(w => '<li>' + escTpl(w) + '</li>').join('') + '</ul></div>' : ''}
                         </div>
                     </div>
-                    ${keyDiffs.length > 0 ? `
-                    <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px;">
-                        <strong style="font-size: 13px;">Key differences</strong>
-                        <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px;">${keyDiffs.map(d => `<li>${d}</li>`).join('')}</ul>
-                    </div>
-                    ` : ''}
-                    ${evidenceForDiffs ? `
-                    <div style="margin-top: 12px; padding: 12px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
-                        <strong style="font-size: 12px;">Evidence for the above</strong>
-                        <p style="margin: 6px 0 0 0; font-size: 12px; line-height: 1.5;">${evidenceForDiffs}</p>
-                    </div>
-                    ` : ''}
-                    ${eval_result.source ? `<div style="margin-top: 10px; font-size: 11px; color: #999;">Source: ${eval_result.source}</div>` : ''}
+                    ${keyDiffs.length > 0 ? '<div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 4px;"><strong style="font-size: 13px;">Key differences</strong><ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 13px;">' + keyDiffs.map(d => '<li>' + escTpl(d) + '</li>').join('') + '</ul></div>' : ''}
+                    ${evidenceForDiffs ? '<div style="margin-top: 12px; padding: 12px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;"><strong style="font-size: 12px;">Evidence for the above</strong><p style="margin: 6px 0 0 0; font-size: 12px; line-height: 1.5;">' + evidenceForDiffs + '</p></div>' : ''}
+                    ${eval_result.source ? '<div style="margin-top: 10px; font-size: 11px; color: #999;">Source: ' + escTpl(eval_result.source) + '</div>' : ''}
                 </div>
             `;
             resultsDiv.innerHTML = html;
