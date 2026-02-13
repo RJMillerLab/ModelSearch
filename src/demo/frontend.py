@@ -664,8 +664,7 @@ HTML_TEMPLATE = """
                 if (tableRuns.length > 0) setIntegrationDropdownsFromSaved(null, tableRuns[0]);
                 syncModelSearchDisplay();
                 syncTableSearchDisplay();
-                return;
-            }
+            } else {
             const hasModel = data.integration_model_search && data.integration_model_search.status === 'success' && data.integration_model_search.integrated_table;
             const hasTable = data.integration_table_search && data.integration_table_search.status === 'success' && data.integration_table_search.integrated_table;
             if (hasModel || hasTable) {
@@ -683,6 +682,7 @@ HTML_TEMPLATE = """
                 setIntegrationDropdownsFromSaved(data.integration_model_search, data.integration_table_search);
                 syncModelSearchDisplay();
                 syncTableSearchDisplay();
+            }
             }
             if (data.evaluation_results && data.evaluation_results.evaluation) {
                 const resultsDiv = document.getElementById('evaluationResults');
