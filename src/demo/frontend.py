@@ -323,7 +323,13 @@ HTML_TEMPLATE = """
             </div>
             
             <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
-                <p style="margin-bottom: 6px; font-size: 12px; color: #666;">Pick a saved search.</p>
+                <p style="margin-bottom: 6px; font-size: 12px; color: #666;">Pick a saved search (select below or click a card).</p>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;">
+                    <select id="saved_search_select" class="form-control" style="min-width: 200px; max-width: 100%;">
+                        <option value="">— select folder —</option>
+                    </select>
+                    <button id="loadMimicBtn" type="button" onclick="loadMimicSearch()" style="padding: 6px 14px; font-size: 13px;">Load Saved Results</button>
+                </div>
                 <div id="saved_searches_list" style="max-height: 180px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 6px; background: #f8f9fa;">
                     <div style="text-align: center; color: #666; padding: 12px;">Loading saved searches...</div>
                 </div>
@@ -554,17 +560,36 @@ HTML_TEMPLATE = """
                     let html = '';
                     const searches = data.searches || [];
                     const templateAvailable = !!data.template_available;
+                    const selectEl = document.getElementById('saved_search_select');
+                    if (selectEl) {
+                        selectEl.innerHTML = '<option value="">— select folder —</option>';
+                        if (templateAvailable) {
+                            const opt = document.createElement('option');
+                            opt.value = 'template';
+                            opt.textContent = 'Demo Example (Template)';
+                            selectEl.appendChild(opt);
+                        }
+                        searches.forEach(search => {
+                            const opt = document.createElement('option');
+                            opt.value = search.folder_name || search.id || '';
+                            opt.textContent = (search.timestamp_str || '') + ' ' + (search.query ? search.query.substring(0, 50) + (search.query.length > 50 ? '...' : '') : search.model_id || search.folder_name || opt.value);
+                            selectEl.appendChild(opt);
+                        });
+                    }
                     if (searches.length === 0 && !templateAvailable) {
                         html = '<div style="text-align: center; color: #666; padding: 20px;">No saved searches found. Run a new search to create one.</div>';
                     } else {
-                        // Display each saved search as a clickable card
+                        if (templateAvailable) {
+                            html += `<div class="saved-search-item" onclick="loadSavedSearchFolder('template')" style="padding: 6px 8px; margin-bottom: 4px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 12px;" onmouseover="this.style.background='#e7f3ff'" onmouseout="this.style.background='white'">Demo Example (Template)</div>`;
+                        }
                         searches.forEach(search => {
                             const qShort = search.query ? (search.query.length > 45 ? search.query.substring(0, 45) + '...' : search.query) : '';
                             const oneLine = search.query
                                 ? `${search.timestamp_str || ''} - ${qShort} | Query: ${search.query.substring(0, 40)}${search.query.length > 40 ? '...' : ''} | Top K: ${search.top_k || '-'}`
                                 : `${search.timestamp_str || ''} - ${search.model_id || ''} | Top K: ${search.top_k || '-'}`;
+                            const folder = (search.folder_name || search.id || '').replace(/'/g, "\\'");
                             html += `
-                                <div class="saved-search-item" onclick="loadSavedSearchFolder('${search.folder_name}')" 
+                                <div class="saved-search-item" onclick="loadSavedSearchFolder('${folder}')" 
                                      style="padding: 6px 8px; margin-bottom: 4px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
                                      title="${(search.query || search.model_id || '').substring(0, 200)}"
                                      onmouseover="this.style.background='#e7f3ff'" 
@@ -1694,8 +1719,8 @@ HTML_TEMPLATE = """
             resultsDiv.style.display = 'block';
             const totalScore = eval_result.total_quality_score || {};
             const comparisonScore = eval_result.comparison_score || {};
-            const modelSearchScore = totalScore.model_search ?? comparisonScore.model_search_quality ?? eval_result.model_search_quality ?? 'N/A';
-            const tableSearchScore = totalScore.table_search ?? comparisonScore.table_search_quality ?? eval_result.table_search_quality ?? 'N/A';
+            const modelSearchScore = (totalScore.model_search != null ? totalScore.model_search : (comparisonScore.model_search_quality != null ? comparisonScore.model_search_quality : (eval_result.model_search_quality != null ? eval_result.model_search_quality : 'N/A')));
+            const tableSearchScore = (totalScore.table_search != null ? totalScore.table_search : (comparisonScore.table_search_quality != null ? comparisonScore.table_search_quality : (eval_result.table_search_quality != null ? eval_result.table_search_quality : 'N/A')));
             const winner = totalScore.winner || comparisonScore.winner || eval_result.winner || 'N/A';
             const subScores = eval_result.sub_scores || [];
             const qualityAnalysis = eval_result.quality_analysis || {};
@@ -1728,8 +1753,8 @@ HTML_TEMPLATE = """
                                 <div style="padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #ffc107;">
                                     <div style="font-weight: 600; font-size: 12px;">${ss.name}</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-top: 4px;">
-                                        <span>Model Search: <strong>${ss.model_search ?? '–'}/100</strong></span>
-                                        <span>Table Search: <strong>${ss.table_search ?? '–'}/100</strong></span>
+                                        <span>Model Search: <strong>${ss.model_search != null ? ss.model_search : '–'}/100</strong></span>
+                                        <span>Table Search: <strong>${ss.table_search != null ? ss.table_search : '–'}/100</strong></span>
                                     </div>
                                     ${ss.evidence ? `<div style="font-size: 11px; color: #666; margin-top: 6px;">Evidence: ${ss.evidence}</div>` : ''}
                                 </div>
