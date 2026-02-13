@@ -685,8 +685,7 @@ HTML_TEMPLATE = """
                 container.style.display = 'block';
                 if (modelRuns.length > 0) setIntegrationDropdownsFromSaved(modelRuns[0], null);
                 if (tableRuns.length > 0) setIntegrationDropdownsFromSaved(null, tableRuns[0]);
-                syncModelSearchDisplay();
-                syncTableSearchDisplay();
+                syncBothIntegrationDisplays();
             } else {
             const hasModel = data.integration_model_search && data.integration_model_search.status === 'success' && data.integration_model_search.integrated_table;
             const hasTable = data.integration_table_search && data.integration_table_search.status === 'success' && data.integration_table_search.integrated_table;
@@ -703,8 +702,7 @@ HTML_TEMPLATE = """
                     window.__tableSearchRuns = [{ key, ...t }];
                 }
                 setIntegrationDropdownsFromSaved(data.integration_model_search, data.integration_table_search);
-                syncModelSearchDisplay();
-                syncTableSearchDisplay();
+                syncBothIntegrationDisplays();
             }
             }
             if (data.evaluation_results && data.evaluation_results.evaluation) {
@@ -1257,14 +1255,14 @@ HTML_TEMPLATE = """
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Model Search and Table Search are saved separately. Switch via dropdowns to view different saved results. One <strong>Integrated</strong> button runs both.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
-                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncModelSearchDisplay(); syncTableSearchDisplay();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="union">Union</option>
                             <option value="intersection">Intersection</option>
                             <option value="alite">ALITE</option>
                             <option value="outer_join">Outer Join</option>
                         </select></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncModelSearchDisplay(); syncTableSearchDisplay();"></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncModelSearchDisplay(); syncTableSearchDisplay();"></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
@@ -1366,8 +1364,7 @@ HTML_TEMPLATE = """
             window.__modelSearchRuns = [];
             window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
-            syncModelSearchDisplay();
-            syncTableSearchDisplay();
+            syncBothIntegrationDisplays();
         }
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
@@ -1381,6 +1378,11 @@ HTML_TEMPLATE = """
         function getTableSearchKey(integrationType, searchType, tablesSource) {
             const src = (tablesSource || 'intermediate').toLowerCase().replace(/-/g, '_').replace(/[^a-z0-9_]/g, '_');
             return [(integrationType || 'union'), (searchType || 'single_column'), src].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
+        }
+        
+        function syncBothIntegrationDisplays() {
+            try { syncModelSearchDisplay(); } catch (e) { console.error('syncModelSearchDisplay error:', e); }
+            try { syncTableSearchDisplay(); } catch (e) { console.error('syncTableSearchDisplay error:', e); }
         }
         
         function syncModelSearchDisplay() {
@@ -1415,7 +1417,10 @@ HTML_TEMPLATE = """
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
             const key = getTableSearchKey(integrationType, searchType, tablesSource);
             const runs = window.__tableSearchRuns || [];
-            const run = runs.find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === key);
+            const run = runs.find(r => {
+                const rKey = r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source);
+                return rKey === key;
+            });
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
             const noResultMsg = placeholder;
             if (run && run.status === 'success' && run.integrated_table) {
@@ -1608,8 +1613,7 @@ HTML_TEMPLATE = """
                         if (idx >= 0) runs[idx] = tPayload; else runs = [...runs, tPayload];
                         window.__tableSearchRuns = runs;
                     }
-                    syncModelSearchDisplay();
-                    syncTableSearchDisplay();
+                    syncBothIntegrationDisplays();
                 }
             } catch (err) {
                 leftDiv.innerHTML = `<div style="padding: 10px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${err.message}</div>`;
