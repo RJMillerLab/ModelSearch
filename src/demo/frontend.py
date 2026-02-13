@@ -1732,6 +1732,14 @@ HTML_TEMPLATE = """
             const tableSearchAnalysis = qualityAnalysis.table_search || {};
             const keyDiffs = eval_result.key_differences || [];
             const evidenceForDiffs = escTpl(eval_result.evidence_for_differences || '');
+            // Calculate average of sub-scores for comparison
+            let avgModelSearch = null, avgTableSearch = null;
+            if (subScores.length > 0) {
+                const modelSum = subScores.reduce((sum, ss) => sum + (ss.model_search != null ? ss.model_search : 0), 0);
+                const tableSum = subScores.reduce((sum, ss) => sum + (ss.table_search != null ? ss.table_search : 0), 0);
+                avgModelSearch = Math.round(modelSum / subScores.length);
+                avgTableSearch = Math.round(tableSum / subScores.length);
+            }
             let html = `
                 <div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                     <h4 style="margin-top: 0; color: #856404; margin-bottom: 15px;">📊 Quality Comparison (on user question)</h4>
@@ -1741,17 +1749,20 @@ HTML_TEMPLATE = """
                                 <div style="font-size: 14px; color: #666;">Model Search</div>
                                 <div style="font-size: 28px; font-weight: bold; color: ${winner === 'model_search' ? '#28a745' : '#004085'};">${modelSearchScore}/100</div>
                                 ${winner === 'model_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
+                                ${avgModelSearch != null ? `<div style="font-size: 10px; color: #666; margin-top: 4px;">Avg of sub-scores: ${avgModelSearch}/100</div>` : ''}
                             </div>
                             <div style="padding: 15px; background: ${winner === 'table_search' ? '#d4edda' : '#fff3cd'}; border-radius: 4px; border: 2px solid ${winner === 'table_search' ? '#28a745' : '#ffc107'};">
                                 <div style="font-size: 14px; color: #666;">Table Search</div>
                                 <div style="font-size: 28px; font-weight: bold; color: ${winner === 'table_search' ? '#28a745' : '#856404'};">${tableSearchScore}/100</div>
                                 ${winner === 'table_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
+                                ${avgTableSearch != null ? `<div style="font-size: 10px; color: #666; margin-top: 4px;">Avg of sub-scores: ${avgTableSearch}/100</div>` : ''}
                             </div>
                         </div>
+                        ${subScores.length > 0 ? `<div style="margin-top: 10px; padding: 8px; background: #fff; border-radius: 4px; font-size: 11px; color: #666; text-align: center;">Total Quality Score is composed of three sub-scores: <strong>Relevance</strong>, <strong>Coverage</strong>, and <strong>Diversity</strong> (shown below).</div>` : ''}
                     </div>
                     ${subScores.length > 0 ? `
                     <div style="margin-bottom: 20px;">
-                        <h5 style="margin: 0 0 10px 0; color: #856404; font-size: 13px;">Sub-scores (Relevance, Coverage, Diversity)</h5>
+                        <h5 style="margin: 0 0 10px 0; color: #856404; font-size: 13px;">Sub-scores (compose the Total Quality Score above)</h5>
                         <div style="display: flex; flex-direction: column; gap: 10px;">
                             ${subScores.map(ss => `
                                 <div style="padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #ffc107;">
