@@ -1177,7 +1177,7 @@ HTML_TEMPLATE = """
                                                                         ${modelTables.map((table, tableIdx) => {
                                                                             const tableBasename = table.split('/').pop();
                                                                             const tableExpandId = `${modelExpandId}-table-${tableIdx}`;
-                                                                            const safeTpl = (s) => String(s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$');
+                                                                            const safeTpl = (s) => String(s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$').replace(/\{/g, '\\\\{').replace(/\}/g, '\\\\}');
                                                                             const escapedTablePath = String(table)
                                                                                 .replace(/&/g, '&amp;')
                                                                                 .replace(/"/g, '&quot;')
@@ -1718,7 +1718,7 @@ HTML_TEMPLATE = """
         function displayEvaluationResults(eval_result, resultsDiv, table1Data, table2Data) {
             if (!resultsDiv) return;
             resultsDiv.style.display = 'block';
-            const escTpl = (s) => String(s == null ? '' : s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$');
+            const escTpl = (s) => String(s == null ? '' : s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$').replace(/\{/g, '\\\\{').replace(/\}/g, '\\\\}');
             const totalScore = eval_result.total_quality_score || {};
             const comparisonScore = eval_result.comparison_score || {};
             const modelSearchScore = (totalScore.model_search != null ? totalScore.model_search : (comparisonScore.model_search_quality != null ? comparisonScore.model_search_quality : (eval_result.model_search_quality != null ? eval_result.model_search_quality : 'N/A')));
