@@ -14,8 +14,133 @@ import os
 import sys
 import pandas as pd
 import json
-from typing import List, Dict, Optional, Any, Set
+from typing import List, Dict, Optional, Any, Set, Tuple
 from collections import Counter
+
+# Base dirs for table lookup (in order of priority)
+TABLE_BASE_DIRS = [
+    "data_citationlake/processed/deduped_hugging_csvs",
+    "data_citationlake/processed/deduped_github_csvs",
+    "data_citationlake/processed/tables_output",
+]
+
+_CACHED_BASENAME_TO_PATH: Optional[Dict[str, str]] = None
+
+
+def _build_basename_index() -> Dict[str, str]:
+    """Build basename->fullpath index for fast table lookup. Uses DuckDB/SQL for speed."""
+    global _CACHED_BASENAME_TO_PATH
+    if _CACHED_BASENAME_TO_PATH is not None:
+        return _CACHED_BASENAME_TO_PATH
+    index: Dict[str, str] = {}
+    cwd = os.getcwd()
+    for base in TABLE_BASE_DIRS:
+        abs_base = os.path.abspath(base)
+        if not os.path.isdir(abs_base):
+            continue
+        try:
+            for f in os.listdir(abs_base):
+                if f.lower().endswith(".csv"):
+                    if f not in index:
+                        index[f] = os.path.join(abs_base, f)
+        except OSError:
+            continue
+    _CACHED_BASENAME_TO_PATH = index
+    return index
+
+
+def _resolve_table_path(basename: str) -> Optional[str]:
+    """Resolve CSV basename to full path using cached index or fallback search."""
+    base = os.path.basename(basename)
+    idx = _build_basename_index()
+    if base in idx:
+        return idx[base]
+    for base_dir in TABLE_BASE_DIRS:
+        p = os.path.join(base_dir, base)
+        if os.path.exists(p):
+            return os.path.abspath(p)
+    return None
+
+
+def _normalize_val_to_items(val: Any) -> List[Any]:
+    """Unify iteration over parquet list cells: handle list, tuple, np.ndarray, scalar."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return []
+    if isinstance(val, (list, tuple)):
+        return val
+    if hasattr(val, "__iter__") and not isinstance(val, str):
+        return list(val)
+    return [val]
+
+
+def _get_tables_for_models_duckdb(
+    parquet_path: str, model_ids: List[str]
+) -> Dict[str, List[str]]:
+    """
+    Fast batch query: get all (modelId, csv_basename) for given models using DuckDB.
+    Single SQL scan instead of per-model iteration.
+    """
+    import duckdb
+    if not model_ids or not os.path.exists(parquet_path):
+        return {}
+    path_abs = os.path.abspath(parquet_path).replace("\\", "/")
+    conn = duckdb.connect(":memory:")
+    ids_sql = ",".join(repr(m) for m in model_ids)
+    try:
+        df = conn.execute(f"""
+            SELECT modelId FROM read_parquet(?)
+            WHERE modelId IN ({ids_sql})
+        """, [path_abs]).fetchdf()
+    except Exception:
+        try:
+            df = conn.execute(f"""
+                SELECT modelId FROM read_parquet('{path_abs}')
+                WHERE modelId IN ({ids_sql})
+            """).fetchdf()
+        except Exception:
+            conn.close()
+            return {}
+    if df.empty:
+        conn.close()
+        return {}
+    try:
+        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
+    except Exception:
+        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
+    list_cols = [
+        c[0] for c in cols
+        if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
+    ][:4]
+    if not list_cols:
+        conn.close()
+        return {}
+    select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
+    try:
+        full_df = conn.execute(f"""
+            SELECT {select_cols} FROM read_parquet(?)
+            WHERE modelId IN ({ids_sql})
+        """, [path_abs]).fetchdf()
+    except Exception:
+        full_df = conn.execute(f"""
+            SELECT {select_cols} FROM read_parquet('{path_abs}')
+            WHERE modelId IN ({ids_sql})
+        """).fetchdf()
+    conn.close()
+    model_to_tables: Dict[str, List[str]] = {m: [] for m in model_ids}
+    for _, row in full_df.iterrows():
+        mid = str(row["modelId"])
+        for col in list_cols:
+            val = row.get(col)
+            items = _normalize_val_to_items(val)
+            for v in items:
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if s:
+                    base = os.path.basename(s)
+                    if base and base not in model_to_tables[mid]:
+                        model_to_tables[mid].append(base)
+    return model_to_tables
 
 # Add Blend_internal to path
 blend_path = os.path.join(os.path.dirname(__file__), '..', 'Blend_internal')
@@ -36,14 +161,16 @@ except:
     pass
 
 
-def load_table_from_file(table_path: str) -> Optional[pd.DataFrame]:
+def load_table_from_file(table_path: str, use_index: bool = True) -> Optional[pd.DataFrame]:
     """
     Load a table from CSV file.
     
     Supports multiple path locations including data_citationlake and CitationLake paths.
+    When use_index=True, uses cached basename->path index for fast lookup.
     
     Args:
         table_path: Path to CSV file (can be basename or full path)
+        use_index: If True, use pre-built index for faster resolution (default True)
         
     Returns:
         DataFrame or None if file not found
@@ -93,6 +220,15 @@ def load_table_from_file(table_path: str) -> Optional[pd.DataFrame]:
         else:
             abs_base_dir = os.path.abspath(base_dir)
         possible_paths.append(os.path.join(abs_base_dir, basename))
+    
+    # Fast path: use cached index if available
+    if use_index:
+        resolved = _resolve_table_path(table_path)
+        if resolved and os.path.exists(resolved):
+            try:
+                return pd.read_csv(resolved)
+            except Exception as e:
+                print(f"⚠️  Error loading {resolved}: {e}")
     
     # Remove duplicates while preserving order
     seen = set()
@@ -495,20 +631,17 @@ def integrate_tables_from_search_results(
     search_type: str = "single_column",
     integration_type: str = "union",
     k: int = 10,
-    db_path: Optional[str] = None
+    db_path: Optional[str] = None,
+    tables_source: str = "intermediate",
+    relationship_parquet: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Integrate tables from Card2Tab2Card search results.
     
-    Uses the intermediate results (retrieved_table_filenames) from search results
-    to integrate tables without re-searching.
-    
     Args:
-        search_results_json: Path to JSON file with search results
-        search_type: Which search type results to use ("single_column", "keyword", "unionable")
-        integration_type: "union" or "intersection"
-        k: Maximum number of rows in result
-        db_path: Optional path to modellake.db
+        tables_source: "intermediate" = use retrieved tables from search (fast).
+                       "all_from_modelcards" = get ALL tables for found models from parquet (DuckDB).
+        relationship_parquet: Required when tables_source="all_from_modelcards".
         
     Returns:
         Dictionary with integration results
@@ -597,13 +730,43 @@ def integrate_tables_from_search_results(
             "integrated_table": None
         }
     
-    print(f"✅ Found {len(retrieved_filenames)} retrieved tables")
-    print(f"   Using first {min(k, len(retrieved_filenames))} tables for integration")
+    if tables_source == "all_from_modelcards" and relationship_parquet and os.path.exists(relationship_parquet):
+        # Get model_ids from table_to_models, then DuckDB batch query
+        model_ids = set()
+        table_to_models = intermediate.get("table_to_models", {})
+        for table_path, model_list in table_to_models.items():
+            for m in (model_list if isinstance(model_list, list) else []):
+                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
+                if mid:
+                    model_ids.add(mid)
+        model_ids = list(model_ids)[:50]
+        if not model_ids:
+            return {"success": False, "error": "No model IDs in intermediate for all_from_modelcards", "integrated_table": None}
+        print(f"✅ tables_source=all_from_modelcards: DuckDB batch query for {len(model_ids)} models")
+        model_to_tables = _get_tables_for_models_duckdb(relationship_parquet, model_ids)
+        all_basenames = []
+        for mid in model_ids:
+            all_basenames.extend(model_to_tables.get(mid, [])[:20])
+        seen = set()
+        table_paths = []
+        for bn in all_basenames:
+            if bn in seen:
+                continue
+            seen.add(bn)
+            p = _resolve_table_path(bn)
+            if p:
+                table_paths.append(p)
+            if len(table_paths) >= k:
+                break
+        print(f"   Resolved {len(table_paths)} tables for integration")
+    else:
+        # intermediate: use retrieved tables (current behavior)
+        print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} tables from search")
+        table_paths = retrieved_filenames[:k]
     
-    # Use first k tables for integration
-    table_paths = retrieved_filenames[:k]
+    if not table_paths:
+        return {"success": False, "error": "No tables to integrate", "integrated_table": None}
     
-    # Integrate tables
     return integrate_tables(table_paths, integration_type, k, db_path)
 
 
@@ -621,8 +784,6 @@ def integrate_tables_from_model_search_results(
     """
     Integrate tables from Card2Card (model search) results.
     
-    Gets tables for each model in the Card2Card results and integrates them.
-    
     Args:
         search_results_json: Path to JSON file with search results
         integration_type: "union", "intersection", "alite", or "outer_join"
@@ -632,8 +793,7 @@ def integrate_tables_from_model_search_results(
         relationship_parquet: Optional path to relationship parquet file
         schema_log_path: Path to parquet_schema.log (for CitationLake)
         use_citationlake: Whether to use CitationLake get_from (default: True)
-        card2card_retrieval_mode: Optional retrieval mode for Card2Card results: "dense", "sparse", or "hybrid".
-            If provided, model IDs are taken from card2card_all_modes[card2card_retrieval_mode]; otherwise from card2card_results.
+        card2card_retrieval_mode: Optional retrieval mode: "dense", "sparse", or "hybrid"
         
     Returns:
         Dictionary with integration results
@@ -791,9 +951,9 @@ def integrate_tables_from_model_search_results(
                                 fallback_table_paths.append(table_path)
                     print(f"   Model {model_id}: {len(tables)} tables")
     
-    # Priority 2: Fallback to card2tab2card_results if dedicated field not available
+    # Priority 2: card2tab2card_results intermediate (tables from related-search)
     elif isinstance(search_results, dict) and "card2tab2card_results" in search_results:
-        print(f"⚠️  No dedicated card2card_integration_tables field, using card2tab2card_results as fallback")
+        print(f"   Using card2tab2card_results intermediate (table_to_models)")
         card2tab2card_results = search_results["card2tab2card_results"]
         # Extract table_to_models mapping from any search type
         for search_type, type_results in card2tab2card_results.items():
@@ -820,10 +980,8 @@ def integrate_tables_from_model_search_results(
                             if table_path not in fallback_table_paths:
                                 fallback_table_paths.append(table_path)
     
-    # Check if we should use fallback data
+    # Model Search: always get tables from parquet (DuckDB batch when available). No "intermediate" - that's Table Search only.
     use_fallback = False
-    
-    # If CitationLake is not available and we don't have relationship_df, try fallback
     if use_citationlake and not citationlake_available and relationship_df is None:
         if fallback_table_paths:
             use_fallback = True
@@ -854,16 +1012,30 @@ def integrate_tables_from_model_search_results(
     models_with_tables = []
     models_without_tables = []
     
-    # Use fallback data if available and real sources are not available
+    # Use fallback only when parquet/CitationLake unavailable (e.g. from card2tab2card_results)
     if use_fallback:
-        print(f"⚠️  Cannot get tables from real sources, but found {len(fallback_table_paths)} tables from search results JSON")
-        print(f"   Using fallback data from card2tab2card_results")
+        print(f"⚠️  Using {len(fallback_table_paths)} fallback tables from search results JSON (parquet unavailable)")
         all_table_paths = fallback_table_paths[:k]
         models_with_tables = list(fallback_models_with_tables.keys())
         models_without_tables = [m for m in model_ids if m not in models_with_tables]
-        print(f"✅ Using {len(all_table_paths)} fallback tables from {len(models_with_tables)} models")
+    elif relationship_parquet and os.path.exists(relationship_parquet):
+        # Fast path: DuckDB batch query (single SQL scan)
+        print(f"✅ DuckDB batch query on parquet (fast)")
+        model_to_tables = _get_tables_for_models_duckdb(relationship_parquet, model_ids)
+        for model_id in model_ids:
+            basenames = model_to_tables.get(model_id, [])
+            if basenames:
+                for bn in basenames[:50]:
+                    path = _resolve_table_path(bn)
+                    if path and path not in all_table_paths:
+                        all_table_paths.append(path)
+                models_with_tables.append(model_id)
+                print(f"  ✅ Model {model_id}: {len(basenames)} tables")
+            else:
+                models_without_tables.append(model_id)
+                print(f"  ⚠️  Model {model_id}: No tables found")
     else:
-        # Try to get real tables from models
+        # Fallback: per-model get_tables_for_model (slower)
         for model_id in model_ids:
             try:
                 # Get tables for this model

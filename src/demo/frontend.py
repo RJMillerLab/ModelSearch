@@ -632,6 +632,7 @@ HTML_TEMPLATE = """
             if (tableRes) {
                 setSelect('integration_type', tableRes.integration_type);
                 setSelect('integration_search_type', tableRes.search_type);
+                setSelect('integration_tables_source', tableRes.tables_source);
                 setInput('integration_k', tableRes.k);
                 setInput('integration_max_models', tableRes.max_models);
             }
@@ -676,7 +677,7 @@ HTML_TEMPLATE = """
                 }
                 if (hasTable) {
                     const t = data.integration_table_search;
-                    const key = getTableSearchKey(t.integration_type, t.search_type);
+                    const key = getTableSearchKey(t.integration_type, t.search_type, t.tables_source);
                     window.__tableSearchRuns = [{ key, ...t }];
                 }
                 setIntegrationDropdownsFromSaved(data.integration_model_search, data.integration_table_search);
@@ -1259,6 +1260,10 @@ HTML_TEMPLATE = """
                         <div style="padding: 10px; background: #d4edda; border-radius: 6px; border-left: 4px solid #28a745;">
                             <h4 style="margin: 0 0 6px 0; font-size: 13px; color: #155724;">Table Search</h4>
                             <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
+                                <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">tables source:</label><select id="integration_tables_source" class="form-control" onchange="syncTableSearchDisplay()" style="width: 175px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" title="Intermediate: from search. All from Modelcards: parquet (DuckDB).">
+                                    <option value="intermediate" selected>Intermediate tables</option>
+                                    <option value="all_from_modelcards">All tables from Modelcards</option>
+                                </select></div>
                                 <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">search type:</label><select id="integration_search_type" class="form-control" onchange="syncTableSearchDisplay()" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                                     <option value="single_column">Single Column</option>
                                     <option value="keyword">Keyword</option>
@@ -1343,8 +1348,9 @@ HTML_TEMPLATE = """
         function getModelSearchKey(integrationType, card2cardMode) {
             return [(integrationType || 'union'), (card2cardMode || 'dense')].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
         }
-        function getTableSearchKey(integrationType, searchType) {
-            return [(integrationType || 'union'), (searchType || 'single_column')].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
+        function getTableSearchKey(integrationType, searchType, tablesSource) {
+            const src = (tablesSource || 'intermediate').toLowerCase().replace(/-/g, '_').replace(/[^a-z0-9_]/g, '_');
+            return [(integrationType || 'union'), (searchType || 'single_column'), src].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
         }
         
         function syncModelSearchDisplay() {
@@ -1376,9 +1382,10 @@ HTML_TEMPLATE = """
             container.style.display = 'block';
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
-            const key = getTableSearchKey(integrationType, searchType);
+            const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
+            const key = getTableSearchKey(integrationType, searchType, tablesSource);
             const runs = window.__tableSearchRuns || [];
-            const run = runs.find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type)) === key);
+            const run = runs.find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === key);
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
             const noResultMsg = placeholder;
             if (run && run.status === 'success' && run.integrated_table) {
@@ -1537,11 +1544,12 @@ HTML_TEMPLATE = """
                 }
                 initTablePanZoom(leftDiv);
                 
+                const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
                 rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Table Search integration...</div>';
                 const tableRes = await fetch('{{BACKEND_URL}}/api/integrate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels })
+                    body: JSON.stringify({ job_id: jobId, search_type: searchType, integration_type: integrationType, k, max_models: maxModels, tables_source: tablesSource })
                 }).then(r => r.json());
                 
                 if (tableRes.status === 'success') {
@@ -1554,7 +1562,7 @@ HTML_TEMPLATE = """
                 initTablePanZoom(rightDiv);
                 if (modelRes.status === 'success' || tableRes.status === 'success') {
                     const modelKey = getModelSearchKey(integrationType, modelSearchMode);
-                    const tableKey = getTableSearchKey(integrationType, searchType);
+                    const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
                     if (modelRes.status === 'success') {
                         let runs = window.__modelSearchRuns || [];
                         const mPayload = { key: modelKey, integration_type: integrationType, card2card_retrieval_mode: modelSearchMode, k, max_models: maxModels, ...modelRes };
@@ -1564,8 +1572,8 @@ HTML_TEMPLATE = """
                     }
                     if (tableRes.status === 'success') {
                         let runs = window.__tableSearchRuns || [];
-                        const tPayload = { key: tableKey, integration_type: integrationType, search_type: searchType, k, max_models: maxModels, ...tableRes };
-                        const idx = runs.findIndex(r => (r.key || getTableSearchKey(r.integration_type, r.search_type)) === tableKey);
+                        const tPayload = { key: tableKey, integration_type: integrationType, search_type: searchType, tables_source: tablesSource, k, max_models: maxModels, ...tableRes };
+                        const idx = runs.findIndex(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
                         if (idx >= 0) runs[idx] = tPayload; else runs = [...runs, tPayload];
                         window.__tableSearchRuns = runs;
                     }

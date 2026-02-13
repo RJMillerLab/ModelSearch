@@ -9,7 +9,8 @@ Minimal imports for fast startup.
 import os
 import sys
 import json
-import uuid
+import random
+import string
 import threading
 import subprocess
 import time
@@ -50,6 +51,13 @@ DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedu
 JOBS_DIR = os.path.join(REPO_ROOT, "data", "jobs")
 
 
+def _generate_job_id() -> str:
+    """Generate human-readable job ID: YYYY-MM-DD_HH-MM-SS_xxxx (time + 4-char suffix for uniqueness)."""
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    return f"{ts}_{suffix}"
+
+
 def _integration_run_key(integration_type: str, search_type: str, card2card_mode: str) -> str:
     """Slug for combined integration run (legacy): e.g. union_single_column_dense."""
     parts = [integration_type or "union", search_type or "single_column", card2card_mode or "dense"]
@@ -62,9 +70,9 @@ def _model_search_key(integration_type: str, card2card_mode: str) -> str:
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
 
 
-def _table_search_key(integration_type: str, search_type: str) -> str:
-    """Slug for Table Search only: e.g. alite_single_column. Params: integration_type, search_type."""
-    parts = [integration_type or "union", search_type or "single_column"]
+def _table_search_key(integration_type: str, search_type: str, tables_source: str = "intermediate") -> str:
+    """Slug for Table Search: e.g. alite_single_column_intermediate."""
+    parts = [integration_type or "union", search_type or "single_column", (tables_source or "intermediate").replace("-", "_")]
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
 
 
@@ -510,9 +518,9 @@ def search():
         with open(search_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
         # For saved searches under data/jobs/, use folder_name as job_id so integrate/eval/qa use same folder
-        # For template (config/demo_template), use new uuid so we do not write into config
+        # For template (config/demo_template), use new job_id so we do not write into config
         if folder_name == "template":
-            job_id = str(uuid.uuid4())
+            job_id = _generate_job_id()
             base_dir = None  # no optional files for template
         else:
             job_id = folder_name
@@ -549,7 +557,7 @@ def search():
     if tab2tab_mode == "load" and not tab2tab_json:
         return jsonify({"status": "error", "message": "tab2tab_json required when tab2tab_mode=load"}), 400
 
-    job_id = str(uuid.uuid4())
+    job_id = _generate_job_id()
     jobs[job_id] = JobLogger(job_id)
     thread = threading.Thread(
         target=run_search_pipeline,
@@ -740,6 +748,7 @@ def integrate():
     integration_type = data.get("integration_type", "union")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
+    tables_source = data.get("tables_source", "intermediate")
     if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
     
@@ -756,7 +765,9 @@ def integrate():
             search_type=search_type,
             integration_type=integration_type,
             k=k,
-            db_path=DEFAULT_DB_PATH
+            db_path=DEFAULT_DB_PATH,
+            tables_source=tables_source,
+            relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET if tables_source == "all_from_modelcards" else None,
         )
         
         if not result.get("success", False):
@@ -772,7 +783,7 @@ def integrate():
                 "data": _sanitize_for_json(raw_data)
             }
             # Save with key = integration_type_search_type for unique filenames per table search combination
-            run_key = _table_search_key(integration_type, search_type)
+            run_key = _table_search_key(integration_type, search_type, tables_source)
             try:
                 csv_name = f"integrated_table_search_{run_key}.csv"
                 save_path = os.path.join(job_dir, csv_name)
@@ -787,6 +798,7 @@ def integrate():
                 "status": "success",
                 "integration_type": integration_type,
                 "search_type": search_type,
+                "tables_source": tables_source,
                 "k": k,
                 "max_models": max_models,
                 **result,
