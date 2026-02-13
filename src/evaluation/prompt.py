@@ -87,6 +87,7 @@ For each metric, give table_search and model_search scores and a short evidence 
 - Provide brief, concrete evidence for each sub_score and for evidence_for_differences.
 - In quality_analysis give only strengths and weaknesses (no long summary).
 - Do not include recommendation, comparison_summary, or quality_difference.
+- **CRITICAL: Do NOT use these special characters in any text fields (evidence, strengths, weaknesses, key_differences, evidence_for_differences): backslash (\\), backtick (`), dollar sign ($), or curly braces ({{ }}). Replace them with spaces or omit them. Use only letters, numbers, spaces, and simple punctuation (periods, commas, hyphens, colons, parentheses).**
 
 Output valid JSON only, no markdown."""
 

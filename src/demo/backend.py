@@ -76,6 +76,19 @@ def _table_search_key(integration_type: str, search_type: str, tables_source: st
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
 
 
+def _sanitize_for_js_template(obj: Any) -> Any:
+    """Replace chars that break JS template literals (\\ ` $ { }) so LLM output cannot cause SyntaxError."""
+    if isinstance(obj, str):
+        for c in ("\\", "`", "$", "{", "}"):
+            obj = obj.replace(c, " ")
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_js_template(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_js_template(v) for v in obj]
+    return obj
+
+
 app = Flask(__name__)
 CORS(app)
 
@@ -564,6 +577,8 @@ def search():
         if base_dir and os.path.isdir(base_dir):
             extras = _load_job_extras(job_id, base_dir=base_dir)
             out.update(extras)
+            if isinstance(out.get("evaluation_results"), dict) and "evaluation" in out["evaluation_results"]:
+                out["evaluation_results"]["evaluation"] = _sanitize_for_js_template(out["evaluation_results"]["evaluation"])
         return jsonify(out)
 
     mode = data.get("mode", "query")
@@ -1086,6 +1101,8 @@ def evaluate():
         import traceback
         traceback.print_exc()
         return jsonify({"status": "error", "message": f"Evaluation failed: {str(e)}"}), 500
+
+    result = _sanitize_for_js_template(result)
 
     # Convert DataFrames to frontend format for optional display
     def _df_to_dict(df: pd.DataFrame) -> Optional[Dict]:
