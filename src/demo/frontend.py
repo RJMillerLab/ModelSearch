@@ -323,16 +323,14 @@ HTML_TEMPLATE = """
             </div>
             
             <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
-                <p style="margin-bottom: 6px; font-size: 12px; color: #666;">Pick a saved search (select below or click a card).</p>
-                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;">
-                    <select id="saved_search_select" class="form-control" style="min-width: 200px; max-width: 100%;">
+                <p style="margin-bottom: 4px; font-size: 12px; color: #666;">Pick a saved search from the folder select:</p>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px;">
+                    <select id="saved_search_select" class="form-control" style="min-width: 200px; max-width: 100%; height: 26px; font-size: 12px; padding: 2px 6px;">
                         <option value="">— select folder —</option>
                     </select>
-                    <button id="loadMimicBtn" type="button" onclick="loadMimicSearch()" style="padding: 6px 14px; font-size: 13px;">Load Saved Results</button>
+                    <button id="loadMimicBtn" type="button" onclick="loadMimicSearch()" style="padding: 2px 10px; font-size: 12px; height: 26px;">Load Saved Results</button>
                 </div>
-                <div id="saved_searches_list" style="max-height: 180px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 6px; background: #f8f9fa;">
-                    <div style="text-align: center; color: #666; padding: 12px;">Loading saved searches...</div>
-                </div>
+                <div id="saved_searches_list" style="display: none;"></div>
             </div>
             
             <div id="new-search-inputs">
