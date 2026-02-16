@@ -170,9 +170,20 @@ python -m src.postprocess.generate_md_from_logs --log_file logs/card2tab2card_by
 ## 2.7 Demo (evaluation, QA, integration)
 
 ```bash
+# Default: backend does not run card2tab2card by_type
 python -m src.demo.backend
 python -m src.demo.frontend
 # open http://localhost:5001
+```
+
+**Backend: enable table type (by_type).** Use an arg or env to run card2tab2card in by_type mode (requires 1.4 table classification).
+```bash
+# Enable by_type (table type classification)
+python -m src.demo.backend --use-by-type
+# Enable by_type and set classification JSON path
+python -m src.demo.backend --use-by-type --classification-json data/table_classifications.json
+# Enable by_type via environment variable
+USE_BY_TYPE=1 python -m src.demo.backend
 ```
 
 ## 2.8 baseline2 / baseline3 (table retrieval; from ModelTables)

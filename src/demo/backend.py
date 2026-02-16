@@ -50,6 +50,10 @@ DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedu
 # All job outputs (search results, integration, evaluation, QA) live under data/jobs/<job_id>
 JOBS_DIR = os.path.join(REPO_ROOT, "data", "jobs")
 
+# Table type classification (by_type): set via --use-by-type or env USE_BY_TYPE=1
+USE_BY_TYPE = False
+CLASSIFICATION_JSON = os.path.join(REPO_ROOT, "data", "table_classifications.json")
+
 
 def _generate_job_id() -> str:
     """Generate human-readable job ID: YYYY-MM-DD_HH-MM-SS_xxxx (time + 4-char suffix for uniqueness)."""
@@ -180,6 +184,7 @@ def run_search_pipeline(
     tab2tab_json: Optional[str] = None,
     card2card_retrieval_mode: str = "dense",
     require_seed_has_tables: bool = False,
+    use_by_type: bool = False,
 ):
     """Run pipeline by calling CLI commands (build_index.md). All outputs under job_dir."""
     logger = jobs.get(job_id)
@@ -203,12 +208,12 @@ def run_search_pipeline(
         _run_pipeline_body(
             logger, job_id, job_dir, start_time,
             query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode,
-            require_seed_has_tables,
+            require_seed_has_tables, use_by_type,
         )
-            except Exception as e:
+    except Exception as e:
         logger.log(f"Pipeline crashed: {e}")
         _set_pipeline_error(f"Pipeline error: {e}", model_id)
-                import traceback
+        import traceback
         logger.log(traceback.format_exc())
 
 
@@ -225,12 +230,13 @@ def _run_pipeline_body(
     tab2tab_json: Optional[str],
     card2card_retrieval_mode: str,
     require_seed_has_tables: bool = False,
+    use_by_type: bool = False,
 ):
     logger.log("Starting search pipeline (CLI)...")
     logger.log("Mode: Query → ModelCard → Search" if query else "Mode: Model ID → Search")
     if query:
         logger.log(f"Query: {query}")
-                        else:
+    else:
         logger.log(f"Model ID: {model_id}")
     logger.set_status("running")
 
@@ -287,13 +293,13 @@ def _run_pipeline_body(
                     stored_query = data.get("query", "")
                     logger.log(f"Extracted model (with tables): {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
                     break
-                            else:
+            else:
                 first = data["results"][0]
                 model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
                 seed_no_tables_skip_table_search = True
                 logger.log(f"Table Search Seed Model: none of top-{len(results_list)} in valid set. Using top-1 for Card2Card only; Table Search skipped.")
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
-                                        else:
+        else:
             cmd = [
                 sys.executable, q2m_script,
                 "--query", query,
@@ -419,16 +425,46 @@ def _run_pipeline_body(
         elapsed = time.time() - t0
         return (st, rc, out_path, out, err, elapsed)
 
+    def run_card2tab2card_by_type() -> tuple:
+        """Run card2tab2card with --mode by_type (table type classification). Uses CLASSIFICATION_JSON."""
+        st = "by_type"
+        out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
+        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
+        classification_path = CLASSIFICATION_JSON if os.path.isabs(CLASSIFICATION_JSON) else os.path.join(REPO_ROOT, CLASSIFICATION_JSON)
+        cmd = [
+            sys.executable, c2t2c_script,
+            "--model_id", model_id,
+            "--mode", "by_type",
+            "--search_type", "keyword",
+            "--k", str(k_table),
+            "--modelcard_k", "0",
+            "--db_path", DEFAULT_DB_PATH,
+            "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
+            "--no_citationlake",
+            "--classification_json", classification_path,
+            "--output_json", out_path,
+        ]
+        t0 = time.time()
+        rc, out, err = _run_cmd(cmd, REPO_ROOT)
+        elapsed = time.time() - t0
+        return (st, rc, out_path, out, err, elapsed)
+
     card2card_modes = ["dense", "sparse", "hybrid"]
     card2tab2card_types = ["keyword", "single_column"]  # CLI supports these without CSV
+    # Add by_type if requested (from frontend checkbox or backend --use-by-type)
+    if use_by_type or USE_BY_TYPE:
+        card2tab2card_types = list(card2tab2card_types) + ["by_type"]
 
-                futures = {}
+    futures = {}
     with ThreadPoolExecutor(max_workers=16) as ex:
         for m in card2card_modes:
             futures[ex.submit(run_card2card, m)] = ("card2card", m)
         if not seed_no_tables_skip_table_search:
             for st in card2tab2card_types:
-                futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
+                if st == "by_type":
+                    futures[ex.submit(run_card2tab2card_by_type)] = ("card2tab2card", "by_type")
+                else:
+                    futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
 
     card2card_all = {}
     card2tab2card_all = {}
@@ -501,8 +537,11 @@ def _run_pipeline_body(
                 "Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
             )
     # Fill missing card2tab2card types with empty (no scan)
-    for st in ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation",
-               "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example"]:
+    fill_types = ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation",
+                  "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example"]
+    if USE_BY_TYPE and "by_type" not in card2tab2card_all:
+        fill_types = ["by_type"] + fill_types
+    for st in fill_types:
         if st not in card2tab2card_all:
             card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
 
@@ -588,6 +627,7 @@ def search():
     tab2tab_json = data.get("tab2tab_json")
     card2card_retrieval_mode = data.get("card2card_retrieval_mode", "dense")
     require_seed_has_tables = bool(data.get("require_seed_has_tables", False))
+    use_by_type = bool(data.get("use_by_type", False))
 
     if mode == "query":
         query = (data.get("query") or "").strip()
@@ -609,7 +649,7 @@ def search():
         jobs[job_id] = JobLogger(job_id)
         thread = threading.Thread(
             target=run_search_pipeline,
-        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables),
+        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type),
         )
         thread.daemon = True
         thread.start()
@@ -1314,6 +1354,29 @@ def save_qa():
 
 
 if __name__ == "__main__":
+    import argparse as _argparse
+    parser = _argparse.ArgumentParser(description="ModelSearch Demo Backend")
+    parser.add_argument("--port", type=int, default=None, help="Port (default: env PORT or 5002)")
+    parser.add_argument("--use-by-type", action="store_true", dest="use_by_type",
+                        help="Run card2tab2card with table type classification (by_type mode)")
+    parser.add_argument("--no-by-type", action="store_false", dest="use_by_type",
+                        help="Do not run by_type (default)")
+    parser.add_argument("--classification-json", default=None,
+                        help="Path to table_classifications.json (for by_type). Default: data/table_classifications.json")
+    parser.set_defaults(use_by_type=None)
+    args, _ = parser.parse_known_args()
+
+    if args.use_by_type is not None:
+        USE_BY_TYPE = args.use_by_type
+    else:
+        USE_BY_TYPE = os.environ.get("USE_BY_TYPE", "").strip().lower() in ("1", "true", "yes")
+    if args.classification_json:
+        CLASSIFICATION_JSON = args.classification_json if os.path.isabs(args.classification_json) else os.path.join(REPO_ROOT, args.classification_json)
+    elif USE_BY_TYPE and os.environ.get("TABLE_CLASSIFICATIONS_JSON"):
+        CLASSIFICATION_JSON = os.path.join(REPO_ROOT, os.environ["TABLE_CLASSIFICATIONS_JSON"]) if not os.path.isabs(os.environ["TABLE_CLASSIFICATIONS_JSON"]) else os.environ["TABLE_CLASSIFICATIONS_JSON"]
+
     print("Backend (CLI-based) starting...", flush=True)
-    port = int(os.environ.get("PORT", "5002"))
+    if USE_BY_TYPE:
+        print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled, classification_json={CLASSIFICATION_JSON}", flush=True)
+    port = args.port if args.port is not None else int(os.environ.get("PORT", "5002"))
     app.run(host="0.0.0.0", port=port, debug=False)

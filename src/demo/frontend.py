@@ -396,6 +396,13 @@ HTML_TEMPLATE = """
                     <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>
                 </div>
             </div>
+            <div style="margin-top: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: flex; align-items: center; cursor: pointer; gap: 6px; font-size: 13px;">
+                    <input type="checkbox" id="use_by_type" style="width: 16px; height: 16px;">
+                    <span style="font-weight: 500;">Use table type classification (by_type) for Card2Tab2Card</span>
+                </label>
+                <span style="font-size: 11px; color: #666; display: block; margin-top: 2px; margin-left: 22px;">Filter Card2Tab2Card results by table type. Requires table_classifications.json (see docs/build_index.md section 1.4).</span>
+            </div>
             </div>
         </div>
         
@@ -855,7 +862,8 @@ HTML_TEMPLATE = """
                     top_k: topK,
                     tab2tab_mode: 'search',
                     table_search_k: tableSearchK,
-                    card2card_retrieval_mode: card2cardRetrievalMode
+                    card2card_retrieval_mode: card2cardRetrievalMode,
+                    use_by_type: document.getElementById('use_by_type').checked
                 };
                 
                 if (mode === 'query') {
@@ -1287,6 +1295,7 @@ HTML_TEMPLATE = """
                                 <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">search type:</label><select id="integration_search_type" class="form-control" onchange="syncTableSearchDisplay()" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                                     <option value="single_column">Single Column</option>
                                     <option value="keyword">Keyword</option>
+                                    <option value="by_type">By Type</option>
                                     <option value="multi_column">Multi Column</option>
                                     <option value="unionable">Unionable</option>
                                     <option value="complex">Complex</option>
