@@ -253,16 +253,13 @@ def load_table_from_file(table_path: str, use_index: bool = True) -> Optional[pd
     return None
 
 
-def integrate_tables_union(
-    tables: List[pd.DataFrame],
-    k: int = 10
-) -> Optional[pd.DataFrame]:
+def integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
     Integrate multiple tables using Union operation.
+    Returns the full integrated result (no row limit).
     
     Args:
         tables: List of DataFrames to integrate
-        k: Maximum number of rows to return
         
     Returns:
         Integrated DataFrame or None if integration fails
@@ -271,7 +268,7 @@ def integrate_tables_union(
         return None
     
     if len(tables) == 1:
-        return tables[0].head(k)
+        return tables[0].copy()
     
     try:
         # Use pandas concat for union (combine all rows)
@@ -289,30 +286,26 @@ def integrate_tables_union(
                     aligned_df[col] = None
             aligned_tables.append(aligned_df[list(all_columns)])
         
-        # Union (concatenate) all tables
+        # Union (concatenate) all tables - return full result, no row cap
         integrated = pd.concat(aligned_tables, axis=0, ignore_index=True)
         
         # Remove duplicates if needed
         integrated = integrated.drop_duplicates()
         
-        # Limit to k rows
-        return integrated.head(k)
+        return integrated
     
     except Exception as e:
         print(f"❌ Error in union integration: {e}")
         return None
 
 
-def integrate_tables_intersection(
-    tables: List[pd.DataFrame],
-    k: int = 10
-) -> Optional[pd.DataFrame]:
+def integrate_tables_intersection(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
     Integrate multiple tables using Intersection operation (find common rows).
+    Returns the full result (no row limit).
     
     Args:
         tables: List of DataFrames to integrate
-        k: Maximum number of rows to return
         
     Returns:
         Integrated DataFrame with common rows or None if no common rows
@@ -321,7 +314,7 @@ def integrate_tables_intersection(
         return None
     
     if len(tables) == 1:
-        return tables[0].head(k)
+        return tables[0].copy()
     
     try:
         # Find common columns
@@ -354,8 +347,7 @@ def integrate_tables_intersection(
         # Remove temp key
         result = result[common_columns]
         
-        # Limit to k rows
-        return result.head(k)
+        return result
     
     except Exception as e:
         print(f"❌ Error in intersection integration: {e}")
@@ -395,15 +387,14 @@ def _find_dialite_internal() -> Optional[str]:
 def integrate_tables_alite(
     tables: List[pd.DataFrame],
     table_paths: List[str],
-    k: int = 10
 ) -> Optional[pd.DataFrame]:
     """
     Integrate tables using ALITE FD-based algorithm.
+    Returns the full result (no row limit).
     
     Args:
         tables: List of DataFrames (not used directly, but kept for consistency)
         table_paths: List of paths to CSV files (required for ALITE)
-        k: Maximum number of rows to return
         
     Returns:
         Integrated DataFrame or None if integration fails
@@ -428,12 +419,11 @@ def integrate_tables_alite(
             print("⚠️  ALITE requires file paths, not DataFrames")
             return None
         
-        # Run ALITE algorithm
+        # Run ALITE algorithm - return full result, no row cap
         result_FD, stats_df, debug_dict = alite_module.FDAlgorithm(table_paths.copy())
         
-        # Limit to k rows
         if result_FD is not None and len(result_FD) > 0:
-            return result_FD.head(k)
+            return result_FD
         return result_FD
     
     except Exception as e:
@@ -443,18 +433,13 @@ def integrate_tables_alite(
         return None
 
 
-def integrate_tables_outer_join(
-    tables: List[pd.DataFrame],
-    k: int = 10
-) -> Optional[pd.DataFrame]:
+def integrate_tables_outer_join(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
     Integrate tables using outer join (merge all tables on index).
-    
-    This is similar to dialite_internal's outer join implementation.
+    Returns the full result (no row limit).
     
     Args:
         tables: List of DataFrames to integrate
-        k: Maximum number of rows to return
         
     Returns:
         Integrated DataFrame or None if integration fails
@@ -463,7 +448,7 @@ def integrate_tables_outer_join(
         return None
     
     if len(tables) == 1:
-        return tables[0].head(k)
+        return tables[0].copy()
     
     try:
         # Start with first table
@@ -480,8 +465,7 @@ def integrate_tables_outer_join(
             # Use index as join key (implicit)
             result = pd.concat([result_reset, df_reset], axis=1, join='outer')
         
-        # Limit to k rows
-        return result.head(k)
+        return result
     
     except Exception as e:
         print(f"❌ Error in outer join integration: {e}")
@@ -500,9 +484,9 @@ def integrate_tables(
     Integrate multiple tables from file paths.
     
     Args:
-        table_paths: List of paths to CSV files
+        table_paths: List of paths to CSV files (caller typically passes top-k tables)
         integration_type: "union", "intersection", "alite", or "outer_join"
-        k: Maximum number of rows in result
+        k: Number of tables to integrate (top k); the integrated result is not truncated by row count
         db_path: Optional path to modellake.db (for Blend_internal integration)
         
     Returns:
@@ -536,16 +520,16 @@ def integrate_tables(
             "stats": {}
         }
     
-    # Integrate tables
+    # Integrate tables (k = number of tables only; we never truncate output rows)
     if integration_type == "union":
-        integrated_df = integrate_tables_union(tables, k)
+        integrated_df = integrate_tables_union(tables)
     elif integration_type == "intersection":
-        integrated_df = integrate_tables_intersection(tables, k)
+        integrated_df = integrate_tables_intersection(tables)
     elif integration_type == "alite":
         # ALITE requires file paths, not DataFrames
-        integrated_df = integrate_tables_alite(tables, loaded_paths, k)
+        integrated_df = integrate_tables_alite(tables, loaded_paths)
     elif integration_type == "outer_join":
-        integrated_df = integrate_tables_outer_join(tables, k)
+        integrated_df = integrate_tables_outer_join(tables)
     else:
         return {
             "success": False,
@@ -583,7 +567,7 @@ def integrate_tables(
         # Fallback: chosen method failed (ALITE/dialite missing, outer_join error, etc).
         # Retry with union so user gets a result instead of "Integration failed".
         if integration_type != "union":
-            fallback_df = integrate_tables_union(tables, k)
+            fallback_df = integrate_tables_union(tables)
             if fallback_df is not None and (len(fallback_df) > 0 or len(fallback_df.columns) > 0):
                 stats = {
                     "input_tables": len(tables),

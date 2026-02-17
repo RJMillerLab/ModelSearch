@@ -1382,25 +1382,34 @@ HTML_TEMPLATE = """
         function refreshQAIntegratedPaths() {
             const target = document.getElementById('qaIntegratedPaths');
             if (!target) return;
-            const leftCode = document.querySelector('#integrationResults code');
-            const rightCode = document.querySelector('#integrationModelSearchResults code');
-            const leftPath = leftCode ? leftCode.textContent : '';
-            const rightPath = rightCode ? rightCode.textContent : '';
-            const leftHtml = leftPath
-                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${leftPath}</code>`
+            // Use run data so paths show even when DOM structure differs; same key logic as sync*Display
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
+            const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
+            const card2cardMode = (document.getElementById('integration_model_search_mode') || {}).value || 'dense';
+            const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
+            const modelKey = getModelSearchKey(integrationType, card2cardMode);
+            const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
+            const modelRun = (window.__modelSearchRuns || []).find(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === modelKey);
+            const tablePath = (tableRun && tableRun.saved_path) ? tableRun.saved_path : '';
+            const modelPath = (modelRun && modelRun.saved_path) ? modelRun.saved_path : '';
+            const tableHtml = tablePath
+                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${tablePath}</code>`
                 : '<span style="color:#999;">N/A</span>';
-            const rightHtml = rightPath
-                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${rightPath}</code>`
+            const modelHtml = modelPath
+                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${modelPath}</code>`
                 : '<span style="color:#999;">N/A</span>';
             target.innerHTML = `
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                    <div>Table Search CSV: ${leftHtml}</div>
-                    <div>Model Search CSV: ${rightHtml}</div>
+                    <div>Table Search CSV: ${tableHtml}</div>
+                    <div>Model Search CSV: ${modelHtml}</div>
                 </div>
             `;
         }
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
+        const DISPLAY_MAX_ROWS = 20;
+        const INFO_MAX_COLUMNS = 20;
         window.__integrationTables = window.__integrationTables || {};
         window.__modelSearchRuns = window.__modelSearchRuns || [];
         window.__tableSearchRuns = window.__tableSearchRuns || [];
@@ -1542,6 +1551,23 @@ HTML_TEMPLATE = """
             URL.revokeObjectURL(a.href);
         }
         
+        function buildTableInfo(table) {
+            const totalRows = (table.data || []).length;
+            const cols = table.columns || [];
+            return cols.map((col, i) => {
+                let nonNull = 0;
+                let hasNum = true;
+                for (let r = 0; r < table.data.length; r++) {
+                    const v = table.data[r][i];
+                    if (v != null && v !== '') {
+                        nonNull++;
+                        if (hasNum && isNaN(Number(v))) hasNum = false;
+                    }
+                }
+                const dtype = nonNull === 0 ? 'object' : (hasNum ? 'number' : 'object');
+                return { col, nonNull, dtype };
+            });
+        }
         function renderIntegrationTable(table, stats, options) {
             const { title = 'Integration', successColor = '#28a745', extraHtml = '', savedPath = '', downloadId = '' } = options || {};
             if (!table || (stats && stats.output_rows === 0)) {
@@ -1550,25 +1576,50 @@ HTML_TEMPLATE = """
                     <div style="margin-bottom: 15px;">${(stats && stats.output_columns === 0) ? '⚠️ No common columns. Intersection result is empty.' : '⚠️ No common rows. Intersection result is empty.'}</div></div>`;
             }
             if (downloadId) window.__integrationTables[downloadId] = table;
+            const totalRows = (table.data || []).length;
+            const displayRows = table.data.slice(0, DISPLAY_MAX_ROWS);
+            const showRowsLabel = totalRows <= DISPLAY_MAX_ROWS ? totalRows : `${DISPLAY_MAX_ROWS} of ${totalRows}`;
             const footer = [];
             if (savedPath) footer.push(`<span style="font-size: 12px; color: #666;">Saved to: <code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${savedPath}</code></span>`);
-            footer.push(`<button type="button" onclick="downloadIntegrationTableAsCsv('${downloadId}')" style="margin-left: 10px; padding: 6px 12px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">📥 Download CSV</button>`);
+            footer.push(`<button type="button" onclick="downloadIntegrationTableAsCsv('${downloadId}')" style="margin-left: 10px; padding: 6px 12px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">📥 Download full CSV (${totalRows} rows)</button>`);
+            const infoRows = buildTableInfo(table);
+            const infoShowMore = infoRows.length > INFO_MAX_COLUMNS;
+            const infoVisible = infoShowMore ? infoRows.slice(0, INFO_MAX_COLUMNS) : infoRows;
+            const infoHidden = infoShowMore ? infoRows.slice(INFO_MAX_COLUMNS) : [];
+            const infoTableRows = infoVisible.map(({ col, nonNull, dtype }) =>
+                `<tr><td style="border:1px solid #dee2e6;padding:4px 8px;">${String(col)}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${nonNull}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${dtype}</td></tr>`
+            ).join('');
+            const infoMoreId = 'info-more-' + (downloadId || 't');
+            const infoMoreRowsHtml = infoHidden.map(({ col, nonNull, dtype }) =>
+                `<tr><td style="border:1px solid #dee2e6;padding:4px 8px;">${String(col)}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${nonNull}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${dtype}</td></tr>`
+            ).join('');
             let html = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                 <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
-                <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols</div>
+                <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols (showing first ${showRowsLabel} rows)</div>
                 ${extraHtml}
                 <div style="position: relative;">
-                    <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Scroll to view full table">
+                    <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Showing first ${displayRows.length} rows; download CSV for full table">
                         <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
                             <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
                                 ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap;">${col}</th>`).join('')}
                             </tr></thead>
                             <tbody>
-                                ${table.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                                ${displayRows.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
                             </tbody>
                         </table>
                     </div>
                 </div>
+                <details style="margin-top: 12px;" id="info-details-${downloadId}">
+                    <summary style="cursor: pointer; font-size: 13px; color: #495057;">📋 Table info (df.info)</summary>
+                    <div style="margin-top: 6px; overflow-x: auto; max-height: 200px; overflow-y: auto;">
+                        <table style="border-collapse: collapse; font-size: 11px;">
+                            <thead><tr style="background: #e9ecef;"><th style="border:1px solid #dee2e6;padding:4px 8px;">Column</th><th style="border:1px solid #dee2e6;padding:4px 8px;">Non-Null</th><th style="border:1px solid #dee2e6;padding:4px 8px;">Dtype</th></tr></thead>
+                            <tbody>${infoTableRows}</tbody>
+                            <tbody id="${infoMoreId}" style="display: none;">${infoMoreRowsHtml}</tbody>
+                        </table>
+                    </div>
+                    ${infoShowMore ? `<button type="button" id="btn-${infoMoreId}" onclick="var t=document.getElementById('${infoMoreId}'); var b=document.getElementById('btn-${infoMoreId}'); if(t.style.display==='none'){ t.style.display=''; b.textContent='Show less'; } else { t.style.display='none'; b.textContent='Show more (${infoHidden.length} columns)'; }" style="margin-top: 4px; padding: 4px 10px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Show more (${infoHidden.length} columns)</button>` : ''}
+                </details>
                 <div style="margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
                     ${footer.join('')}
                     <button type="button" onclick="showTableAsImage('${downloadId}', '${downloadId}')" style="margin-left: 8px; padding: 6px 12px; font-size: 13px; background: #17a2b8; color: white; border: none; border-radius: 6px; cursor: pointer;">🖼️ View as Image (Drag & Zoom)</button>
