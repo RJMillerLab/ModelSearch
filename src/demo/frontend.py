@@ -1409,7 +1409,6 @@ HTML_TEMPLATE = """
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         const DISPLAY_MAX_ROWS = 20;
-        const INFO_MAX_COLUMNS = 20;
         window.__integrationTables = window.__integrationTables || {};
         window.__modelSearchRuns = window.__modelSearchRuns || [];
         window.__tableSearchRuns = window.__tableSearchRuns || [];
@@ -1564,8 +1563,10 @@ HTML_TEMPLATE = """
                         if (hasNum && isNaN(Number(v))) hasNum = false;
                     }
                 }
+                const pct = totalRows ? (nonNull / totalRows * 100).toFixed(1) : '0';
+                const nonNullPct = pct + '%';
                 const dtype = nonNull === 0 ? 'object' : (hasNum ? 'number' : 'object');
-                return { col, nonNull, dtype };
+                return { col, nonNullPct, dtype };
             });
         }
         function renderIntegrationTable(table, stats, options) {
@@ -1583,16 +1584,9 @@ HTML_TEMPLATE = """
             if (savedPath) footer.push(`<span style="font-size: 12px; color: #666;">Saved to: <code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${savedPath}</code></span>`);
             footer.push(`<button type="button" onclick="downloadIntegrationTableAsCsv('${downloadId}')" style="margin-left: 10px; padding: 6px 12px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">📥 Download full CSV (${totalRows} rows)</button>`);
             const infoRows = buildTableInfo(table);
-            const infoShowMore = infoRows.length > INFO_MAX_COLUMNS;
-            const infoVisible = infoShowMore ? infoRows.slice(0, INFO_MAX_COLUMNS) : infoRows;
-            const infoHidden = infoShowMore ? infoRows.slice(INFO_MAX_COLUMNS) : [];
-            const infoTableRows = infoVisible.map(({ col, nonNull, dtype }) =>
-                `<tr><td style="border:1px solid #dee2e6;padding:4px 8px;">${String(col)}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${nonNull}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${dtype}</td></tr>`
-            ).join('');
-            const infoMoreId = 'info-more-' + (downloadId || 't');
-            const infoMoreRowsHtml = infoHidden.map(({ col, nonNull, dtype }) =>
-                `<tr><td style="border:1px solid #dee2e6;padding:4px 8px;">${String(col)}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${nonNull}</td><td style="border:1px solid #dee2e6;padding:4px 8px;">${dtype}</td></tr>`
-            ).join('');
+            const infoHeaderRow = '<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px;"> </th>' + infoRows.map(({ col }) => `<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px; white-space: nowrap;">${String(col)}</th>`).join('');
+            const infoNonNullRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Non-Null %</td>' + infoRows.map(({ nonNullPct }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${nonNullPct}</td>`).join('');
+            const infoDtypeRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Dtype</td>' + infoRows.map(({ dtype }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${dtype}</td>`).join('');
             let html = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                 <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
                 <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols (showing first ${showRowsLabel} rows)</div>
@@ -1609,17 +1603,18 @@ HTML_TEMPLATE = """
                         </table>
                     </div>
                 </div>
-                <details style="margin-top: 12px;" id="info-details-${downloadId}">
-                    <summary style="cursor: pointer; font-size: 13px; color: #495057;">📋 Table info (df.info)</summary>
-                    <div style="margin-top: 6px; overflow-x: auto; max-height: 200px; overflow-y: auto;">
+                <div style="margin-top: 12px;">
+                    <div style="font-size: 13px; color: #495057; margin-bottom: 6px;">📋 Table info</div>
+                    <div style="overflow-x: auto;">
                         <table style="border-collapse: collapse; font-size: 11px;">
-                            <thead><tr style="background: #e9ecef;"><th style="border:1px solid #dee2e6;padding:4px 8px;">Column</th><th style="border:1px solid #dee2e6;padding:4px 8px;">Non-Null</th><th style="border:1px solid #dee2e6;padding:4px 8px;">Dtype</th></tr></thead>
-                            <tbody>${infoTableRows}</tbody>
-                            <tbody id="${infoMoreId}" style="display: none;">${infoMoreRowsHtml}</tbody>
+                            <thead><tr>${infoHeaderRow}</tr></thead>
+                            <tbody>
+                                <tr>${infoNonNullRow}</tr>
+                                <tr>${infoDtypeRow}</tr>
+                            </tbody>
                         </table>
                     </div>
-                    ${infoShowMore ? `<button type="button" id="btn-${infoMoreId}" onclick="var t=document.getElementById('${infoMoreId}'); var b=document.getElementById('btn-${infoMoreId}'); if(t.style.display==='none'){ t.style.display=''; b.textContent='Show less'; } else { t.style.display='none'; b.textContent='Show more (${infoHidden.length} columns)'; }" style="margin-top: 4px; padding: 4px 10px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Show more (${infoHidden.length} columns)</button>` : ''}
-                </details>
+                </div>
                 <div style="margin-top: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
                     ${footer.join('')}
                     <button type="button" onclick="showTableAsImage('${downloadId}', '${downloadId}')" style="margin-left: 8px; padding: 6px 12px; font-size: 13px; background: #17a2b8; color: white; border: none; border-radius: 6px; cursor: pointer;">🖼️ View as Image (Drag & Zoom)</button>
