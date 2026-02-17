@@ -238,6 +238,12 @@ def _run_pipeline_body(
         logger.log(f"Query: {query}")
     else:
         logger.log(f"Model ID: {model_id}")
+    logger.log(
+        f"Run settings: top_k={top_k}, table_search_k={table_search_k or 'auto'}, "
+        f"card2card={card2card_retrieval_mode}, "
+        f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}, "
+        f"require_seed_has_tables={require_seed_has_tables}"
+    )
     logger.set_status("running")
 
     # Resolve model_id (query mode: from FAISS retrieval only; no default/hardcoded id)
@@ -561,6 +567,8 @@ def _run_pipeline_body(
         "top_k": top_k,
         "table_search_k": k_table,
         "card2card_retrieval_mode": card2card_retrieval_mode,
+        "use_by_type": use_by_type,
+        "require_seed_has_tables": require_seed_has_tables,
         "card2card_results": primary,
         "card2card_all_modes": card2card_all,
         "card2tab2card_results": card2tab2card_all,
@@ -808,7 +816,7 @@ def list_saved_searches():
     searches = []
     for name, path, _ in candidates[:50]:
         json_path = os.path.join(path, "search_results.json")
-        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None}
+        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "use_by_type": False, "require_seed_has_tables": False, "card2card_retrieval_mode": None, "table_search_k": None}
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
@@ -822,6 +830,10 @@ def list_saved_searches():
                 except Exception:
                     entry["timestamp_str"] = str(ts)[:16]
             entry["top_k"] = saved.get("top_k")
+            entry["use_by_type"] = bool(saved.get("use_by_type", False))
+            entry["require_seed_has_tables"] = bool(saved.get("require_seed_has_tables", False))
+            entry["card2card_retrieval_mode"] = saved.get("card2card_retrieval_mode")
+            entry["table_search_k"] = saved.get("table_search_k")
         except Exception:
             pass
         searches.append(entry)

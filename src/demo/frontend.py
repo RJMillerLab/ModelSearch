@@ -209,20 +209,27 @@ HTML_TEMPLATE = """
         .expand-toggle {
             cursor: pointer;
             color: #007bff;
-            font-weight: bold;
-            padding: 2px 5px;
-            margin-right: 5px;
-            display: inline-block;
+            font-weight: 600;
+            padding: 4px 10px;
+            margin-right: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
             user-select: none;
-            transition: transform 0.2s;
+            transition: transform 0.2s, background 0.15s;
             font-size: 12px;
+            background: #e7f3ff;
+            border: 1px solid #007bff;
+            border-radius: 4px;
         }
         .expand-toggle:hover {
             color: #0056b3;
+            background: #cce5ff;
         }
         .expand-toggle.expanded {
             transform: rotate(90deg);
         }
+        .expand-toggle .expand-label { margin-left: 2px; }
         .collapsible-content {
             max-height: 0;
             overflow: hidden;
@@ -371,10 +378,17 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <div class="form-row one-click-info" style="background: #f0f7ff; border: 1px solid #b8d4e8; border-radius: 4px; padding: 6px 10px; margin-bottom: 6px;">
-                <div style="font-size: 11px; color: #555;">
-                    <strong>One-click:</strong> Card2Card (Dense/Sparse/Hybrid), Card2Tab2Card (single_column, keyword, multi_column, unionable, …). Time ⏱️ in log.
-                </div>
+            <div class="form-row one-click-info" style="margin-bottom: 8px;">
+                <details class="run-options-details" style="background: #f0f7ff; border: 2px solid #007bff; border-radius: 6px; overflow: hidden;">
+                    <summary style="cursor: pointer; padding: 10px 12px; font-size: 13px; font-weight: 600; color: #004085; display: flex; align-items: center; gap: 8px; user-select: none;">
+                        <span style="font-size: 16px;">ⓘ</span> Run options &amp; what gets logged
+                    </summary>
+                    <div style="padding: 10px 12px; font-size: 12px; color: #555; border-top: 1px solid #b8d4e8;">
+                        <p style="margin: 0 0 6px 0;"><strong>One-click:</strong> Card2Card (Dense/Sparse/Hybrid), Card2Tab2Card (single_column, keyword, unionable, …). If “Use table type classification” is checked, by_type run is added and logged.</p>
+                        <p style="margin: 0 0 6px 0;"><strong>Log:</strong> Run settings (top_k, table_search_k, card2card mode, <strong>table type classification on/off</strong>, require_seed_has_tables) appear at start. Time ⏱️ per step.</p>
+                        <p style="margin: 0;">When loading saved results, the folder list shows <strong>by_type ✓/✗</strong> and K so you can compare same query with different settings.</p>
+                    </div>
+                </details>
             </div>
             
             <div class="form-row" style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
@@ -564,41 +578,39 @@ HTML_TEMPLATE = """
                 if (data.status === 'success') {
                     let html = '';
                     const searches = data.searches || [];
-                    const templateAvailable = !!data.template_available;
                     const selectEl = document.getElementById('saved_search_select');
                     if (selectEl) {
                         selectEl.innerHTML = '<option value="">— select folder —</option>';
-                        if (templateAvailable) {
-                            const opt = document.createElement('option');
-                            opt.value = 'template';
-                            opt.textContent = 'Demo Example (Template)';
-                            selectEl.appendChild(opt);
-                        }
                         searches.forEach(search => {
                             const opt = document.createElement('option');
                             opt.value = search.folder_name || search.id || '';
-                            opt.textContent = (search.timestamp_str || '') + ' ' + (search.query ? search.query.substring(0, 50) + (search.query.length > 50 ? '...' : '') : search.model_id || search.folder_name || opt.value);
+                            const settingsPart = [search.use_by_type ? 'by_type✓' : 'by_type✗', 'K=' + (search.top_k || '-'), search.card2card_retrieval_mode || ''].filter(Boolean).join(' ');
+                            const label = (search.timestamp_str || '') + ' ' + (search.query ? search.query.substring(0, 40) + (search.query.length > 40 ? '...' : '') : search.model_id || search.folder_name || opt.value) + (settingsPart ? ' | ' + settingsPart : '');
+                            opt.textContent = label;
                             selectEl.appendChild(opt);
                         });
                     }
-                    if (searches.length === 0 && !templateAvailable) {
+                    if (searches.length === 0) {
                         html = '<div style="text-align: center; color: #666; padding: 20px;">No saved searches found. Run a new search to create one.</div>';
                     } else {
-                        if (templateAvailable) {
-                            html += `<div class="saved-search-item" onclick="loadSavedSearchFolder('template')" style="padding: 6px 8px; margin-bottom: 4px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 12px;" onmouseover="this.style.background='#e7f3ff'" onmouseout="this.style.background='white'">Demo Example (Template)</div>`;
-                        }
+                        const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                         searches.forEach(search => {
+                            const byTypeLabel = search.use_by_type ? 'by_type ✓' : 'by_type ✗';
+                            const settingsLabel = [byTypeLabel, 'K=' + (search.top_k || '-'), (search.card2card_retrieval_mode || '')].filter(Boolean).join(', ');
                             const qShort = search.query ? (search.query.length > 45 ? search.query.substring(0, 45) + '...' : search.query) : '';
                             const oneLine = search.query
-                                ? `${search.timestamp_str || ''} - ${qShort} | Query: ${search.query.substring(0, 40)}${search.query.length > 40 ? '...' : ''} | Top K: ${search.top_k || '-'}`
-                                : `${search.timestamp_str || ''} - ${search.model_id || ''} | Top K: ${search.top_k || '-'}`;
-                            const folder = (search.folder_name || search.id || '').replace(/'/g, "\\'");
+                                ? `${search.timestamp_str || ''} - ${qShort} | K: ${search.top_k || '-'} | ${settingsLabel}`
+                                : `${search.timestamp_str || ''} - ${search.model_id || ''} | K: ${search.top_k || '-'} | ${settingsLabel}`;
+                            const folder = (search.folder_name || search.id || '').replace(/'/g, "\\'").replace(/\\/g, '\\\\');
+                            const titleText = [search.query || search.model_id || '', 'by_type: ' + (search.use_by_type ? 'ON' : 'OFF'), 'top_k: ' + (search.top_k || '-'), 'card2card: ' + (search.card2card_retrieval_mode || '-')].join(' | ');
+                            const titleSafe = escapeHtml(titleText.substring(0, 200));
+                            const oneLineSafe = escapeHtml(oneLine);
                             html += `
                                 <div class="saved-search-item" onclick="loadSavedSearchFolder('${folder}')" 
                                      style="padding: 6px 8px; margin-bottom: 4px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
-                                     title="${(search.query || search.model_id || '').substring(0, 200)}"
+                                     title="${titleSafe}"
                                      onmouseover="this.style.background='#e7f3ff'" 
-                                     onmouseout="this.style.background='white'">${oneLine}</div>
+                                     onmouseout="this.style.background='white'">${oneLineSafe}</div>
                             `;
                         });
                     }
@@ -1091,14 +1103,15 @@ HTML_TEMPLATE = """
                     <div class="result-card" style="min-width: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
                         <h3 style="margin-top: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #343a40;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
                         ${(() => {
-                            // Filter: show keyword, unionable, and joinable types (single_column and multi_column are joinable)
-                            const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
+                            // Filter: show keyword, unionable, joinable, and by_type (table type classification)
+                            const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column', 'by_type'];
                             // Map joinable types to display names
                             const typeDisplayNames = {
                                 'single_column': 'joinable (single_column)',
                                 'multi_column': 'joinable (multi_column)',
                                 'keyword': 'keyword',
-                                'unionable': 'unionable'
+                                'unionable': 'unionable',
+                                'by_type': 'by type (classification)'
                             };
                             const entries = Object.entries(card2tab2cardResults)
                                 .filter(([type, data]) => allowedTypes.includes(type))
@@ -1168,7 +1181,7 @@ HTML_TEMPLATE = """
                                                 return `
                                                     <li class="result-item" style="margin-bottom: 4px;">
                                                         <div style="display: flex; align-items: center;">
-                                                            <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 6px; ${hasTables ? '' : 'display: none;'}">▶</span>
+                                                            <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 6px; ${hasTables ? '' : 'display: none;'}">▶<span class="expand-label">Details</span></span>
                                                             <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">
                                                                 ${modelId}
                                                             </a>
