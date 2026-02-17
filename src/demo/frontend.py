@@ -1258,6 +1258,8 @@ HTML_TEMPLATE = """
             const integrationCardStyle = 'padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 8px; border: 1px solid #dee2e6; font-size: 13px; color: #212529; min-width: 0;';
             const integrationTitleStyle = 'margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;';
             const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
+            const defaultIntegrationK = results.table_search_k || 10;
+            const defaultIntegrationMaxModels = results.top_k || 10;
             html += `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 16px;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
@@ -1269,8 +1271,8 @@ HTML_TEMPLATE = """
                             <option value="alite">ALITE</option>
                             <option value="outer_join">Outer Join</option>
                         </select></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="10" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="${defaultIntegrationK}" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
+                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="${defaultIntegrationMaxModels}" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
@@ -1339,20 +1341,21 @@ HTML_TEMPLATE = """
                     <div class="qa-section" style="margin-top: 16px; padding: 12px; background: #d1ecf1; border-radius: 6px; border: 2px solid #17a2b8;">
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                             <div>
-                                <h3 style="margin: 0 0 4px 0; color: #0c5460; font-size: 15px;">💬 Question Answering (QA)</h3>
-                                <p style="font-size: 12px; color: #666; margin: 0;">QA on both integrated tables. One button generates two answers for comparison.</p>
+                                <h3 style="margin: 0 0 4px 0; color: #0c5460; font-size: 15px;">📊 Table Ranking</h3>
+                                <p style="font-size: 12px; color: #666; margin: 0;">Rank / compare models based on answers over both integrated tables.</p>
                             </div>
                             <button id="qaBtn" onclick="runQABoth('${results.job_id || currentJobId}')" 
                                     style="padding: 6px 14px; font-size: 13px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">
-                                💬 QA Only
+                                📊 Rank Tables
                             </button>
                         </div>
                         <div id="qa_after_click" style="display: none; margin-top: 20px;">
                             <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Integrated tables</h4>
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 6px;">
                                 <div><strong style="font-size: 13px; color: #0c5460;">Table Search Integration</strong></div>
                                 <div><strong style="font-size: 13px; color: #0c5460;">Model Search Integration</strong></div>
                             </div>
+                            <div id="qaIntegratedPaths" style="font-size: 11px; color: #555; margin-bottom: 12px;"></div>
                             <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Answers compare</h4>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                                 <div>
@@ -1374,6 +1377,27 @@ HTML_TEMPLATE = """
             window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
             syncBothIntegrationDisplays();
+        }
+
+        function refreshQAIntegratedPaths() {
+            const target = document.getElementById('qaIntegratedPaths');
+            if (!target) return;
+            const leftCode = document.querySelector('#integrationResults code');
+            const rightCode = document.querySelector('#integrationModelSearchResults code');
+            const leftPath = leftCode ? leftCode.textContent : '';
+            const rightPath = rightCode ? rightCode.textContent : '';
+            const leftHtml = leftPath
+                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${leftPath}</code>`
+                : '<span style="color:#999;">N/A</span>';
+            const rightHtml = rightPath
+                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${rightPath}</code>`
+                : '<span style="color:#999;">N/A</span>';
+            target.innerHTML = `
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div>Table Search CSV: ${leftHtml}</div>
+                    <div>Model Search CSV: ${rightHtml}</div>
+                </div>
+            `;
         }
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
@@ -1408,7 +1432,11 @@ HTML_TEMPLATE = """
             const noResultMsg = placeholder;
             if (run && run.status === 'success' && run.integrated_table) {
                 const stats = run.stats || {};
-                let extra = (run.models_with_tables && run.models_with_tables.length > 0) ? `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${run.models_with_tables.slice(0, 5).join(', ')}${run.models_with_tables.length > 5 ? ' ...' : ''}</div>` : '';
+                let extra = '';
+                if (run.models_with_tables && run.models_with_tables.length > 0) {
+                    const links = run.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                }
                 leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
             } else {
                 leftDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
@@ -1587,7 +1615,8 @@ HTML_TEMPLATE = """
                     const table = modelRes.integrated_table;
                     let extra = '';
                     if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${modelRes.models_with_tables.slice(0, 5).join(', ')}${modelRes.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
+                        const links = modelRes.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
                     }
                     leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                 } else {
@@ -1683,7 +1712,8 @@ HTML_TEMPLATE = """
                     const table = data.integrated_table;
                     let extra = '';
                     if (data.models_with_tables && data.models_with_tables.length > 0) {
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${data.models_with_tables.slice(0, 5).map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ')}${data.models_with_tables.length > 5 ? ' ...' : ''}</div>`;
+                        const links = data.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
                     }
                     resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'model-search-single' });
                     initTablePanZoom(resultsDiv);
@@ -1816,6 +1846,7 @@ HTML_TEMPLATE = """
             const qaResultsModel = document.getElementById('qaResultsModelSearch');
             if (!btn || !evalResultsDiv || !qaResultsTable || !qaResultsModel) return;
             if (qaAfterClick) qaAfterClick.style.display = 'block';
+            refreshQAIntegratedPaths();
             evalResultsDiv.style.display = 'block';
             evalResultsDiv.innerHTML = '<div style="padding: 15px;">⏳ Running evaluation...</div>';
             qaResultsTable.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
@@ -2149,6 +2180,7 @@ HTML_TEMPLATE = """
             const resultsDivModel = document.getElementById('qaResultsModelSearch');
             if (!qaBtn || !resultsDivTable || !resultsDivModel) return;
             if (afterClickDiv) afterClickDiv.style.display = 'block';
+            refreshQAIntegratedPaths();
             qaBtn.disabled = true;
             qaBtn.textContent = '⏳ Generating...';
             resultsDivTable.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
