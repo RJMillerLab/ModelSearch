@@ -1139,6 +1139,7 @@ def evaluate():
         )
     except ValueError as ve:
         # LLM API unavailable - fallback to fake
+        print(f"[evaluate] ValueError (LLM unavailable): {ve}", flush=True)
         try:
             from evaluation.llm import evaluate_diversity_with_llm, load_fake_response
             result = evaluate_diversity_with_llm(
@@ -1150,9 +1151,13 @@ def evaluate():
             if "fallback_reason" not in result:
                 result["fallback_reason"] = str(ve)
         except Exception as e2:
+            import traceback
+            print(f"[evaluate] Fallback failed: {e2}", flush=True)
+            traceback.print_exc()
             return jsonify({"status": "error", "message": f"Evaluation failed: {str(ve)}"}), 500
     except Exception as e:
         import traceback
+        print(f"[evaluate] Exception: {e}", flush=True)
         traceback.print_exc()
         return jsonify({"status": "error", "message": f"Evaluation failed: {str(e)}"}), 500
 
@@ -1163,10 +1168,10 @@ def evaluate():
         if df is None or df.empty:
             return None
         return {"columns": list(df.columns), "data": _sanitize_for_json(df.values.tolist())}
-        
-        return jsonify({
-            "status": "success",
-            "evaluation": result,
+
+    return jsonify({
+        "status": "success",
+        "evaluation": result,
         "table1": _df_to_dict(table1_df),
         "table2": _df_to_dict(table2_df),
     })
