@@ -1022,12 +1022,15 @@
             const run = runs.find(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === key);
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
             const noResultMsg = placeholder;
-            if (run && run.status === 'success' && run.integrated_table) {
+                if (run && run.status === 'success' && run.integrated_table) {
                 const stats = run.stats || {};
                 let extra = '';
-                if (run.models_with_tables && run.models_with_tables.length > 0) {
-                    const links = run.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                const modelIds = run.models_with_tables || [];
+                if (modelIds.length > 0) {
+                    const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Model Search):</strong> ${links} <span style="color:#004085;">(${modelIds.length} models)</span></div>`;
+                } else {
+                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
                 }
                 leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
             } else {
@@ -1139,9 +1142,12 @@
             const noResultMsg = placeholder;
             if (run && run.status === 'success' && run.integrated_table) {
                 let extra = '';
-                if (run.models_with_tables && run.models_with_tables.length > 0) {
-                    const links = run.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                const modelIds = run.models_with_tables || [];
+                if (modelIds.length > 0) {
+                    const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Table Search):</strong> ${links} <span style="color:#155724;">(${modelIds.length} models)</span></div>`;
+                } else {
+                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';
                 }
                 rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: 'Table Search integration', successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
             } else {
@@ -1334,10 +1340,13 @@
                 if (modelRes.status === 'success') {
                     const stats = modelRes.stats || {};
                     const table = modelRes.integrated_table;
+                    const modelIds = modelRes.models_with_tables || [];
                     let extra = '';
-                    if (modelRes.models_with_tables && modelRes.models_with_tables.length > 0) {
-                        const links = modelRes.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                    if (modelIds.length > 0) {
+                        const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Model Search):</strong> ${links} (${modelIds.length} models)</div>`;
+                    } else {
+                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
                     }
                     leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                 } else {
@@ -1349,9 +1358,12 @@
                     const stats = tableRes.stats || {};
                     const table = tableRes.integrated_table;
                     let tableExtra = '';
-                    if (tableRes.models_with_tables && tableRes.models_with_tables.length > 0) {
-                        const links = tableRes.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                    const tableModelIds = tableRes.models_with_tables || [];
+                    if (tableModelIds.length > 0) {
+                        const links = tableModelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Table Search):</strong> ${links} <span style="color:#155724;">(${tableModelIds.length} models)</span></div>`;
+                    } else {
+                        tableExtra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';
                     }
                     rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745', extraHtml: tableExtra, savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                 } else {
@@ -1405,9 +1417,15 @@
                 });
                 const data = await response.json();
                 if (data.status === 'success') {
-                    const stats = data.stats;
+                    const stats = data.stats || {};
                     const table = data.integrated_table;
-                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Integration Successful', successColor: '#28a745', savedPath: data.saved_path || '', downloadId: 'table-search-single' });
+                    const modelIds = data.models_with_tables || [];
+                    let extra = '';
+                    if (modelIds.length > 0) {
+                        const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Table Search):</strong> ${links} (${modelIds.length} models)</div>`;
+                    }
+                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Integration Successful', successColor: '#28a745', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'table-search-single' });
                     initTablePanZoom(resultsDiv);
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
@@ -1436,10 +1454,13 @@
                 if (data.status === 'success') {
                     const stats = data.stats || {};
                     const table = data.integrated_table;
+                    const modelIds = data.models_with_tables || [];
                     let extra = '';
-                    if (data.models_with_tables && data.models_with_tables.length > 0) {
-                        const links = data.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                    if (modelIds.length > 0) {
+                        const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Model Search):</strong> ${links} (${modelIds.length} models)</div>`;
+                    } else {
+                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
                     }
                     resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'model-search-single' });
                     initTablePanZoom(resultsDiv);

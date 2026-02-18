@@ -910,13 +910,16 @@ def integrate():
                 pass
         if saved_path:
             result["saved_path"] = saved_path
+        # Ensure models_with_tables is always present for Table Search (model IDs used in this integration; may differ from full retrieval list)
+        if "models_with_tables" not in result:
+            result["models_with_tables"] = []
         try:
             save_payload = {
             "status": "success",
             "integration_type": integration_type,
                 "search_type": search_type,
                 "tables_source": tables_source,
-                "k": k,
+            "k": k,
                 "max_models": max_models,
                 **result,
             }
