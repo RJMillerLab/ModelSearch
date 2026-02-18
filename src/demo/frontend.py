@@ -448,7 +448,7 @@ HTML_TEMPLATE = """
                 const data = await response.json();
                 if (data.status === 'success' && data.queries && data.queries.length > 0) {
                     presetQueriesList = data.queries;
-                    sel.innerHTML = '<option value="">— custom —</option>';
+                    sel.innerHTML = '<option value="">— custom —<' + '/option>';
                     data.queries.forEach(function(q, i) {
                         const opt = document.createElement('option');
                         opt.value = String(i);
@@ -569,7 +569,7 @@ HTML_TEMPLATE = """
         
         async function loadSavedSearches() {
             const listContainer = document.getElementById('saved_searches_list');
-            listContainer.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Loading...</div>';
+            listContainer.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Loading...<' + '/div>';
             
             try {
                 const response = await fetch('{{BACKEND_URL}}/api/saved-searches');
@@ -580,7 +580,7 @@ HTML_TEMPLATE = """
                     const searches = data.searches || [];
                     const selectEl = document.getElementById('saved_search_select');
                     if (selectEl) {
-                        selectEl.innerHTML = '<option value="">— select folder —</option>';
+                        selectEl.innerHTML = '<option value="">— select folder —<' + '/option>';
                         searches.forEach(search => {
                             const opt = document.createElement('option');
                             opt.value = search.folder_name || search.id || '';
@@ -591,9 +591,9 @@ HTML_TEMPLATE = """
                         });
                     }
                     if (searches.length === 0) {
-                        html = '<div style="text-align: center; color: #666; padding: 20px;">No saved searches found. Run a new search to create one.</div>';
+                        html = '<div style="text-align: center; color: #666; padding: 20px;">No saved searches found. Run a new search to create one.<' + '/div>';
                     } else {
-                        const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                        const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(new RegExp('<', 'g'), '&lt;').replace(new RegExp('>', 'g'), '&gt;').replace(/"/g, '&quot;');
                         searches.forEach(search => {
                             const byTypeLabel = search.use_by_type ? 'by_type ✓' : 'by_type ✗';
                             const settingsLabel = [byTypeLabel, 'K=' + (search.top_k || '-'), (search.card2card_retrieval_mode || '')].filter(Boolean).join(', ');
@@ -610,17 +610,17 @@ HTML_TEMPLATE = """
                                      style="padding: 6px 8px; margin-bottom: 4px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
                                      title="${titleSafe}"
                                      onmouseover="this.style.background='#e7f3ff'" 
-                                     onmouseout="this.style.background='white'">${oneLineSafe}</div>
+                                     onmouseout="this.style.background='white'">${oneLineSafe}<` + `/div>
                             `;
                         });
                     }
                     
                     listContainer.innerHTML = html;
                 } else {
-                    listContainer.innerHTML = '<div style="text-align: center; color: #dc3545; padding: 20px;">Error loading saved searches</div>';
+                    listContainer.innerHTML = '<div style="text-align: center; color: #dc3545; padding: 20px;">Error loading saved searches<' + '/div>';
                 }
             } catch (error) {
-                listContainer.innerHTML = `<div style="text-align: center; color: #dc3545; padding: 20px;">Error: ${error.message}</div>`;
+                listContainer.innerHTML = `<div style="text-align: center; color: #dc3545; padding: 20px;">Error: ${error.message}<` + `/div>`;
             }
         }
         
@@ -907,6 +907,7 @@ HTML_TEMPLATE = """
                 document.getElementById('searchBtn').disabled = false;
             }
         }
+        window.startSearch = startSearch;
         
         function startLogStreaming(jobId) {
             if (eventSource) {
@@ -2601,10 +2602,28 @@ HTML_TEMPLATE = """
 """.replace('{{BACKEND_URL}}', BACKEND_URL)
 
 
+def _escape_script_less_than(html):
+    """Replace < inside <script>...</script> with \\u003c so the HTML parser never sees '</'
+    and closes the script early. The browser's JS then interprets \\u003c as < in strings."""
+    start_tag = '<script>'
+    end_tag = '</script>'
+    start = html.find(start_tag)
+    if start == -1:
+        return html
+    start += len(start_tag)
+    end = html.find(end_tag, start)
+    if end == -1:
+        return html
+    script = html[start:end]
+    script = script.replace('\u003c', chr(92) + 'u003c')  # < -> \u003c (6 chars)
+    return html[:start] + script + html[end:]
+
+
 @app.route('/')
 def index():
     """Serve frontend HTML"""
-    return render_template_string(HTML_TEMPLATE)
+    html = _escape_script_less_than(HTML_TEMPLATE)
+    return render_template_string(html)
 
 
 @app.route('/static/fig/<path:filename>')
