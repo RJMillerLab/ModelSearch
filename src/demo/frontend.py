@@ -324,7 +324,7 @@ HTML_TEMPLATE = """
         <div class="input-section">
             <div style="margin-bottom: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
                 <label style="display: flex; align-items: center; cursor: pointer; gap: 6px; font-size: 13px;">
-                    <input type="checkbox" id="load_previous_search" onchange="toggleLoadPrevious()" style="margin-right: 4px; width: 16px; height: 16px;">
+                    <input type="checkbox" id="load_previous_search" style="margin-right: 4px; width: 16px; height: 16px;">
                     <span style="font-weight: 500;">Load Previous Search</span>
                 </label>
             </div>
@@ -473,10 +473,10 @@ HTML_TEMPLATE = """
         
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', function() {
-            // Ensure "Load Previous Search" is unchecked by default
             const loadPreviousCheckbox = document.getElementById('load_previous_search');
             if (loadPreviousCheckbox) {
                 loadPreviousCheckbox.checked = false;
+                loadPreviousCheckbox.addEventListener('change', toggleLoadPrevious);
             }
             toggleLoadPrevious();
             
@@ -2604,15 +2604,15 @@ HTML_TEMPLATE = """
 
 def _escape_script_less_than(html):
     """Replace < inside <script>...</script> with \\u003c so the HTML parser never sees '</'
-    and closes the script early. The browser's JS then interprets \\u003c as < in strings."""
+    and closes the script early. Use last </script> as end so we don't stop at '</script>' inside a string."""
     start_tag = '<script>'
     end_tag = '</script>'
     start = html.find(start_tag)
     if start == -1:
         return html
     start += len(start_tag)
-    end = html.find(end_tag, start)
-    if end == -1:
+    end = html.rfind(end_tag)  # last occurrence = real closing tag (not inside script string)
+    if end == -1 or end <= start:
         return html
     script = html[start:end]
     script = script.replace('\u003c', chr(92) + 'u003c')  # < -> \u003c (6 chars)
