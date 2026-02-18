@@ -1330,6 +1330,11 @@ HTML_TEMPLATE = """
             `;
             
             html += `
+                <div id="integrationShortAnalysis" class="integration-summary-section" style="margin-top: 16px; padding: 14px; background: #e2e3e5; border-radius: 6px; border: 2px solid #6c757d; display: none;">
+                    <h4 style="margin: 0 0 6px 0; font-size: 14px; color: #383d41;">Summary (between Table Integration and Evaluation)</h4>
+                    <p style="font-size: 11px; color: #6c757d; margin: 0 0 10px 0;">Deterministic comparison: column overlap, Jaccard, containment, coverage. No LLM.</p>
+                    <div id="integrationShortAnalysisContent"></div>
+                </div>
                 <div class="evaluation-section" style="margin-top: 16px; padding: 12px; background: #fff3cd; border-radius: 6px; border: 2px solid #ffc107;">
                     ${comparisonHtml}
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
@@ -1463,6 +1468,91 @@ HTML_TEMPLATE = """
                 leftDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
             initTablePanZoom(leftDiv);
+            refreshIntegrationShortAnalysis();
+        }
+        
+        function refreshIntegrationShortAnalysis() {
+            const container = document.getElementById('integrationShortAnalysis');
+            const content = document.getElementById('integrationShortAnalysisContent');
+            if (!container || !content) return;
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
+            const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
+            const card2cardMode = (document.getElementById('integration_model_search_mode') || {}).value || 'dense';
+            const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
+            const modelKey = getModelSearchKey(integrationType, card2cardMode);
+            const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
+            const modelRun = (window.__modelSearchRuns || []).find(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === modelKey);
+            const tableT = tableRun && tableRun.integrated_table;
+            const modelT = modelRun && modelRun.integrated_table;
+            if (!tableT || !modelT || !tableT.columns || !modelT.columns) {
+                container.style.display = 'none';
+                return;
+            }
+            const colsA = new Set(tableT.columns);
+            const colsB = new Set(modelT.columns);
+            const overlap = [...colsA].filter(c => colsB.has(c));
+            const onlyTable = [...colsA].filter(c => !colsB.has(c));
+            const onlyModel = [...colsB].filter(c => !colsA.has(c));
+            const totalRowsA = (tableT.data || []).length;
+            const totalRowsB = (modelT.data || []).length;
+            const nonNullPct = (t, colIdx) => {
+                const data = t.data || [];
+                if (!data.length) return 0;
+                let n = 0;
+                for (let r = 0; r < data.length; r++) {
+                    const v = data[r][colIdx];
+                    if (v != null && v !== '') n++;
+                }
+                return (n / data.length * 100).toFixed(1);
+            };
+            const colsOnlyInTable = onlyTable.length;
+            const colsOnlyInModel = onlyModel.length;
+            const colsCommon = overlap.length;
+            const unionSize = colsA.size + colsB.size - colsCommon;
+            const jaccardCols = unionSize > 0 ? (colsCommon / unionSize).toFixed(3) : '0';
+            const containmentTableInModel = colsA.size > 0 ? (colsCommon / colsA.size).toFixed(3) : '-';
+            const containmentModelInTable = colsB.size > 0 ? (colsCommon / colsB.size).toFixed(3) : '-';
+            let missingHtml = '';
+            if (colsCommon > 0 && tableT.data && modelT.data && tableT.data.length > 0 && modelT.data.length > 0) {
+                const sampleCommon = overlap.slice(0, 5);
+                missingHtml = '<p style="margin: 4px 0; font-size: 12px;"><strong>Coverage (non-null %) on overlap columns:</strong></p><ul style="margin: 0 0 8px 0; padding-left: 18px; font-size: 11px;">';
+                sampleCommon.forEach(col => {
+                    const iA = tableT.columns.indexOf(col);
+                    const iB = modelT.columns.indexOf(col);
+                    const pctA = iA >= 0 ? nonNullPct(tableT, iA) : '-';
+                    const pctB = iB >= 0 ? nonNullPct(modelT, iB) : '-';
+                    missingHtml += `<li><code>${col}</code>: Table Search ${pctA}%, Model Search ${pctB}%</li>`;
+                });
+                if (overlap.length > 5) missingHtml += `<li>… and ${overlap.length - 5} more</li>`;
+                missingHtml += '</ul>';
+            }
+            content.innerHTML = `
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 12px;">
+                    <div style="padding: 8px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
+                        <strong>Schema-level (column overlap)</strong>
+                        <ul style="margin: 6px 0 0 0; padding-left: 18px;">
+                            <li>In both: <strong>${colsCommon}</strong></li>
+                            <li>Only in Table Search: <strong>${colsOnlyInTable}</strong>${onlyTable.length ? ' (' + onlyTable.slice(0, 3).join(', ') + (onlyTable.length > 3 ? '…' : '') + ')' : ''}</li>
+                            <li>Only in Model Search: <strong>${colsOnlyInModel}</strong>${onlyModel.length ? ' (' + onlyModel.slice(0, 3).join(', ') + (onlyModel.length > 3 ? '…' : '') + ')' : ''}</li>
+                        </ul>
+                    </div>
+                    <div style="padding: 8px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
+                        <strong>Deterministic metrics (no LLM)</strong>
+                        <ul style="margin: 6px 0 0 0; padding-left: 18px;">
+                            <li>Column Jaccard: <strong>${jaccardCols}</strong> (|A∩B|/|A∪B|)</li>
+                            <li>Containment (Table→Model): <strong>${containmentTableInModel}</strong> (|A∩B|/|A|)</li>
+                            <li>Containment (Model→Table): <strong>${containmentModelInTable}</strong> (|A∩B|/|B|)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div style="margin-top: 8px; padding: 8px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6; font-size: 12px;">
+                    <strong>Row counts</strong>: Table Search <strong>${totalRowsA}</strong> rows, ${tableT.columns.length} cols; Model Search <strong>${totalRowsB}</strong> rows, ${modelT.columns.length} cols.
+                </div>
+                ${missingHtml}
+                <p style="margin: 8px 0 0 0; font-size: 10px; color: #6c757d;">Schema + data-consistency metrics only (overlap, Jaccard, containment, coverage). Deterministic; no LLM.</p>
+            `;
+            container.style.display = 'block';
         }
         
         function syncTableSearchDisplay() {
@@ -1482,11 +1572,17 @@ HTML_TEMPLATE = """
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
             const noResultMsg = placeholder;
             if (run && run.status === 'success' && run.integrated_table) {
-                rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: 'Table Search integration', successColor: '#28a745', savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
+                let extra = '';
+                if (run.models_with_tables && run.models_with_tables.length > 0) {
+                    const links = run.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                }
+                rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: 'Table Search integration', successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
             } else {
                 rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
             initTablePanZoom(rightDiv);
+            refreshIntegrationShortAnalysis();
         }
         
         function initTablePanZoom(root) {}
@@ -1686,7 +1782,12 @@ HTML_TEMPLATE = """
                 if (tableRes.status === 'success') {
                     const stats = tableRes.stats || {};
                     const table = tableRes.integrated_table;
-                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745', savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
+                    let tableExtra = '';
+                    if (tableRes.models_with_tables && tableRes.models_with_tables.length > 0) {
+                        const links = tableRes.models_with_tables.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">Models with tables: ${links}</div>`;
+                    }
+                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745', extraHtml: tableExtra, savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                 } else {
                     rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>`;
                 }

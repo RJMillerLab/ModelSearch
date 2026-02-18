@@ -736,6 +736,7 @@ def integrate_tables_from_search_results(
             "integrated_table": None
         }
     
+    models_with_tables_list = []
     if tables_source == "all_from_modelcards" and relationship_parquet and os.path.exists(relationship_parquet):
         # Get model_ids from table_to_models, then DuckDB batch query
         model_ids = set()
@@ -765,15 +766,26 @@ def integrate_tables_from_search_results(
             if len(table_paths) >= k:
                 break
         print(f"   Resolved {len(table_paths)} tables for integration")
+        models_with_tables_list = model_ids
     else:
         # intermediate: use retrieved tables (current behavior)
         print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} tables from search")
         table_paths = retrieved_filenames[:k]
+        table_to_models = intermediate.get("table_to_models", {})
+        model_ids_set = set()
+        for tp in table_paths:
+            for m in (table_to_models.get(tp) or []):
+                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
+                if mid:
+                    model_ids_set.add(mid)
+        models_with_tables_list = list(model_ids_set)
     
     if not table_paths:
         return {"success": False, "error": "No tables to integrate", "integrated_table": None}
     
-    return integrate_tables(table_paths, integration_type, k, db_path)
+    result = integrate_tables(table_paths, integration_type, k, db_path)
+    result["models_with_tables"] = models_with_tables_list
+    return result
 
 
 def integrate_tables_from_model_search_results(
