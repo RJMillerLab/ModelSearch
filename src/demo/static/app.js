@@ -574,13 +574,24 @@
             const errorBlock = results.error
                 ? `<div style="padding: 12px; margin-bottom: 15px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px;"><strong>❌ Pipeline error:</strong> ${results.error}</div>`
                 : '';
-            // Seed model + Tables note: same row, two columns (aligned with the two result cards below)
+            // Seed model + Query tables: same row, two columns (aligned with the two result cards below)
             const seedModelId = results.model_id || null;
             const headerStyle = 'font-size: 12px; color: #666;';
             const seedModelCell = results.error ? '' : (seedModelId
                 ? `<span style="${headerStyle}"><strong>Seed model (from query):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a></span>`
                 : `<span style="font-size: 12px; color: #856404;">⚠️ Model ID missing</span>`);
-            const tablesNoteCell = `<span style="${headerStyle}">Tables are presented under each item.</span>`;
+            // Query table path(s) from seed model card — used to run table search; result items below are model cards hit by that search
+            let queryTables = [];
+            const c2t2c = results.card2tab2card_results || {};
+            Object.keys(c2t2c).forEach(type => {
+                const data = c2t2c[type];
+                if (data && Array.isArray(data.query_tables) && data.query_tables.length > 0) {
+                    data.query_tables.forEach(p => { if (p && !queryTables.includes(p)) queryTables.push(p); });
+                }
+            });
+            const tablesNoteCell = results.error ? '<span style="' + headerStyle + '">—</span>' : (queryTables.length > 0
+                ? `<span style="${headerStyle}"><strong>Query table(s) (from seed model card):</strong><br><span style="font-size: 11px;">${queryTables.map(p => `<code style="background: #f1f3f5; padding: 2px 4px; border-radius: 3px;">${String(p).replace(/</g, '&lt;')}</code>`).join(', ')}</span></span>`
+                : `<span style="${headerStyle}"><strong>Query table(s) (from seed model card):</strong> —</span>`);
             const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; align-items: center;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
