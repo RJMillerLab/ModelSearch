@@ -589,8 +589,18 @@
                     data.query_tables.forEach(p => { if (p && !queryTables.includes(p)) queryTables.push(p); });
                 }
             });
+            // Filter by source: exclude s2orc/llm by ModelTables naming rules (e.g. 215768677_table2.csv)
+            const classifyTableSource = (path) => {
+                const b = String(path).split('/').pop().replace(/_s\.csv$/, '.csv').replace(/_t\.csv$/, '.csv');
+                if (/^[0-9a-f]{32}_table_\d+\.csv$/.test(b)) return 'github';
+                if (/^\d+\.\d+(?:v\d+)?_table\d+\.csv$/.test(b)) return 'html';
+                if (/^[0-9a-f]{10}_table\d+\.csv$/.test(b)) return 'huggingface';
+                if (/^\d+_table\d+\.csv$/.test(b)) return 'llm';
+                return 'unknown';
+            };
+            queryTables = queryTables.filter(p => classifyTableSource(p) !== 'llm');
             const tablesNoteCell = results.error ? '<span style="' + headerStyle + '">—</span>' : (queryTables.length > 0
-                ? `<span style="${headerStyle}"><strong>Query table(s) (from seed model card):</strong><br><span style="font-size: 11px;">${queryTables.map(p => `<code style="background: #f1f3f5; padding: 2px 4px; border-radius: 3px;">${String(p).replace(/</g, '&lt;')}</code>`).join(', ')}</span></span>`
+                ? `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.map(p => String(p).split('/').pop()).join(' ')}</span></span>`
                 : `<span style="${headerStyle}"><strong>Query table(s) (from seed model card):</strong> —</span>`);
             const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; align-items: center;">
                 <div>${seedModelCell}</div>
@@ -754,43 +764,14 @@
                                                 const modelTables = modelToTables[modelId] || [];
                                                 const hasTables = modelTables.length > 0;
                                                 
+                                                const tableLine = hasTables ? modelTables.map(t => String(t).split('/').pop()).join(' ') : '';
                                                 return `
-                                                    <li class="result-item" style="margin-bottom: 6px;">
-                                                        <div style="display: flex; align-items: center;">
-                                                            <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">
-                                                                ${modelId}
-                                                            </a>
-                                                            ${hasTables ? ` <span style="font-size: 11px; color: #666;">(by ${modelTables.length} searched table${modelTables.length > 1 ? 's' : ''})</span>` : ''}
+                                                    <li class="result-item" style="margin-bottom: 4px;">
+                                                        <div style="display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap;">
+                                                            <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">${modelId}</a>
+                                                            ${hasTables ? ` <span style="font-size: 10px; color: #888;">(${modelTables.length} tables)</span>` : ''}
+                                                            ${hasTables ? `<span style="font-size: 10px; color: #999; font-family: monospace;">${tableLine}</span>` : ''}
                                                         </div>
-                                                        ${hasTables ? `
-                                                            <div style="margin-left: 4px; margin-top: 2px; padding: 4px; background: #f8f9fa; border-radius: 4px; max-height: 120px; overflow-y: auto; font-size: 10px; color: #666;">
-                                                                        ${modelTables.map((table) => {
-                                                                            const safeTpl = (s) => String(s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$').replace(/\{/g, '\\\\{').replace(/\}/g, '\\\\}');
-                                                                            const escapedTablePath = String(table)
-                                                                                .replace(/&/g, '&amp;')
-                                                                                .replace(/"/g, '&quot;')
-                                                                                .replace(/'/g, '&#39;')
-                                                                                .replace(/</g, '&lt;')
-                                                                                .replace(/>/g, '&gt;');
-                                                                            const safeTable = safeTpl(table);
-                                                                            const safeEscaped = safeTpl(escapedTablePath);
-                                                                            return `
-                                                                                <div style="padding: 1px 0; border-bottom: 1px solid #dee2e6;">
-                                                                                    <div style="display: flex; align-items: center; gap: 5px;">
-                                                                                        <span style="font-size: 8px; color: #999; font-family: monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2;" title="${safeTable}">
-                                                                                            ${safeTable}
-                                                                                        </span>
-                                                                                        <button onclick="copyTablePath('${safeEscaped}', this)" 
-                                                                                                style="padding: 2px 4px; font-size: 11px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer; min-width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
-                                                                                                title="Copy full path to clipboard">
-                                                                                            📋
-                                                                                        </button>
-                                                                                    </div>
-                                                                                </div>
-                                                                            `;
-                                                                        }).join('')}
-                                                            </div>
-                                                        ` : ''}
                                                     </li>
                                                 `;
                                             }).join('') : '<li>No results</li>'}
@@ -853,8 +834,8 @@
                             <option value="alite">ALITE</option>
                             <option value="outer_join">Outer Join</option>
                         </select></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_k" style="${topKLabelStyle}">top k tables:</label><input type="number" id="integration_k" class="form-control" value="${defaultIntegrationK}" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
-                        <div style="flex: 0 0 auto;"><label for="integration_max_models" style="${topKLabelStyle}">top k models:</label><input type="number" id="integration_max_models" class="form-control" value="${defaultIntegrationMaxModels}" min="1" max="50" style="width: 60px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" onchange="syncBothIntegrationDisplays();"></div>
+                        <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
+                        <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">

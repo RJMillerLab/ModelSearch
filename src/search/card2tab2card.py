@@ -11,6 +11,7 @@ Uses CitationLake's get_from.py approach for robust parquet schema handling.
 
 import math
 import os
+import re
 import sys
 import time
 from typing import List, Set, Dict, Optional, Any
@@ -164,6 +165,39 @@ def get_modelids_from_table(
     return list(set(all_model_ids))  # Deduplicate
 
 
+def _classify_table_source_by_basename(basename: str) -> str:
+    """
+    Classify table source from filename (from ModelTables batch_process_tables / quick_retrieval).
+    Returns: 'github', 'huggingface', 'html', 'llm', or 'unknown'
+    """
+    b = str(basename).replace("_s.csv", ".csv").replace("_t.csv", ".csv")
+    # GitHub: 32 hex + _table_N.csv
+    if re.fullmatch(r"[0-9a-f]{32}_table_\d+\.csv", b):
+        return "github"
+    # HTML/arXiv: D.D(vN)_tableN.csv
+    if re.fullmatch(r"\d+\.\d+(?:v\d+)?_table\d+\.csv", b):
+        return "html"
+    # HuggingFace: 10 hex + _tableN.csv
+    if re.fullmatch(r"[0-9a-f]{10}_table\d+\.csv", b):
+        return "huggingface"
+    # LLM/S2ORC: digits only before _table (e.g. 215768677_table2.csv, 237485280_table3.csv)
+    if re.fullmatch(r"\d+_table\d+\.csv", b):
+        return "llm"
+    return "unknown"
+
+
+def _filter_s2orc_tables(tables: List[str]) -> List[str]:
+    """Filter out s2orc/llm tables (unstable). Use ModelTables naming rules to infer source."""
+    def is_s2orc_or_llm(p: str) -> bool:
+        base = os.path.basename(str(p))
+        src = _classify_table_source_by_basename(base)
+        return src == "llm"
+    out = [t for t in tables if not is_s2orc_or_llm(t)]
+    if len(out) < len(tables):
+        print(f"ℹ️  Filtered out {len(tables) - len(out)} s2orc/llm tables (remain: {len(out)})")
+    return out
+
+
 def load_relationship_parquet(parquet_path: str) -> pd.DataFrame:
     """
     Load relationship parquet file that maps modelId to CSV basenames.
@@ -284,6 +318,7 @@ def search_card2tab2card(
             schema_log_path=schema_log_path,
             use_citationlake=True
         )
+        query_tables = _filter_s2orc_tables(query_tables)
     elif use_citationlake and not USE_CITATIONLAKE_GET_FROM:
         # User wants CitationLake but it's not available, try to find default relationship_parquet
         if relationship_parquet is None:
@@ -330,6 +365,7 @@ def search_card2tab2card(
             use_citationlake=False
         )
     
+    query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"⚠️  Warning: No tables found for model {model_id}")
         # Still save intermediate results even if no query tables
@@ -882,6 +918,7 @@ def search_card2tab2card_from_tables(
             schema_log_path=schema_log_path,
             use_citationlake=True
         )
+        query_tables = _filter_s2orc_tables(query_tables)
     else:
         if relationship_parquet is None:
             raise ValueError("relationship_parquet is required when use_citationlake=False")
@@ -891,7 +928,7 @@ def search_card2tab2card_from_tables(
             relationship_df=relationship_df,
             use_citationlake=False
         )
-    
+        query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"Warning: No tables found for model {model_id}")
         return []
@@ -1035,6 +1072,7 @@ def search_card2tab2card_by_type(
             schema_log_path=schema_log_path,
             use_citationlake=True
         )
+        query_tables = _filter_s2orc_tables(query_tables)
     elif use_citationlake and not USE_CITATIONLAKE_GET_FROM:
         # User wants CitationLake but it's not available, try to find default relationship_parquet
         if relationship_parquet is None:

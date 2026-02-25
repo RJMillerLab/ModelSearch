@@ -802,6 +802,7 @@ def integrate_tables_from_search_results(
     if not table_paths:
         return {"success": False, "error": "No tables to integrate", "integrated_table": None}
     
+    print(f"📊 Integration (Table Search): #tables={len(table_paths)}, #models={len(models_with_tables_list)}")
     result = integrate_tables(table_paths, integration_type, k, db_path)
     result["models_with_tables"] = models_with_tables_list
     return result
@@ -1146,11 +1147,8 @@ def integrate_tables_from_model_search_results(
         }
     
     print(f"\n✅ Collected {len(all_table_paths)} unique tables from {len(models_with_tables)} models")
-    print(f"   Using first {min(k, len(all_table_paths))} tables for integration")
-    
-    # Limit to k tables
     table_paths = all_table_paths[:k]
-    
+    print(f"📊 Integration (Model Search): #tables={len(table_paths)}, #models={len(models_with_tables)}")
     # Integrate tables
     result = integrate_tables(table_paths, integration_type, k, db_path)
     
