@@ -9,6 +9,7 @@ This module provides a two-stage search:
 Uses CitationLake's get_from.py approach for robust parquet schema handling.
 """
 
+import math
 import os
 import sys
 import time
@@ -231,7 +232,8 @@ def search_card2tab2card(
     schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
     use_citationlake: bool = True,
     output_json: str = "data/card2tab2card_results.json",
-    db_path: Optional[str] = None
+    db_path: Optional[str] = None,
+    global_table_topk: bool = True,
 ) -> List[str]:
     """
     Search for model cards via table search.
@@ -255,6 +257,8 @@ def search_card2tab2card(
         use_citationlake: Whether to use CitationLake get_from (default: True)
         output_json: Optional path to save results as JSON
         db_path: Path to modellake.db (default: data_citationlake/modellake.db)
+        global_table_topk: If True (default), when model has multiple tables: search each table as equivalent query,
+            merge results round-robin, take global top-k. Ensures table_search_k limits total tables, not per-table.
     
     Returns:
         List of model IDs that have similar tables
@@ -361,11 +365,19 @@ def search_card2tab2card(
         print(f"   ... and {len(query_tables) - 2} more tables")
     
     # If query is provided, use it; otherwise search based on query_tables
+    use_per_table_search = (
+        query is None
+        and global_table_topk
+        and len(query_tables) > 1
+        and search_type in ("keyword", "single_column")  # These support per-table query easily
+    )
     if query is None:
         # Use the query model's tables as the search query
         # For keyword search, we need to load the actual CSV files to get headers
         # (Blend_internal uses rowid=-1 which represents headers in the index)
         print(f"ℹ️  No query provided, using model's tables as query")
+        if use_per_table_search:
+            print(f"ℹ️  global_table_topk=True: each of {len(query_tables)} tables as equivalent query, merge → global top-{table_search_k}")
         if search_type == "keyword":
             # Load headers from model's tables (consistent with Blend_internal)
             all_headers = []
@@ -479,28 +491,84 @@ def search_card2tab2card(
         search_table2table = _get_search_table2table()
         print(f"✅ Got search_table2table function")
         sys.stdout.flush()
-        print(f"🔎 Searching for similar tables...")
-        print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}, db_path: {db_path}")
-        sys.stdout.flush()
-        
-        # Handle correlation search specially - need to extract source and target columns
-        if search_type == "correlation" and isinstance(query, pd.DataFrame):
-            # Use first column as source, first numeric column as target
-            source_col = query[query.columns[0]].astype(str).tolist()
-            numeric_cols = query.select_dtypes(include=['number']).columns
-            if len(numeric_cols) > 0:
-                target_col = query[numeric_cols[0]].tolist()
-                print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
-                similar_table_ids = search_table2table(
-                    query, search_type, table_search_k, db_path=db_path,
-                    source_column=source_col, target_column=target_col
-                )
-            else:
-                print(f"⚠️  No numeric column found for correlation search, skipping...")
-                similar_table_ids = []
+        if use_per_table_search:
+            # Per-table k = ceil(table_topk / seed_table_count), min 1 per table
+            num_seed_tables = len(query_tables[:20])
+            k_per_table = max(1, math.ceil(table_search_k / num_seed_tables))
+            print(f"📊 TopK: seed_tables={num_seed_tables} | table_topk={table_search_k} → per_table_k=ceil({table_search_k}/{num_seed_tables})={k_per_table}")
+            print(f"🔎 Searching per table (each equivalent), merge → global top-{table_search_k}...")
+            sys.stdout.flush()
+            per_table_results: List[List[int]] = []
+            for ti, table_path in enumerate(query_tables[:20]):  # Cap to avoid too many searches
+                try:
+                    csv_path = None
+                    if os.path.exists(str(table_path)):
+                        csv_path = str(table_path)
+                    else:
+                        basename = os.path.basename(str(table_path))
+                        for base_dir in [
+                            "data_citationlake/processed/deduped_hugging_csvs",
+                            "data_citationlake/processed/deduped_github_csvs",
+                            "data_citationlake/processed/tables_output",
+                        ]:
+                            full_path = os.path.join(base_dir, basename)
+                            if os.path.exists(full_path):
+                                csv_path = full_path
+                                break
+                    if not csv_path:
+                        continue
+                    df_temp = pd.read_csv(csv_path, nrows=0)
+                    headers = [str(col).lower().strip() for col in df_temp.columns]
+                    headers = [h for h in headers if h]
+                    tquery = headers or [os.path.basename(str(table_path))]
+                    if search_type == "single_column":
+                        df_read = pd.read_csv(csv_path, nrows=100)
+                        if len(df_read) > 0 and len(df_read.columns) > 0:
+                            tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
+                    if not tquery:
+                        continue
+                    ids = search_table2table(tquery, search_type, k_per_table, db_path=db_path)
+                    if ids:
+                        per_table_results.append(ids)
+                except Exception as e:
+                    print(f"   ⚠️  Table {ti+1} ({os.path.basename(str(table_path))}): {e}")
+                    continue
+            # Round-robin merge: t1_r1, t2_r1, ..., t1_r2, t2_r2, ...; dedupe, take global top-k
+            seen: Set[int] = set()
+            similar_table_ids = []
+            max_len = max(len(r) for r in per_table_results) if per_table_results else 0
+            for rank in range(max_len):
+                for row in per_table_results:
+                    if rank < len(row) and row[rank] not in seen:
+                        seen.add(row[rank])
+                        similar_table_ids.append(row[rank])
+                        if len(similar_table_ids) >= table_search_k:
+                            break
+                if len(similar_table_ids) >= table_search_k:
+                    break
+            similar_table_ids = similar_table_ids[:table_search_k]
+            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables, global top-{table_search_k})")
         else:
-            similar_table_ids = search_table2table(query, search_type, table_search_k, db_path=db_path)
-        print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
+            print(f"🔎 Searching for similar tables...")
+            print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}, db_path: {db_path}")
+            sys.stdout.flush()
+            # Handle correlation search specially - need to extract source and target columns
+            if search_type == "correlation" and isinstance(query, pd.DataFrame):
+                source_col = query[query.columns[0]].astype(str).tolist()
+                numeric_cols = query.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    target_col = query[numeric_cols[0]].tolist()
+                    print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
+                    similar_table_ids = search_table2table(
+                        query, search_type, table_search_k, db_path=db_path,
+                        source_column=source_col, target_column=target_col
+                    )
+                else:
+                    print(f"⚠️  No numeric column found for correlation search, skipping...")
+                    similar_table_ids = []
+            else:
+                similar_table_ids = search_table2table(query, search_type, table_search_k, db_path=db_path)
+            print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
         sys.stdout.flush()
         
         if not similar_table_ids:
@@ -612,8 +680,16 @@ def search_card2tab2card(
         """
         filename_results = con.execute(filename_query).fetchall()
         tableid_to_filename = {tid: filename for tid, filename in filename_results}
-        retrieved_filenames = list(tableid_to_filename.values())
-        print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database")
+        # Preserve Tab2Tab relevance order: iterate by similar_table_ids, dedupe by filename
+        seen_filenames = set()
+        retrieved_filenames = []
+        for tid in similar_table_ids:
+            if tid in tableid_to_filename:
+                fname = tableid_to_filename[tid]
+                if fname not in seen_filenames:
+                    seen_filenames.add(fname)
+                    retrieved_filenames.append(fname)
+        print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
         
         if not retrieved_filenames:
             print(f"⚠️  No filenames found for retrieved table IDs")
@@ -727,6 +803,8 @@ def search_card2tab2card(
         final_results = list(similar_model_ids)
         print(f"   (no limit: returning all {len(final_results)} models that contain the retrieved tables)")
     
+    # One-line TopK decision: seed_tables | searched_tables | model_cards
+    print(f"📊 TopK decision: seed_tables={len(query_tables)} | searched_tables={len(similar_table_ids)} | model_cards={len(final_results)}")
     # Final summary
     print(f"\n{'='*60}")
     print(f"📊 Final Results Summary")
@@ -899,7 +977,8 @@ def search_card2tab2card_by_type(
     output_json: str = "data/card2tab2card_by_type_results.json",
     db_path: Optional[str] = None,
     classification_json: Optional[str] = None,
-    classifications: Optional[Dict[int, str]] = None
+    classifications: Optional[Dict[int, str]] = None,
+    global_table_topk: bool = True,
 ) -> List[str]:
     """
     Search for model cards via table search with classification filtering.
@@ -1030,8 +1109,16 @@ def search_card2tab2card_by_type(
     print(f"✅ Found {len(query_tables)} tables for model {model_id}")
     
     # If query is provided, use it; otherwise search based on query_tables
+    use_per_table_search = (
+        query is None
+        and global_table_topk
+        and len(query_tables) > 1
+        and search_type in ("keyword", "single_column")
+    )
     if query is None:
         # Use the query model's tables as the search query
+        if use_per_table_search:
+            print(f"ℹ️  global_table_topk=True: each of {len(query_tables)} tables as equivalent query, merge → global top-{table_search_k}")
         if search_type == "keyword":
             # Load headers from model's tables
             all_headers = []
@@ -1094,32 +1181,91 @@ def search_card2tab2card_by_type(
         search_table2table_by_type = _get_search_table2table_by_type()
         print(f"✅ Got search_table2table_by_type function")
         sys.stdout.flush()
-        print(f"🔎 Searching for similar tables (with classification filtering)...")
-        sys.stdout.flush()
-        
-        # Handle correlation search specially
-        if search_type == "correlation" and isinstance(query, pd.DataFrame):
-            source_col = query[query.columns[0]].astype(str).tolist()
-            numeric_cols = query.select_dtypes(include=['number']).columns
-            if len(numeric_cols) > 0:
-                target_col = query[numeric_cols[0]].tolist()
-                print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
+        if use_per_table_search:
+            num_seed_tables = len(query_tables[:20])
+            k_per_table = max(1, math.ceil(table_search_k / num_seed_tables))
+            print(f"📊 TopK: seed_tables={num_seed_tables} | table_topk={table_search_k} → per_table_k=ceil({table_search_k}/{num_seed_tables})={k_per_table}")
+            print(f"🔎 Searching per table (each equivalent, with classification), merge → global top-{table_search_k}...")
+            sys.stdout.flush()
+            per_table_results = []
+            for ti, table_path in enumerate(query_tables[:20]):
+                try:
+                    csv_path = None
+                    if os.path.exists(str(table_path)):
+                        csv_path = str(table_path)
+                    else:
+                        basename = os.path.basename(str(table_path))
+                        for base_dir in [
+                            "data_citationlake/processed/deduped_hugging_csvs",
+                            "data_citationlake/processed/deduped_github_csvs",
+                            "data_citationlake/processed/tables_output",
+                        ]:
+                            full_path = os.path.join(base_dir, basename)
+                            if os.path.exists(full_path):
+                                csv_path = full_path
+                                break
+                    if not csv_path:
+                        continue
+                    df_temp = pd.read_csv(csv_path, nrows=0)
+                    headers = [str(col).lower().strip() for col in df_temp.columns]
+                    headers = [h for h in headers if h]
+                    tquery = headers or [os.path.basename(str(table_path))]
+                    if search_type == "single_column":
+                        df_read = pd.read_csv(csv_path, nrows=100)
+                        if len(df_read) > 0 and len(df_read.columns) > 0:
+                            tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
+                    if not tquery:
+                        continue
+                    ids = search_table2table_by_type(
+                        tquery, search_type, k_per_table, db_path=db_path,
+                        classification_json=classification_json,
+                        classifications=classifications,
+                    )
+                    if ids:
+                        per_table_results.append(ids)
+                except Exception as e:
+                    print(f"   ⚠️  Table {ti+1} ({os.path.basename(str(table_path))}): {e}")
+                    continue
+            seen = set()
+            similar_table_ids = []
+            max_len = max(len(r) for r in per_table_results) if per_table_results else 0
+            for rank in range(max_len):
+                for row in per_table_results:
+                    if rank < len(row) and row[rank] not in seen:
+                        seen.add(row[rank])
+                        similar_table_ids.append(row[rank])
+                        if len(similar_table_ids) >= table_search_k:
+                            break
+                if len(similar_table_ids) >= table_search_k:
+                    break
+            similar_table_ids = similar_table_ids[:table_search_k]
+            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables, global top-{table_search_k})")
+        else:
+            print(f"🔎 Searching for similar tables (with classification filtering)...")
+            sys.stdout.flush()
+            # Handle correlation search specially
+            if search_type == "correlation" and isinstance(query, pd.DataFrame):
+                source_col = query[query.columns[0]].astype(str).tolist()
+                numeric_cols = query.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    target_col = query[numeric_cols[0]].tolist()
+                    print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
+                    similar_table_ids = search_table2table_by_type(
+                        query, search_type, table_search_k, db_path=db_path,
+                        classification_json=classification_json,
+                        classifications=classifications,
+                        source_column=source_col, target_column=target_col
+                    )
+                else:
+                    print(f"⚠️  No numeric column found for correlation search, skipping...")
+                    similar_table_ids = []
+            else:
                 similar_table_ids = search_table2table_by_type(
                     query, search_type, table_search_k, db_path=db_path,
                     classification_json=classification_json,
-                    classifications=classifications,
-                    source_column=source_col, target_column=target_col
+                    classifications=classifications
                 )
-            else:
-                print(f"⚠️  No numeric column found for correlation search, skipping...")
-                similar_table_ids = []
-        else:
-            similar_table_ids = search_table2table_by_type(
-                query, search_type, table_search_k, db_path=db_path,
-                classification_json=classification_json,
-                classifications=classifications
-            )
-        print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs, filtered by classification)")
+            print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs, filtered by classification)")
         sys.stdout.flush()
         
         if not similar_table_ids:
@@ -1155,8 +1301,16 @@ def search_card2tab2card_by_type(
             """
             filename_results = con.execute(filename_query).fetchall()
             tableid_to_filename = {tid: filename for tid, filename in filename_results}
-            retrieved_filenames = list(tableid_to_filename.values())
-            print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database")
+            # Preserve Tab2Tab relevance order: iterate by similar_table_ids, dedupe by filename
+            seen_filenames = set()
+            retrieved_filenames = []
+            for tid in similar_table_ids:
+                if tid in tableid_to_filename:
+                    fname = tableid_to_filename[tid]
+                    if fname not in seen_filenames:
+                        seen_filenames.add(fname)
+                        retrieved_filenames.append(fname)
+            print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
         finally:
             con.close()
             
@@ -1249,6 +1403,8 @@ def search_card2tab2card_by_type(
     else:
         final_results = list(similar_model_ids)
     
+    # One-line TopK decision: seed_tables | searched_tables | model_cards
+    print(f"📊 TopK decision: seed_tables={len(query_tables)} | searched_tables={len(similar_table_ids)} | model_cards={len(final_results)}")
     # Final summary
     print(f"\n{'='*60}")
     print(f"📊 Final Results Summary")

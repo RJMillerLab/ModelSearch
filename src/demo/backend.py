@@ -386,6 +386,8 @@ def _run_pipeline_body(
         return
 
     k_table = table_search_k if table_search_k is not None else min(max(int(top_k * 1.5), 20), 20)
+    # Card2Card top_k: use high default (100) so we have enough; will truncate to right's max for alignment
+    card2card_top_k = 100
 
     # Step 2: Run Card2Card (dense, sparse, hybrid) and Card2Tab2Card in parallel via CLI
     logger.log("Step 2: Running Card2Card + Card2Tab2Card (parallel CLI)...")
@@ -396,7 +398,7 @@ def _run_pipeline_body(
             sys.executable, "-m", "src.search.card2card", "search",
             "--model_id", model_id,
             "--retrieval_mode", mode,
-            "--top_k", str(top_k),
+            "--top_k", str(card2card_top_k),
             "--output_json", out_path,
         ]
         if mode == "dense":
@@ -549,6 +551,19 @@ def _run_pipeline_body(
     for st in fill_types:
         if st not in card2tab2card_all:
             card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
+
+    # Right pipeline max: take max model count across all card2tab2card types
+    max_right = 0
+    for st, data in card2tab2card_all.items():
+        if isinstance(data, dict) and "model_ids" in data:
+            max_right = max(max_right, len(data.get("model_ids", [])))
+
+    # Align left (Card2Card) to right's max: truncate each mode to max_right
+    for mode in card2card_modes:
+        val = card2card_all.get(mode)
+        if isinstance(val, list) and len(val) > max_right and max_right > 0:
+            card2card_all[mode] = val[:max_right]
+            logger.log(f"[Card2Card-{mode.upper()}] Truncated to {max_right} (align to right pipeline max)")
 
     primary = card2card_all.get(
         "dense",

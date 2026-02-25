@@ -712,13 +712,29 @@ def integrate_tables_from_search_results(
             "integrated_table": None
         }
     
-    # Get retrieved table filenames
-    # Try retrieved_table_filenames first, then fall back to table_to_models keys
-    retrieved_filenames = intermediate.get("retrieved_table_filenames", [])
+    # Get retrieved table filenames (prefer Tab2Tab relevance order)
+    # Priority: retrieved_table_ids + table_id_to_filename > retrieved_table_filenames > table_to_models keys
+    table_to_models = intermediate.get("table_to_models", {})
+    retrieved_table_ids = intermediate.get("retrieved_table_ids", [])
+    table_id_to_filename = intermediate.get("table_id_to_filename", {})
     
-    # If no retrieved_table_filenames, try to extract from table_to_models
+    retrieved_filenames = []
+    if retrieved_table_ids and table_id_to_filename:
+        # Rebuild ordered list from Tab2Tab relevance (retrieved_table_ids order), dedupe by filename
+        seen_files = set()
+        for tid in retrieved_table_ids:
+            if tid in table_id_to_filename:
+                f = table_id_to_filename[tid]
+                if f not in seen_files:
+                    seen_files.add(f)
+                    retrieved_filenames.append(f)
+        if retrieved_filenames:
+            print(f"ℹ️  Using retrieved_table_ids order: {len(retrieved_filenames)} tables (Tab2Tab relevance)")
+    
     if not retrieved_filenames:
-        table_to_models = intermediate.get("table_to_models", {})
+        retrieved_filenames = intermediate.get("retrieved_table_filenames", [])
+    
+    if not retrieved_filenames:
         if table_to_models:
             retrieved_filenames = list(table_to_models.keys())
             print(f"ℹ️  Using table paths from table_to_models: {len(retrieved_filenames)} tables")
@@ -772,9 +788,12 @@ def integrate_tables_from_search_results(
         print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} tables from search")
         table_paths = retrieved_filenames[:k]
         table_to_models = intermediate.get("table_to_models", {})
+        # Build basename->key index for robust lookup (handles path format mismatch)
+        basename_to_key = {os.path.basename(key): key for key in table_to_models}
         model_ids_set = set()
         for tp in table_paths:
-            for m in (table_to_models.get(tp) or []):
+            model_list = table_to_models.get(tp) or table_to_models.get(basename_to_key.get(os.path.basename(tp)))
+            for m in (model_list or []):
                 mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
                 if mid:
                     model_ids_set.add(mid)

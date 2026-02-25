@@ -407,7 +407,7 @@
             const mode = (document.getElementById('search_mode_select') || {}).value || 'query';
             const query = document.getElementById('query').value.trim();
             const modelId = document.getElementById('model_id').value.trim();
-            const topK = parseInt(document.getElementById('top_k').value, 10) || 50;
+            const topK = parseInt((document.getElementById('top_k') || {}).value, 10) || 100;  // Left aligns to right; high default
             const tableSearchK = parseInt(document.getElementById('table_search_k').value, 10) || 10;
             // Table retrieval: always run search (no load-from-JSON option)
             const tab2tabMode = 'search';
@@ -711,28 +711,28 @@
                             const tableCountFromMapping = Object.keys(tableToModels).length;
                             const realTableCount = tableCountFromFilenames || tableCountFromMapping || 0;
                             
-                            // Build reverse mapping: model_id -> list of tables
+                            // Build reverse mapping: model_id -> list of retrieved tables (searched tables only, no query tables)
                             const modelToTables = {};
                             Object.entries(tableToModels).forEach(([table, modelList]) => {
-                                // Handle both string arrays and object arrays
                                 const normalizedModelList = Array.isArray(modelList) ? modelList : [];
                                 normalizedModelList.forEach(modelIdOrObj => {
-                                    // Extract model_id: handle both string and object formats
-                                    let modelId = typeof modelIdOrObj === 'string' 
-                                        ? modelIdOrObj 
+                                    let modelId = typeof modelIdOrObj === 'string'
+                                        ? modelIdOrObj
                                         : (modelIdOrObj?.model_id || modelIdOrObj);
-                                    
-                                    // Normalize: trim whitespace and ensure it's a string
                                     if (modelId) {
                                         modelId = String(modelId).trim();
                                         if (modelId) {
-                                            if (!modelToTables[modelId]) {
-                                                modelToTables[modelId] = [];
-                                            }
+                                            if (!modelToTables[modelId]) modelToTables[modelId] = [];
                                             modelToTables[modelId].push(table);
                                         }
                                     }
                                 });
+                            });
+                            // Sort models by number of retrieved tables descending: Model2 (by t2,t3,t4) before Model1 (by t1,t3)
+                            const sortedModels = [...models].sort((a, b) => {
+                                const idA = (typeof a === 'string' ? a : (a?.model_id || a))?.toString().trim() || '';
+                                const idB = (typeof b === 'string' ? b : (b?.model_id || b))?.toString().trim() || '';
+                                return (modelToTables[idB]?.length || 0) - (modelToTables[idA]?.length || 0);
                             });
                             
                             return `
@@ -747,30 +747,24 @@
                                     </div>
                                     <div class="collapsible-content" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
-                                            ${models.length > 0 ? models.map((m, idx) => {
+                                            ${sortedModels.length > 0 ? sortedModels.map((m, idx) => {
                                                 let modelId = typeof m === 'string' ? m : (m.model_id || m);
                                                 modelId = String(modelId).trim();
                                                 const modelUrl = typeof m === 'string' ? `https://huggingface.co/${modelId}` : (m.url || `https://huggingface.co/${modelId}`);
                                                 const modelTables = modelToTables[modelId] || [];
-                                                const modelExpandId = `${sectionId}-model-${idx}`;
                                                 const hasTables = modelTables.length > 0;
                                                 
                                                 return `
-                                                    <li class="result-item" style="margin-bottom: 4px;">
+                                                    <li class="result-item" style="margin-bottom: 6px;">
                                                         <div style="display: flex; align-items: center;">
-                                                            <span class="expand-toggle" onclick="toggleExpand('${modelExpandId}', this)" style="margin-right: 6px; ${hasTables ? '' : 'display: none;'}">▶<span class="expand-label">Details</span></span>
                                                             <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">
                                                                 ${modelId}
                                                             </a>
+                                                            ${hasTables ? ` <span style="font-size: 11px; color: #666;">(by ${modelTables.length} searched table${modelTables.length > 1 ? 's' : ''})</span>` : ''}
                                                         </div>
                                                         ${hasTables ? `
-                                                            <div class="collapsible-content" id="${modelExpandId}" style="margin-left: 15px; margin-top: 2px; display: none;">
-                                                                <div style="font-size: 10px; color: #666;">
-                                                                    <strong>From Tables (${modelTables.length}):</strong>
-                                                                    <div style="margin-top: 2px; padding: 4px; background: #f8f9fa; border-radius: 4px; max-height: 200px; overflow-y: auto;">
-                                                                        ${modelTables.map((table, tableIdx) => {
-                                                                            const tableBasename = table.split('/').pop();
-                                                                            const tableExpandId = `${modelExpandId}-table-${tableIdx}`;
+                                                            <div style="margin-left: 4px; margin-top: 2px; padding: 4px; background: #f8f9fa; border-radius: 4px; max-height: 120px; overflow-y: auto; font-size: 10px; color: #666;">
+                                                                        ${modelTables.map((table) => {
                                                                             const safeTpl = (s) => String(s).replace(/\\\\/g, '\\\\\\\\').replace(/`/g, '\\\\`').replace(/\\\$/g, '\\\\$').replace(/\{/g, '\\\\{').replace(/\}/g, '\\\\}');
                                                                             const escapedTablePath = String(table)
                                                                                 .replace(/&/g, '&amp;')
@@ -795,8 +789,6 @@
                                                                                 </div>
                                                                             `;
                                                                         }).join('')}
-                                                                    </div>
-                                                                </div>
                                                             </div>
                                                         ` : ''}
                                                     </li>

@@ -392,11 +392,12 @@ HTML_TEMPLATE = """
             </div>
             
             <div class="form-row" style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
-                <div style="flex: 1; min-width: 200px;">
+                <!-- Model Card Top K: hidden - left pipeline aligns to right's max; we only control Table Top K -->
+                <div style="flex: 1; min-width: 200px; display: none;">
                     <label for="top_k">Model Card Top K:</label>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="range" id="top_k_slider" min="1" max="100" value="50" step="1" style="flex: 1; max-width: 200px;" oninput="updateTopKValue(this.value)">
-                        <input type="number" id="top_k" class="form-control" value="50" min="1" max="100" oninput="updateTopKSlider(this.value)" style="width: 80px;">
+                        <input type="range" id="top_k_slider" min="1" max="100" value="100" step="1" style="flex: 1; max-width: 200px;" oninput="updateTopKValue(this.value)">
+                        <input type="number" id="top_k" class="form-control" value="100" min="1" max="100" oninput="updateTopKSlider(this.value)" style="width: 80px;">
                     </div>
                 </div>
                 <div style="flex: 1; min-width: 200px;">
