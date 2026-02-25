@@ -607,10 +607,18 @@
             const tablesNoteCell = results.error ? '<span style="' + headerStyle + '">—</span>' : (queryTables.length > 0 || searchedTables.length > 0
                 ? `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.length ? queryTables.map(basename).join(' ') : '—'}</span><br><strong>Searched table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${searchedTables.length ? searchedTables.map(basename).join(' ') : '—'}</span></span>`
                 : `<span style="${headerStyle}"><strong>Query table(s):</strong> —<br><strong>Searched table(s):</strong> —</span>`);
+            const runLogPath = results.run_log_path || results.folder_path ? (results.folder_path + '/pipeline_run.log') : null;
+            const folderPath = results.folder_path || '';
+            const runLogRow = (folderPath || runLogPath)
+                ? `<div style="margin-bottom: 8px; padding: 8px 12px; font-size: 11px; color: #666; background: #f8f9fa; border-radius: 4px; font-family: monospace;">
+                    <strong>Output:</strong> ${folderPath || '—'}<br>
+                    <strong>Run log:</strong> ${runLogPath || '—'} (CMD, ELAPSED, SAVED)
+                </div>`
+                : '';
             const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; align-items: center;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
-            </div>`;
+            </div>${runLogRow}`;
             
             // Helper function to format model display (handle both string and object formats)
             function formatModel(model) {

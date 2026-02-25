@@ -50,6 +50,9 @@ DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedu
 # All job outputs (search results, integration, evaluation, QA) live under data/jobs/<job_id>
 JOBS_DIR = os.path.join(REPO_ROOT, "data", "jobs")
 
+# Card2Tab2Card table search can be slow (Blend keyword/single_column over modellake.db; per-table search)
+CARD2TAB2CARD_TIMEOUT = int(os.environ.get("CARD2TAB2CARD_TIMEOUT", "600"))  # 10 min default
+
 # Table type classification (by_type): set via --use-by-type or env USE_BY_TYPE=1
 USE_BY_TYPE = False
 CLASSIFICATION_JSON = os.path.join(REPO_ROOT, "data", "table_classifications.json")
@@ -100,29 +103,52 @@ jobs: Dict[str, "JobLogger"] = {}
 
 
 class JobLogger:
-    """Thread-safe logger for job progress"""
+    """Thread-safe logger for job progress. When log_file is set, also writes to file."""
     def __init__(self, job_id: str):
         self.job_id = job_id
         self.logs: List[Dict] = []
         self.lock = threading.Lock()
         self.status = "pending"
         self.results: Optional[Dict] = None
-    
+        self._log_file_path: Optional[str] = None
+
+    def set_log_file(self, path: str):
+        """Enable writing logs to file (e.g. job_dir/pipeline_run.log)."""
+        with self.lock:
+            self._log_file_path = path
+
     def log(self, message: str):
         with self.lock:
             now = datetime.now()
             ts = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             self.logs.append({"timestamp": now.isoformat(), "message": message})
-            print(f"[{ts}] [{self.job_id}] {message}", flush=True)
-    
+            line = f"[{ts}] [{self.job_id}] {message}"
+            print(line, flush=True)
+            if self._log_file_path:
+                try:
+                    with open(self._log_file_path, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                except Exception:
+                    pass
+
+    def log_cmd(self, step: str, cmd: List[str], out_path: Optional[str] = None, elapsed: Optional[float] = None, rc: Optional[int] = None):
+        """Log command execution details (CMD, OUT, ELAPSED) for pipeline run log."""
+        self.log(f"[{step}] CMD: {' '.join(str(x) for x in cmd)}")
+        if out_path:
+            self.log(f"[{step}] SAVED: {out_path}")
+        if elapsed is not None:
+            self.log(f"[{step}] ELAPSED: {elapsed:.2f}s")
+        if rc is not None:
+            self.log(f"[{step}] EXIT: {rc}")
+
     def get_logs(self) -> List[Dict]:
         with self.lock:
             return self.logs.copy()
-    
+
     def set_status(self, status: str):
         with self.lock:
             self.status = status
-    
+
     def set_results(self, results: Dict):
         with self.lock:
             self.results = results
@@ -197,12 +223,10 @@ def run_search_pipeline(
 
     def _set_pipeline_error(msg: str, mid=None):
         logger.set_status("error")
-        logger.set_results({
-            "error": msg,
-            "model_id": mid,
-            "card2card_results": [],
-            "card2tab2card_results": {},
-        })
+        d = {"error": msg, "model_id": mid, "card2card_results": [], "card2tab2card_results": {}}
+        d["folder_path"] = job_dir
+        d["run_log_path"] = os.path.join(job_dir, "pipeline_run.log")
+        logger.set_results(d)
 
     try:
         _run_pipeline_body(
@@ -232,6 +256,13 @@ def _run_pipeline_body(
     require_seed_has_tables: bool = False,
     use_by_type: bool = False,
 ):
+    # Write all logs to job_dir/pipeline_run.log for debugging
+    run_log_path = os.path.join(job_dir, "pipeline_run.log")
+    logger.set_log_file(run_log_path)
+    logger.log("=" * 60)
+    logger.log(f"Job directory (all outputs saved here): {os.path.abspath(job_dir)}")
+    logger.log(f"Run log file: {os.path.abspath(run_log_path)}")
+    logger.log("=" * 60)
     logger.log("Starting search pipeline (CLI)...")
     logger.log("Mode: Query → ModelCard → Search" if query else "Mode: Model ID → Search")
     if query:
@@ -272,17 +303,20 @@ def _run_pipeline_body(
                     "--faiss_index", DEFAULT_FAISS_INDEX,
                     "--output_json", q2m_out,
                 ]
+                t0 = time.time()
                 rc, out, err = _run_cmd(cmd, REPO_ROOT)
+                elapsed = time.time() - t0
+                logger.log_cmd("query2modelcard", cmd, q2m_out, elapsed, rc)
                 if rc != 0:
                     logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
                     logger.set_status("error")
-                    logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                    logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
                     return
                 data = _read_json(q2m_out)
                 if not data or "results" not in data or not data["results"]:
                     logger.log("query2modelcard returned no results")
                     logger.set_status("error")
-                    logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                    logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
                     return
                 results_list = data["results"]
                 chosen = None
@@ -314,11 +348,14 @@ def _run_pipeline_body(
                 "--faiss_index", DEFAULT_FAISS_INDEX,
                 "--output_json", q2m_out,
             ]
+            t0 = time.time()
             rc, out, err = _run_cmd(cmd, REPO_ROOT)
+            elapsed = time.time() - t0
+            logger.log_cmd("query2modelcard", cmd, q2m_out, elapsed, rc)
             if rc != 0:
                 logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
                 logger.set_status("error")
-                logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
                 return
             data = _read_json(q2m_out)
             if not data or "results" not in data or not data["results"]:
@@ -335,13 +372,13 @@ def _run_pipeline_body(
             if not model_id:
                 logger.log("query2modelcard returned empty model_id")
                 logger.set_status("error")
-                logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+                logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
                 return
             logger.log(f"Extracted model: {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
         if not model_id:
             logger.log("model_id is required in modelid mode")
             logger.set_status("error")
-            logger.set_results({"error": "Model ID is required (empty input)", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
+            logger.set_results({"error": "Model ID is required (empty input)", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
             return
         logger.log(f"Using model_id: {model_id}")
         # User-provided ID must exist in our dataset; otherwise fail before any downstream
@@ -350,14 +387,17 @@ def _run_pipeline_body(
             "--model_id", model_id,
             "--emb_npz", DEFAULT_EMB_NPZ,
         ]
+        t0 = time.time()
         rc, out, err = _run_cmd(check_cmd, REPO_ROOT, timeout=60)
+        elapsed = time.time() - t0
+        logger.log_cmd("check_model_in_index", check_cmd, None, elapsed, rc)
         if rc != 0:
             msg = (err or out or "Model ID not in dataset").strip()
             if "not in dataset" not in msg and "not in " not in msg:
                 msg = f"Model ID '{model_id}' not found in dataset (not in card2card index). Cannot run downstream."
             logger.log(msg)
             logger.set_status("error")
-            logger.set_results({"error": msg, "model_id": model_id, "card2card_results": [], "card2tab2card_results": {}})
+            logger.set_results({"error": msg, "model_id": model_id, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
             return
         logger.log("Model ID found in dataset, proceeding.")
 
@@ -372,6 +412,8 @@ def _run_pipeline_body(
             "model_id": model_id,
             "card2card_results": [],
             "card2tab2card_results": {},
+            "folder_path": job_dir,
+            "run_log_path": run_log_path,
         })
         return
     if not os.path.isfile(db_path_abs):
@@ -382,6 +424,8 @@ def _run_pipeline_body(
             "model_id": model_id,
             "card2card_results": [],
             "card2tab2card_results": {},
+            "folder_path": job_dir,
+            "run_log_path": run_log_path,
         })
         return
 
@@ -410,6 +454,7 @@ def _run_pipeline_body(
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT)
         elapsed = time.time() - t0
+        logger.log_cmd(f"Card2Card-{mode.upper()}", cmd, out_path, elapsed, rc)
         return (mode, rc, out_path, out, err, elapsed)
 
     def run_card2tab2card(st: str) -> tuple:
@@ -428,8 +473,9 @@ def _run_pipeline_body(
             "--output_json", out_path,
         ]
         t0 = time.time()
-        rc, out, err = _run_cmd(cmd, REPO_ROOT)
+        rc, out, err = _run_cmd(cmd, REPO_ROOT, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
+        logger.log_cmd(f"Card2Tab2Card-{st}", cmd, out_path, elapsed, rc)
         return (st, rc, out_path, out, err, elapsed)
 
     def run_card2tab2card_by_type() -> tuple:
@@ -452,8 +498,9 @@ def _run_pipeline_body(
             "--output_json", out_path,
         ]
         t0 = time.time()
-        rc, out, err = _run_cmd(cmd, REPO_ROOT)
+        rc, out, err = _run_cmd(cmd, REPO_ROOT, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
+        logger.log_cmd("Card2Tab2Card-by_type", cmd, out_path, elapsed, rc)
         return (st, rc, out_path, out, err, elapsed)
 
     card2card_modes = ["dense", "sparse", "hybrid"]
@@ -589,6 +636,7 @@ def _run_pipeline_body(
         "card2tab2card_results": card2tab2card_all,
         "timestamp": datetime.fromtimestamp(start_time).isoformat(),
         "folder_path": job_dir,
+        "run_log_path": run_log_path,
         "running_time_seconds": round(elapsed_total, 3),
     }
     if table_search_empty_reason:
@@ -598,6 +646,7 @@ def _run_pipeline_body(
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(results_data, f, ensure_ascii=False, indent=2)
     logger.log(f"Results saved to {out_file}")
+    logger.log(f"[FINAL] Job directory: {os.path.abspath(job_dir)} | Run log: {os.path.abspath(run_log_path)} | Total: {elapsed_total:.2f}s")
     logger.set_results(results_data)
     logger.set_status("completed")
     logger.log("Pipeline completed.")
