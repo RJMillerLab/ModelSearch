@@ -582,11 +582,15 @@
                 : `<span style="font-size: 12px; color: #856404;">⚠️ Model ID missing</span>`);
             // Query table path(s) from seed model card — used to run table search; result items below are model cards hit by that search
             let queryTables = [];
+            let searchedTables = [];
             const c2t2c = results.card2tab2card_results || {};
             Object.keys(c2t2c).forEach(type => {
                 const data = c2t2c[type];
                 if (data && Array.isArray(data.query_tables) && data.query_tables.length > 0) {
                     data.query_tables.forEach(p => { if (p && !queryTables.includes(p)) queryTables.push(p); });
+                }
+                if (data && Array.isArray(data.searched_tables) && data.searched_tables.length > 0) {
+                    data.searched_tables.forEach(p => { if (p && !searchedTables.includes(p)) searchedTables.push(p); });
                 }
             });
             // Filter by source: exclude s2orc/llm by ModelTables naming rules (e.g. 215768677_table2.csv)
@@ -599,9 +603,10 @@
                 return 'unknown';
             };
             queryTables = queryTables.filter(p => classifyTableSource(p) !== 'llm');
-            const tablesNoteCell = results.error ? '<span style="' + headerStyle + '">—</span>' : (queryTables.length > 0
-                ? `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.map(p => String(p).split('/').pop()).join(' ')}</span></span>`
-                : `<span style="${headerStyle}"><strong>Query table(s) (from seed model card):</strong> —</span>`);
+            const basename = (p) => String(p).split('/').pop();
+            const tablesNoteCell = results.error ? '<span style="' + headerStyle + '">—</span>' : (queryTables.length > 0 || searchedTables.length > 0
+                ? `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.length ? queryTables.map(basename).join(' ') : '—'}</span><br><strong>Searched table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${searchedTables.length ? searchedTables.map(basename).join(' ') : '—'}</span></span>`
+                : `<span style="${headerStyle}"><strong>Query table(s):</strong> —<br><strong>Searched table(s):</strong> —</span>`);
             const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; align-items: center;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>

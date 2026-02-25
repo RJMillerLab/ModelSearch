@@ -716,7 +716,23 @@ def search_card2tab2card(
         """
         filename_results = con.execute(filename_query).fetchall()
         tableid_to_filename = {tid: filename for tid, filename in filename_results}
-        # Preserve Tab2Tab relevance order: iterate by similar_table_ids, dedupe by filename
+        # Filter out seed tables (self-matches): when we search with table1, don't include table1 in results
+        seed_basenames = {os.path.basename(str(t)) for t in query_tables}
+        n_before = len(similar_table_ids)
+        filtered_similar_table_ids = []
+        for tid in similar_table_ids:
+            if tid not in tableid_to_filename:
+                continue
+            fname = tableid_to_filename[tid]
+            fbase = os.path.basename(str(fname))
+            if fbase in seed_basenames:
+                continue  # skip seed table (self-match)
+            filtered_similar_table_ids.append(tid)
+        similar_table_ids = filtered_similar_table_ids
+        n_filtered = n_before - len(similar_table_ids)
+        if n_filtered > 0:
+            print(f"ℹ️  Filtered out {n_filtered} seed table(s) (self-match)")
+        # Preserve Tab2Tab relevance order: iterate, dedupe by filename
         seen_filenames = set()
         retrieved_filenames = []
         for tid in similar_table_ids:
@@ -726,6 +742,9 @@ def search_card2tab2card(
                     seen_filenames.add(fname)
                     retrieved_filenames.append(fname)
         print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
+        # Debug: print query_tables and searched_tables (retrieved filenames used for model mapping)
+        print(f"📋 query_tables ({len(query_tables)}): {[os.path.basename(str(t)) for t in query_tables[:5]]}{'...' if len(query_tables) > 5 else ''}")
+        print(f"📋 searched_tables ({len(retrieved_filenames)}): {[os.path.basename(str(f)) for f in retrieved_filenames[:5]]}{'...' if len(retrieved_filenames) > 5 else ''}")
         
         if not retrieved_filenames:
             print(f"⚠️  No filenames found for retrieved table IDs")
@@ -865,6 +884,7 @@ def search_card2tab2card(
         result = {
             "query_model": model_id,
             "query_tables": query_tables,
+            "searched_tables": retrieved_filenames,  # tables used for model mapping (after self-filter)
             "model_ids": final_results,
             "intermediate": {
                 "retrieved_table_ids": similar_table_ids,
@@ -1339,7 +1359,23 @@ def search_card2tab2card_by_type(
             """
             filename_results = con.execute(filename_query).fetchall()
             tableid_to_filename = {tid: filename for tid, filename in filename_results}
-            # Preserve Tab2Tab relevance order: iterate by similar_table_ids, dedupe by filename
+            # Filter out seed tables (self-matches): when we search with table1, don't include table1 in results
+            seed_basenames = {os.path.basename(str(t)) for t in query_tables}
+            n_before = len(similar_table_ids)
+            filtered_similar_table_ids = []
+            for tid in similar_table_ids:
+                if tid not in tableid_to_filename:
+                    continue
+                fname = tableid_to_filename[tid]
+                fbase = os.path.basename(str(fname))
+                if fbase in seed_basenames:
+                    continue  # skip seed table (self-match)
+                filtered_similar_table_ids.append(tid)
+            similar_table_ids = filtered_similar_table_ids
+            n_filtered = n_before - len(similar_table_ids)
+            if n_filtered > 0:
+                print(f"ℹ️  Filtered out {n_filtered} seed table(s) (self-match)")
+            # Preserve Tab2Tab relevance order: iterate, dedupe by filename
             seen_filenames = set()
             retrieved_filenames = []
             for tid in similar_table_ids:
@@ -1349,6 +1385,9 @@ def search_card2tab2card_by_type(
                         seen_filenames.add(fname)
                         retrieved_filenames.append(fname)
             print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
+            # Debug: print query_tables and searched_tables
+            print(f"📋 query_tables ({len(query_tables)}): {[os.path.basename(str(t)) for t in query_tables[:5]]}{'...' if len(query_tables) > 5 else ''}")
+            print(f"📋 searched_tables ({len(retrieved_filenames)}): {[os.path.basename(str(f)) for f in retrieved_filenames[:5]]}{'...' if len(retrieved_filenames) > 5 else ''}")
         finally:
             con.close()
             
@@ -1466,6 +1505,7 @@ def search_card2tab2card_by_type(
         result = {
             "query_model": model_id,
             "query_tables": query_tables,
+            "searched_tables": retrieved_filenames,  # tables used for model mapping (after self-filter)
             "model_ids": final_results,
             "intermediate": {
                 "retrieved_table_ids": similar_table_ids,
