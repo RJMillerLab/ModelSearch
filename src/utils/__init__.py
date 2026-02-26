@@ -4,6 +4,10 @@ Utility functions for modelsearch
 import pandas as pd
 import os
 
+from .table_loader import load_table, resolve_table_path, load_table_from_db, TABLE_BASE_DIRS
+
+__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "load_table_from_db", "TABLE_BASE_DIRS"]
+
 
 def get_device() -> str:
     """Auto-detect device: cuda if available, else cpu."""

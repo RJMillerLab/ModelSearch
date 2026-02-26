@@ -18,49 +18,7 @@ import json
 from typing import List, Dict, Optional, Any, Set, Tuple
 from collections import Counter
 
-# Base dirs for table lookup (in order of priority)
-TABLE_BASE_DIRS = [
-    "data_citationlake/processed/deduped_hugging_csvs",
-    "data_citationlake/processed/deduped_github_csvs",
-    "data_citationlake/processed/tables_output",
-]
-
-_CACHED_BASENAME_TO_PATH: Optional[Dict[str, str]] = None
-
-
-def _build_basename_index() -> Dict[str, str]:
-    """Build basename->fullpath index for fast table lookup. Uses DuckDB/SQL for speed."""
-    global _CACHED_BASENAME_TO_PATH
-    if _CACHED_BASENAME_TO_PATH is not None:
-        return _CACHED_BASENAME_TO_PATH
-    index: Dict[str, str] = {}
-    cwd = os.getcwd()
-    for base in TABLE_BASE_DIRS:
-        abs_base = os.path.abspath(base)
-        if not os.path.isdir(abs_base):
-            continue
-        try:
-            for f in os.listdir(abs_base):
-                if f.lower().endswith(".csv"):
-                    if f not in index:
-                        index[f] = os.path.join(abs_base, f)
-        except OSError:
-            continue
-    _CACHED_BASENAME_TO_PATH = index
-    return index
-
-
-def _resolve_table_path(basename: str) -> Optional[str]:
-    """Resolve CSV basename to full path using cached index or fallback search."""
-    base = os.path.basename(basename)
-    idx = _build_basename_index()
-    if base in idx:
-        return idx[base]
-    for base_dir in TABLE_BASE_DIRS:
-        p = os.path.join(base_dir, base)
-        if os.path.exists(p):
-            return os.path.abspath(p)
-    return None
+from utils.table_loader import load_table, resolve_table_path
 
 
 def _normalize_val_to_items(val: Any) -> List[Any]:
@@ -160,98 +118,6 @@ try:
         BLEND_AVAILABLE = True
 except:
     pass
-
-
-def load_table_from_file(table_path: str, use_index: bool = True) -> Optional[pd.DataFrame]:
-    """
-    Load a table from CSV file.
-    
-    Supports multiple path locations including data_citationlake and CitationLake paths.
-    When use_index=True, uses cached basename->path index for fast lookup.
-    
-    Args:
-        table_path: Path to CSV file (can be basename or full path)
-        use_index: If True, use pre-built index for faster resolution (default True)
-        
-    Returns:
-        DataFrame or None if file not found
-    """
-    basename = os.path.basename(table_path)
-    
-    # Build comprehensive list of possible base directories
-    possible_base_dirs = [
-        # data_citationlake paths (current structure)
-        "data_citationlake/processed/deduped_hugging_csvs",
-        "data_citationlake/processed/deduped_github_csvs",
-        "data_citationlake/processed/tables_output",
-        # CitationLake paths (if CitationLake is in parent directory)
-        "../CitationLake/data/processed/deduped_hugging_csvs",
-        "../CitationLake/data/processed/deduped_github_csvs",
-        "../CitationLake/data/processed/tables_output",
-        # Alternative CitationLake paths
-        "../../CitationLake/data/processed/deduped_hugging_csvs",
-        "../../CitationLake/data/processed/deduped_github_csvs",
-        "../../CitationLake/data/processed/tables_output",
-    ]
-    
-    # Strategy 1: Try the provided path first (if it's already a full path)
-    possible_paths = [table_path]
-    
-    # Strategy 2: Try to infer directory from table_path if it contains path hints
-    path_lower = table_path.lower()
-    if "hugging" in path_lower:
-        for base_dir in [d for d in possible_base_dirs if "hugging" in d.lower()]:
-            if base_dir.startswith('../'):
-                abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
-            else:
-                abs_base_dir = os.path.abspath(base_dir)
-            possible_paths.append(os.path.join(abs_base_dir, basename))
-    elif "github" in path_lower:
-        for base_dir in [d for d in possible_base_dirs if "github" in d.lower()]:
-            if base_dir.startswith('../'):
-                abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
-            else:
-                abs_base_dir = os.path.abspath(base_dir)
-            possible_paths.append(os.path.join(abs_base_dir, basename))
-    
-    # Strategy 3: Add all possible base directories
-    for base_dir in possible_base_dirs:
-        if base_dir.startswith('../'):
-            abs_base_dir = os.path.abspath(os.path.join(os.getcwd(), base_dir))
-        else:
-            abs_base_dir = os.path.abspath(base_dir)
-        possible_paths.append(os.path.join(abs_base_dir, basename))
-    
-    # Fast path: use cached index if available
-    if use_index:
-        resolved = _resolve_table_path(table_path)
-        if resolved and os.path.exists(resolved):
-            try:
-                return pd.read_csv(resolved)
-            except Exception as e:
-                print(f"⚠️  Error loading {resolved}: {e}")
-    
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_paths = []
-    for path in possible_paths:
-        if path not in seen:
-            seen.add(path)
-            unique_paths.append(path)
-    
-    # Try each path
-    for path in unique_paths:
-        if os.path.exists(path):
-            try:
-                df = pd.read_csv(path)
-                return df
-            except Exception as e:
-                print(f"⚠️  Error loading {path}: {e}")
-                continue
-    
-    print(f"⚠️  Table not found: {table_path} (basename: {basename})")
-    print(f"   Searched in {len(unique_paths)} possible locations")
-    return None
 
 
 def integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -476,16 +342,18 @@ def integrate_tables(
     table_paths: List[str],
     integration_type: str = "union",
     k: int = 10,
-    db_path: Optional[str] = None
+    db_path: Optional[str] = None,
+    filename_to_tableid: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """
-    Integrate multiple tables from file paths.
+    Integrate multiple tables from modellake.db (by tableid) or from CSV paths.
     
     Args:
-        table_paths: List of paths to CSV files (caller typically passes top-k tables)
+        table_paths: List of paths or filenames (basename) to tables
         integration_type: "union", "intersection", "alite", or "outer_join"
         k: Number of tables to integrate (top k); the integrated result is not truncated by row count
-        db_path: Optional path to modellake.db (for Blend_internal integration)
+        db_path: Optional path to modellake.db; when set with filename_to_tableid, load from DB first (no CSV)
+        filename_to_tableid: Optional map basename -> tableid for loading from modellake_index
         
     Returns:
         Dictionary with integration results
@@ -497,12 +365,14 @@ def integrate_tables(
     print(f"Number of tables: {len(table_paths)}")
     print(f"Top K: {k}")
     
-    # Load all tables
     tables = []
     loaded_paths = []
+    use_db = bool(db_path and filename_to_tableid)
     
     for table_path in table_paths:
-        df = load_table_from_file(table_path)
+        basename = os.path.basename(table_path)
+        tid = filename_to_tableid.get(basename) if filename_to_tableid else None
+        df = load_table(table_path, db_path=db_path, tableid=tid)
         if df is not None:
             tables.append(df)
             loaded_paths.append(table_path)
@@ -775,7 +645,7 @@ def integrate_tables_from_search_results(
                 if bn in seen:
                     continue
                 seen.add(bn)
-                p = _resolve_table_path(bn)
+                p = resolve_table_path(bn)
                 if p:
                     table_paths.append(p)
                     model_to_table_paths_ts[mid].append(p)
@@ -824,8 +694,15 @@ def integrate_tables_from_search_results(
                     model_to_table_paths_ts.setdefault(mid, []).append(tp)
     # all_from_modelcards: model_to_table_paths_ts already built above
     
+    # Build filename -> tableid so we can try loading from modellake.db first (no CSV dirs needed)
+    filename_to_tableid: Dict[str, int] = {}
+    if table_id_to_filename:
+        for tid, fname in table_id_to_filename.items():
+            bn = os.path.basename(str(fname))
+            if bn:
+                filename_to_tableid[bn] = int(tid) if isinstance(tid, (int, float)) else tid
     print(f"📊 Integration (Table Search): #tables={len(table_paths)}, #models={len(models_with_tables_list)}")
-    result = integrate_tables(table_paths, integration_type, k, db_path)
+    result = integrate_tables(table_paths, integration_type, k, db_path=db_path, filename_to_tableid=filename_to_tableid or None)
     result["models_with_tables"] = models_with_tables_list
     result["model_to_table_paths"] = model_to_table_paths_ts
     elapsed = time.time() - t0
@@ -1099,7 +976,7 @@ def integrate_tables_from_model_search_results(
             if basenames:
                 # No per-model table cap: use ALL tables from each model
                 for bn in basenames:
-                    path = _resolve_table_path(bn)
+                    path = resolve_table_path(bn)
                     if path and path not in all_table_paths:
                         all_table_paths.append(path)
                     if path:
@@ -1150,9 +1027,9 @@ def integrate_tables_from_model_search_results(
                                 table_path = full_path
                                 break
                         
-                        # If not found, try using load_table_from_file to find it
+                        # If not found, try using load_table to find it
                         if not table_path:
-                            test_df = load_table_from_file(table_basename)
+                            test_df = load_table(table_basename)
                             if test_df is not None:
                                 # Find which path worked
                                 for base_dir in possible_base_dirs:
