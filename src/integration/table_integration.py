@@ -767,26 +767,26 @@ def integrate_tables_from_search_results(
             return {"success": False, "error": "No model IDs in intermediate for all_from_modelcards", "integrated_table": None}
         print(f"✅ tables_source=all_from_modelcards: DuckDB batch query for {len(model_ids)} models")
         model_to_tables = _get_tables_for_models_duckdb(relationship_parquet, model_ids)
-        all_basenames = []
-        for mid in model_ids:
-            all_basenames.extend(model_to_tables.get(mid, [])[:20])
         seen = set()
         table_paths = []
-        for bn in all_basenames:
-            if bn in seen:
-                continue
-            seen.add(bn)
-            p = _resolve_table_path(bn)
-            if p:
-                table_paths.append(p)
-            if len(table_paths) >= k:
-                break
-        print(f"   Resolved {len(table_paths)} tables for integration")
+        model_to_table_paths_ts = {mid: [] for mid in model_ids}
+        for mid in model_ids:
+            for bn in model_to_tables.get(mid, []):
+                if bn in seen:
+                    continue
+                seen.add(bn)
+                p = _resolve_table_path(bn)
+                if p:
+                    table_paths.append(p)
+                    model_to_table_paths_ts[mid].append(p)
+        # No table top-k cap: use ALL tables
+        print(f"   Resolved {len(table_paths)} tables for integration (no table top-k cap)")
         models_with_tables_list = model_ids
     else:
         # intermediate: use retrieved tables (current behavior)
-        print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} tables from search")
-        table_paths = retrieved_filenames[:k]
+        # No table top-k cap: use ALL retrieved tables (per-table k already applied in card2tab2card)
+        print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} tables from search (no table top-k cap)")
+        table_paths = retrieved_filenames
         table_to_models = intermediate.get("table_to_models", {})
         # Build basename->key index for robust lookup (handles path format mismatch)
         basename_to_key = {os.path.basename(key): key for key in table_to_models}
@@ -802,9 +802,23 @@ def integrate_tables_from_search_results(
     if not table_paths:
         return {"success": False, "error": "No tables to integrate", "integrated_table": None}
     
+    # Build model_id -> table_paths for UI debug (intermediate path: reverse of table_to_models)
+    if tables_source != "all_from_modelcards":
+        model_to_table_paths_ts = {}
+        basename_to_key = {os.path.basename(key): key for key in table_to_models}
+        for tp in table_paths:
+            key = tp if tp in table_to_models else basename_to_key.get(os.path.basename(tp))
+            model_list = table_to_models.get(key, []) if key else []
+            for m in (model_list or []):
+                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
+                if mid:
+                    model_to_table_paths_ts.setdefault(mid, []).append(tp)
+    # all_from_modelcards: model_to_table_paths_ts already built above
+    
     print(f"📊 Integration (Table Search): #tables={len(table_paths)}, #models={len(models_with_tables_list)}")
     result = integrate_tables(table_paths, integration_type, k, db_path)
     result["models_with_tables"] = models_with_tables_list
+    result["model_to_table_paths"] = model_to_table_paths_ts
     return result
 
 
@@ -886,10 +900,10 @@ def integrate_tables_from_model_search_results(
         }
     
     print(f"✅ Found {len(model_ids)} models in Card2Card results")
-    print(f"   Processing first {min(max_models, len(model_ids))} models")
-    
-    # Limit to max_models
-    model_ids = model_ids[:max_models]
+    print(f"   Processing first {min(max_models, len(model_ids))} models (max_models cap COMMENTED OUT - using all models)")
+
+    # Limit to max_models -- COMMENTED OUT: use all models for now (user request)
+    # model_ids = model_ids[:max_models]
     
     # Import get_tables_for_model and load_relationship_parquet
     # Import directly from card2tab2card to avoid triggering card2card imports that require torch
@@ -1045,28 +1059,35 @@ def integrate_tables_from_model_search_results(
             else:
                 use_citationlake = False
     
-    # Collect all table paths from all models
+    # Collect all table paths from all models; also build model_id -> table_paths for UI debug
     all_table_paths = []
     models_with_tables = []
     models_without_tables = []
+    model_to_table_paths: Dict[str, List[str]] = {}
     
     # Use fallback only when parquet/CitationLake unavailable (e.g. from card2tab2card_results)
     if use_fallback:
         print(f"⚠️  Using {len(fallback_table_paths)} fallback tables from search results JSON (parquet unavailable)")
-        all_table_paths = fallback_table_paths[:k]
+        all_table_paths = fallback_table_paths  # No table top-k cap
         models_with_tables = list(fallback_models_with_tables.keys())
         models_without_tables = [m for m in model_ids if m not in models_with_tables]
+        for mid in models_with_tables:
+            model_to_table_paths[mid] = fallback_models_with_tables.get(mid, [])
     elif relationship_parquet and os.path.exists(relationship_parquet):
         # Fast path: DuckDB batch query (single SQL scan)
         print(f"✅ DuckDB batch query on parquet (fast)")
         model_to_tables = _get_tables_for_models_duckdb(relationship_parquet, model_ids)
         for model_id in model_ids:
             basenames = model_to_tables.get(model_id, [])
+            model_to_table_paths[model_id] = []
             if basenames:
-                for bn in basenames[:50]:
+                # No per-model table cap: use ALL tables from each model
+                for bn in basenames:
                     path = _resolve_table_path(bn)
                     if path and path not in all_table_paths:
                         all_table_paths.append(path)
+                    if path:
+                        model_to_table_paths[model_id].append(path)
                 models_with_tables.append(model_id)
                 print(f"  ✅ Model {model_id}: {len(basenames)} tables")
             else:
@@ -1075,6 +1096,7 @@ def integrate_tables_from_model_search_results(
     else:
         # Fallback: per-model get_tables_for_model (slower)
         for model_id in model_ids:
+            model_to_table_paths[model_id] = []
             try:
                 # Get tables for this model
                 if use_citationlake and citationlake_available:
@@ -1124,6 +1146,8 @@ def integrate_tables_from_model_search_results(
                         
                         if table_path and table_path not in all_table_paths:
                             all_table_paths.append(table_path)
+                        if table_path:
+                            model_to_table_paths[model_id].append(table_path)
                     
                     models_with_tables.append(model_id)
                     print(f"  ✅ Model {model_id}: {len(model_tables)} tables")
@@ -1147,8 +1171,9 @@ def integrate_tables_from_model_search_results(
         }
     
     print(f"\n✅ Collected {len(all_table_paths)} unique tables from {len(models_with_tables)} models")
-    table_paths = all_table_paths[:k]
-    print(f"📊 Integration (Model Search): #tables={len(table_paths)}, #models={len(models_with_tables)}")
+    # No table top-k cap: use ALL tables
+    table_paths = all_table_paths
+    print(f"📊 Integration (Model Search): #tables={len(table_paths)}, #models={len(models_with_tables)} (no table top-k cap)")
     # Integrate tables
     result = integrate_tables(table_paths, integration_type, k, db_path)
     
@@ -1161,6 +1186,8 @@ def integrate_tables_from_model_search_results(
         result["model_ids"] = model_ids
         result["models_with_tables"] = models_with_tables
         result["models_without_tables"] = models_without_tables
+        # model_id -> list of table paths for UI debug display
+        result["model_to_table_paths"] = model_to_table_paths
     
     return result
 

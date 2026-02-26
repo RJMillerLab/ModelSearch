@@ -1015,9 +1015,25 @@
                 const stats = run.stats || {};
                 let extra = '';
                 const modelIds = run.models_with_tables || [];
+                const modelToTablePaths = run.model_to_table_paths || {};
                 if (modelIds.length > 0) {
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Model Search):</strong> ${links} <span style="color:#004085;">(${modelIds.length} models)</span></div>`;
+                    let tablePathsHtml = '';
+                    if (Object.keys(modelToTablePaths).length > 0) {
+                        const basename = (p) => String(p).split('/').pop();
+                        tablePathsHtml = modelIds.slice(0, 10).map(m => {
+                            const paths = modelToTablePaths[m] || [];
+                            const bn = paths.slice(0, 5).map(basename).join(', ');
+                            const more = paths.length > 5 ? ` … +${paths.length - 5} more` : '';
+                            return `<li style="margin: 4px 0;"><strong>${m}</strong>: ${bn || '—'}${more}</li>`;
+                        }).join('');
+                        if (modelIds.length > 10) tablePathsHtml += `<li style="color:#666;">… and ${modelIds.length - 10} more models</li>`;
+                        tablePathsHtml = `<ul style="margin: 6px 0 0 0; padding-left: 18px; font-size: 11px; max-height: 120px; overflow-y: auto;">${tablePathsHtml}</ul>`;
+                    }
+                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
+                        <strong>Model IDs (Model Search):</strong> ${links} <span style="color:#004085;">(${modelIds.length} models)</span>
+                        ${tablePathsHtml ? `<div style="margin-top: 6px;"><strong>Table paths (for debug):</strong>${tablePathsHtml}</div>` : ''}
+                    </div>`;
                 } else {
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
                 }
@@ -1132,9 +1148,25 @@
             if (run && run.status === 'success' && run.integrated_table) {
                 let extra = '';
                 const modelIds = run.models_with_tables || [];
+                const modelToTablePaths = run.model_to_table_paths || {};
                 if (modelIds.length > 0) {
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Table Search):</strong> ${links} <span style="color:#155724;">(${modelIds.length} models)</span></div>`;
+                    let tablePathsHtml = '';
+                    if (Object.keys(modelToTablePaths).length > 0) {
+                        const basename = (p) => String(p).split('/').pop();
+                        tablePathsHtml = modelIds.slice(0, 10).map(m => {
+                            const paths = modelToTablePaths[m] || [];
+                            const bn = paths.slice(0, 5).map(basename).join(', ');
+                            const more = paths.length > 5 ? ` … +${paths.length - 5} more` : '';
+                            return `<li style="margin: 4px 0;"><strong>${m}</strong>: ${bn || '—'}${more}</li>`;
+                        }).join('');
+                        if (modelIds.length > 10) tablePathsHtml += `<li style="color:#666;">… and ${modelIds.length - 10} more models</li>`;
+                        tablePathsHtml = `<ul style="margin: 6px 0 0 0; padding-left: 18px; font-size: 11px; max-height: 120px; overflow-y: auto;">${tablePathsHtml}</ul>`;
+                    }
+                    extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
+                        <strong>Model IDs (Table Search):</strong> ${links} <span style="color:#155724;">(${modelIds.length} models)</span>
+                        ${tablePathsHtml ? `<div style="margin-top: 6px;"><strong>Table paths (for debug):</strong>${tablePathsHtml}</div>` : ''}
+                    </div>`;
                 } else {
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';
                 }
