@@ -270,7 +270,7 @@ def _run_pipeline_body(
     else:
         logger.log(f"Model ID: {model_id}")
     logger.log(
-        f"Run settings: top_k={top_k}, table_search_k={table_search_k or 'auto'}, "
+        f"Run settings: top_k={top_k}, per_table_search_k={table_search_k or 1}, "
         f"card2card={card2card_retrieval_mode}, "
         f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}, "
         f"require_seed_has_tables={require_seed_has_tables}"
@@ -429,7 +429,7 @@ def _run_pipeline_body(
         })
         return
 
-    k_table = table_search_k if table_search_k is not None else min(max(int(top_k * 1.5), 20), 20)
+    k_table = table_search_k if table_search_k is not None else 1  # Per-table k: how many each table searches (default 1)
     # Card2Card top_k: use high default (100) so we have enough; will truncate to right's max for alignment
     card2card_top_k = 100
 
@@ -461,19 +461,21 @@ def _run_pipeline_body(
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         # Run as script to avoid RuntimeWarning (src.search pre-import) and unpredictable behaviour
         c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
         cmd = [
             sys.executable, c2t2c_script,
             "--model_id", model_id,
             "--search_type", st,
             "--k", str(k_table),
-            "--modelcard_k", "0",  # 0 = no limit: return all models that contain the retrieved tables
+            "--modelcard_k", "50",  # Default cap: return at most 50 models
             "--db_path", DEFAULT_DB_PATH,
             "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
             "--no_citationlake",
             "--output_json", out_path,
         ]
         t0 = time.time()
-        rc, out, err = _run_cmd(cmd, REPO_ROOT, timeout=CARD2TAB2CARD_TIMEOUT)
+        rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
         logger.log_cmd(f"Card2Tab2Card-{st}", cmd, out_path, elapsed, rc)
         return (st, rc, out_path, out, err, elapsed)
@@ -484,13 +486,15 @@ def _run_pipeline_body(
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
         classification_path = CLASSIFICATION_JSON if os.path.isabs(CLASSIFICATION_JSON) else os.path.join(REPO_ROOT, CLASSIFICATION_JSON)
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
         cmd = [
             sys.executable, c2t2c_script,
             "--model_id", model_id,
             "--mode", "by_type",
             "--search_type", "keyword",
             "--k", str(k_table),
-            "--modelcard_k", "0",
+            "--modelcard_k", "50",
             "--db_path", DEFAULT_DB_PATH,
             "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
             "--no_citationlake",
@@ -498,7 +502,7 @@ def _run_pipeline_body(
             "--output_json", out_path,
         ]
         t0 = time.time()
-        rc, out, err = _run_cmd(cmd, REPO_ROOT, timeout=CARD2TAB2CARD_TIMEOUT)
+        rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
         logger.log_cmd("Card2Tab2Card-by_type", cmd, out_path, elapsed, rc)
         return (st, rc, out_path, out, err, elapsed)
@@ -543,6 +547,12 @@ def _run_pipeline_body(
         else:
             st, rc, out_path, out, err, elapsed = res
             logger.log(f"[Card2Tab2Card-{st}] Done in {elapsed:.2f}s")
+            # Pipe subprocess stdout into pipeline log (card2tab2card prints go to stdout, not logger)
+            combined = (out or "") + (err or "")
+            if combined.strip():
+                for line in combined.strip().split("\n"):
+                    if line.strip():
+                        logger.log(f"  | {line.strip()}")
             if rc != 0:
                 logger.log(f"[Card2Tab2Card-{st}] Error (exit {rc}): {err or out}")
                 # Save as empty result (not error object) so frontend can handle it gracefully

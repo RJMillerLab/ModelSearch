@@ -187,6 +187,17 @@ def _classify_table_source_by_basename(basename: str) -> str:
     return "unknown"
 
 
+# Generic tables that appear in countless model cards - invalid for search (from ModelTables paper)
+# 1910.09700_table: Google Cloud carbon emission template (Lacoste et al.); 204823751_table: country code data
+GENERIC_TABLE_PATTERNS = ["1910.09700_table", "204823751_table"]
+
+
+def _is_generic_table(basename_or_path: str) -> bool:
+    """True if table is a known generic set (appears in countless model cards, invalid for search)."""
+    base = os.path.basename(str(basename_or_path))
+    return any(p in base for p in GENERIC_TABLE_PATTERNS)
+
+
 def _filter_s2orc_tables(tables: List[str]) -> List[str]:
     """Filter out s2orc/llm tables (unstable). Use ModelTables naming rules to infer source."""
     def is_s2orc_or_llm(p: str) -> bool:
@@ -530,12 +541,13 @@ def search_card2tab2card(
         print(f"✅ Got search_table2table function")
         sys.stdout.flush()
         if use_per_table_search:
-            # Over-fetch: request more than needed, then filter (self + s2orc), then return top table_search_k
+            # table_search_k = per-table k (directly: how many each table searches), no division
             num_seed_tables = len(query_tables[:20])
-            k_per_table = max(1, math.ceil(table_search_k / num_seed_tables))
+            k_per_table = max(1, table_search_k)  # Each table searches top k (1, 2, 3, ...)
             k_request = max(k_per_table * 2 + 2, k_per_table + 5)  # Over-fetch for self + s2orc filter
-            merge_target = table_search_k * 2  # Merge more, then filter, then take topk
-            print(f"📊 TopK: seed_tables={num_seed_tables} | table_topk={table_search_k} → per_table_k={k_per_table} | request={k_request} (over-fetch) | merge_target={merge_target}")
+            merge_target = k_per_table * num_seed_tables  # Merge then filter; cap tables to avoid model explosion
+            max_final_tables = min(20, merge_target)  # Cap tables used for model mapping
+            print(f"📊 Per-table k={k_per_table} (each of {num_seed_tables} tables searches top {k_per_table}) | request={k_request} (over-fetch) | max_final_tables={max_final_tables}")
             print(f"🔎 [STEP 2a] Parallel per-table search (each table independent read-only), then merge+filter+topk")
             sys.stdout.flush()
 
@@ -572,7 +584,8 @@ def search_card2tab2card(
                     ids = search_table2table(tquery, st, k_request, db_path=db)
                     elapsed = time.time() - t0
                     bn = os.path.basename(str(table_path))
-                    print(f"   [Table {ti+1}] INPUT={bn} | query_len={len(tquery)} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
+                    ts = time.strftime("%H:%M:%S")
+                    print(f"   [Table {ti+1}] @{ts} INPUT={bn} | query_len={len(tquery)} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
                     sys.stdout.flush()
                     return (ids, bn) if ids else None
                 except Exception as e:
@@ -607,7 +620,7 @@ def search_card2tab2card(
                     break
             print(f"   [STEP 2b] Merge: {len(similar_table_data)} (before filter)")
             similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables), will filter self+s2orc → top {table_search_k}")
+            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables), will filter self+s2orc → top {max_final_tables} (for model mapping)")
         else:
             k_overfetch = table_search_k * 2  # Over-fetch, then filter, then topk
             print(f"🔎 [STEP 2] Single-query search: INPUT=query | k_request={k_overfetch} | OUTPUT=merged")
@@ -744,7 +757,7 @@ def search_card2tab2card(
         # Filter: (1) per-table self, (2) s2orc/llm from retrieved; then take top table_search_k
         if use_per_table_search and per_table_results:
             similar_table_data_filtered = []
-            n_self, n_s2orc = 0, 0
+            n_self, n_s2orc, n_generic = 0, 0, 0
             for tid, src_basename in similar_table_data:
                 if tid not in tableid_to_filename:
                     continue
@@ -756,12 +769,15 @@ def search_card2tab2card(
                 if _classify_table_source_by_basename(fbase) == "llm":
                     n_s2orc += 1
                     continue  # skip s2orc/llm from retrieved
+                if _is_generic_table(fbase):
+                    n_generic += 1
+                    continue  # skip carbon/country code (countless model cards)
                 similar_table_data_filtered.append((tid, src_basename))
-            if n_self or n_s2orc:
-                print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc} | remain={len(similar_table_data_filtered)}")
-            similar_table_data = similar_table_data_filtered[:table_search_k]  # Take top k after filter
+            if n_self or n_s2orc or n_generic:
+                print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | remain={len(similar_table_data_filtered)}")
+            similar_table_data = similar_table_data_filtered[:max_final_tables]  # Take top max_final_tables after filter
             similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"   [STEP 2c] Final: {len(similar_table_ids)} tables (top {table_search_k})")
+            print(f"   [STEP 2c] Final: {len(similar_table_ids)} tables (for model mapping)")
         else:
             seed_basenames = {os.path.basename(str(t)) for t in query_tables}
             filtered = []
@@ -769,11 +785,12 @@ def search_card2tab2card(
                 if tid not in tableid_to_filename:
                     continue
                 fbase = os.path.basename(str(tableid_to_filename[tid]))
-                if fbase in seed_basenames or _classify_table_source_by_basename(fbase) == "llm":
+                if fbase in seed_basenames or _classify_table_source_by_basename(fbase) == "llm" or _is_generic_table(fbase):
                     continue
                 filtered.append(tid)
             similar_table_ids = filtered[:table_search_k]
         # Preserve Tab2Tab relevance order: iterate, dedupe by filename
+        tables_before_dedup = len(similar_table_ids)
         seen_filenames = set()
         retrieved_filenames = []
         for tid in similar_table_ids:
@@ -782,7 +799,14 @@ def search_card2tab2card(
                 if fname not in seen_filenames:
                     seen_filenames.add(fname)
                     retrieved_filenames.append(fname)
-        print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
+        tables_after_dedup = len(retrieved_filenames)
+        print(f"📊 Table set dedup: {tables_before_dedup} table_ids → {tables_after_dedup} unique filenames")
+        # Filter generic tables (carbon emission template, country code - appear in countless model cards)
+        retrieved_filenames = [f for f in retrieved_filenames if not _is_generic_table(f)]
+        n_generic = tables_after_dedup - len(retrieved_filenames)
+        if n_generic:
+            print(f"ℹ️  Filtered {n_generic} generic tables (1910.09700_table, 204823751_table) - invalid for search")
+        print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames (ordered by Tab2Tab relevance)")
         # Debug: print query_tables and searched_tables (retrieved filenames used for model mapping)
         print(f"📋 query_tables ({len(query_tables)}): {[os.path.basename(str(t)) for t in query_tables[:5]]}{'...' if len(query_tables) > 5 else ''}")
         print(f"📋 searched_tables ({len(retrieved_filenames)}): {[os.path.basename(str(f)) for f in retrieved_filenames[:5]]}{'...' if len(retrieved_filenames) > 5 else ''}")
@@ -819,7 +843,8 @@ def search_card2tab2card(
     # Map similar tables back to model cards
     similar_model_ids = set()
     table_to_models = {}  # Map table filename to list of model IDs
-    
+    models_raw_count = 0  # before dedup
+
     # If using CitationLake get_from, we can map table paths to model IDs
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
         print(f"📋 Using CitationLake get_from to map tables to model cards...")
@@ -829,6 +854,7 @@ def search_card2tab2card(
                 schema_log_path=schema_log_path,
                 debug=False
             )
+            models_raw_count += len(model_ids)
             similar_model_ids.update(model_ids)
             table_to_models[filename] = list(model_ids)
     else:
@@ -874,6 +900,7 @@ def search_card2tab2card(
                     "modelId"
                 ].dropna().unique().tolist()
                 if matched_models:
+                    models_raw_count += len(matched_models)
                     similar_model_ids.update(matched_models)
                     table_to_models[filename] = matched_models
                     print(f"   ✅ Matched {basename} -> {len(matched_models)} models")
@@ -882,7 +909,17 @@ def search_card2tab2card(
         
         print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
+    # Per-table model count (value_counts): which tables span how many models (user cares about "countless" tables)
+    if table_to_models:
+        sorted_tables = sorted(table_to_models.keys(), key=lambda x: len(table_to_models[x]), reverse=True)
+        print(f"📊 Per-table model counts (table -> #models, sorted desc):")
+        for fname in sorted_tables:
+            bn = os.path.basename(fname)
+            n = len(table_to_models[fname])
+            print(f"   {bn}: {n} models")
+    
     # Remove the query model itself
+    print(f"📊 Model set dedup: {models_raw_count} raw (sum over tables) → {len(similar_model_ids)} unique models (before excl. query)")
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
     
     # Also remove query model from table_to_models
@@ -1282,10 +1319,11 @@ def search_card2tab2card_by_type(
         sys.stdout.flush()
         if use_per_table_search:
             num_seed_tables = len(query_tables[:20])
-            k_per_table = max(1, math.ceil(table_search_k / num_seed_tables))
+            k_per_table = max(1, table_search_k)  # Each table searches top k (direct, no division)
             k_request = max(k_per_table * 2 + 2, k_per_table + 5)
-            merge_target = table_search_k * 2
-            print(f"📊 TopK: seed_tables={num_seed_tables} | request={k_request} (over-fetch) | merge_target={merge_target}")
+            merge_target = k_per_table * num_seed_tables
+            max_final_tables = min(20, merge_target)
+            print(f"📊 Per-table k={k_per_table} (each of {num_seed_tables} tables) | request={k_request} | max_final_tables={max_final_tables}")
             print(f"🔎 [STEP 2a] Parallel per-table search (by_type)...")
             sys.stdout.flush()
 
@@ -1322,7 +1360,8 @@ def search_card2tab2card_by_type(
                         classification_json=cj, classifications=cl)
                     elapsed = time.time() - t0
                     bn = os.path.basename(str(table_path))
-                    print(f"   [Table {ti+1}] INPUT={bn} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
+                    ts = time.strftime("%H:%M:%S")
+                    print(f"   [Table {ti+1}] @{ts} INPUT={bn} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
                     sys.stdout.flush()
                     return (ids, bn) if ids else None
                 except Exception as e:
@@ -1418,7 +1457,7 @@ def search_card2tab2card_by_type(
             # Filter: self + s2orc, then take topk
             if use_per_table_search and per_table_results:
                 similar_table_data_filtered = []
-                n_self, n_s2orc = 0, 0
+                n_self, n_s2orc, n_generic = 0, 0, 0
                 for tid, src_basename in similar_table_data:
                     if tid not in tableid_to_filename:
                         continue
@@ -1429,14 +1468,20 @@ def search_card2tab2card_by_type(
                     if _classify_table_source_by_basename(fbase) == "llm":
                         n_s2orc += 1
                         continue
+                    if _is_generic_table(fbase):
+                        n_generic += 1
+                        continue
                     similar_table_data_filtered.append((tid, src_basename))
-                if n_self or n_s2orc:
-                    print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc}")
-                similar_table_data_filtered = similar_table_data_filtered[:table_search_k]
+                if n_self or n_s2orc or n_generic:
+                    print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc}, generic={n_generic}")
+                similar_table_data_filtered = similar_table_data_filtered[:max_final_tables]
                 similar_table_ids = [tid for tid, _ in similar_table_data_filtered]
             else:
                 seed_basenames = {os.path.basename(str(t)) for t in query_tables}
-                filtered = [tid for tid in similar_table_ids if tid in tableid_to_filename and os.path.basename(str(tableid_to_filename[tid])) not in seed_basenames and _classify_table_source_by_basename(os.path.basename(str(tableid_to_filename[tid]))) != "llm"]
+                filtered = [tid for tid in similar_table_ids if tid in tableid_to_filename
+                    and os.path.basename(str(tableid_to_filename[tid])) not in seed_basenames
+                    and _classify_table_source_by_basename(os.path.basename(str(tableid_to_filename[tid]))) != "llm"
+                    and not _is_generic_table(tableid_to_filename[tid])]
                 similar_table_ids = filtered[:table_search_k]
             # Preserve Tab2Tab relevance order: iterate, dedupe by filename
             seen_filenames = set()
@@ -1447,6 +1492,11 @@ def search_card2tab2card_by_type(
                     if fname not in seen_filenames:
                         seen_filenames.add(fname)
                         retrieved_filenames.append(fname)
+            # Filter generic tables (carbon/country code - invalid for search)
+            n_before = len(retrieved_filenames)
+            retrieved_filenames = [f for f in retrieved_filenames if not _is_generic_table(f)]
+            if n_before > len(retrieved_filenames):
+                print(f"ℹ️  Filtered {n_before - len(retrieved_filenames)} generic tables (1910.09700_table, 204823751_table)")
             print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
             # Debug: print query_tables and searched_tables
             print(f"📋 query_tables ({len(query_tables)}): {[os.path.basename(str(t)) for t in query_tables[:5]]}{'...' if len(query_tables) > 5 else ''}")
@@ -1487,7 +1537,8 @@ def search_card2tab2card_by_type(
     # Map similar tables back to model cards
     similar_model_ids = set()
     table_to_models = {}
-    
+    models_raw_count = 0
+
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
         print(f"📋 Using CitationLake get_from to map tables to model cards...")
         for filename in retrieved_filenames:
@@ -1496,6 +1547,7 @@ def search_card2tab2card_by_type(
                 schema_log_path=schema_log_path,
                 debug=False
             )
+            models_raw_count += len(model_ids)
             similar_model_ids.update(model_ids)
             table_to_models[filename] = list(model_ids)
     else:
@@ -1523,12 +1575,23 @@ def search_card2tab2card_by_type(
                     "modelId"
                 ].dropna().unique().tolist()
                 if matched_models:
+                    models_raw_count += len(matched_models)
                     similar_model_ids.update(matched_models)
                     table_to_models[filename] = matched_models
         
         print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
+    # Per-table model count (value_counts): which tables span how many models
+    if table_to_models:
+        sorted_tables = sorted(table_to_models.keys(), key=lambda x: len(table_to_models[x]), reverse=True)
+        print(f"📊 Per-table model counts (table -> #models, sorted desc):")
+        for fname in sorted_tables:
+            bn = os.path.basename(fname)
+            n = len(table_to_models[fname])
+            print(f"   {bn}: {n} models")
+    
     # Remove the query model itself
+    print(f"📊 Model set dedup: {models_raw_count} raw (sum over tables) → {len(similar_model_ids)} unique models (before excl. query)")
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
     
     # Also remove query model from table_to_models

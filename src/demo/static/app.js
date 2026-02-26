@@ -82,15 +82,7 @@
             }
         }
         function updateTableSearchKDefault() {
-            const topK = parseInt(document.getElementById('top_k').value, 10) || 20;
-            const suggested = Math.min(Math.max(Math.round(topK * 1.5), 20), 20);
-            const current = parseInt(document.getElementById('table_search_k').value, 10) || 20;
-            const oldTopK = Math.floor(current / 1.5);
-            if (Math.abs(current - Math.round(oldTopK * 1.5)) <= 5) {
-                const newVal = Math.min(Math.max(suggested, 1), 20);
-                document.getElementById('table_search_k').value = newVal;
-                document.getElementById('table_search_k_slider').value = newVal;
-            }
+            // Per-table k is independent; no sync with top_k
         }
         function updateIntegrationKValue(value) {
             const num = document.getElementById('integration_k');
@@ -408,7 +400,7 @@
             const query = document.getElementById('query').value.trim();
             const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt((document.getElementById('top_k') || {}).value, 10) || 100;  // Left aligns to right; high default
-            const tableSearchK = parseInt(document.getElementById('table_search_k').value, 10) || 10;
+            const tableSearchK = parseInt(document.getElementById('table_search_k').value, 10) || 1;
             // Table retrieval: always run search (no load-from-JSON option)
             const tab2tabMode = 'search';
             // One-click: always run all; primary display uses dense

@@ -385,7 +385,7 @@ HTML_TEMPLATE = """
                     </summary>
                     <div style="padding: 10px 12px; font-size: 12px; color: #555; border-top: 1px solid #b8d4e8;">
                         <p style="margin: 0 0 6px 0;"><strong>One-click:</strong> Card2Card (Dense/Sparse/Hybrid), Card2Tab2Card (single_column, keyword, unionable, …). If “Use table type classification” is checked, by_type run is added and logged.</p>
-                        <p style="margin: 0 0 6px 0;"><strong>Log:</strong> Run settings (top_k, table_search_k, card2card mode, <strong>table type classification on/off</strong>, require_seed_has_tables) appear at start. Time ⏱️ per step.</p>
+                        <p style="margin: 0 0 6px 0;"><strong>Log:</strong> Run settings (top_k, per_table_search_k, card2card mode, <strong>table type classification on/off</strong>, require_seed_has_tables) appear at start. Time ⏱️ per step.</p>
                         <p style="margin: 0;">When loading saved results, the folder list shows <strong>by_type ✓/✗</strong> and K so you can compare same query with different settings.</p>
                     </div>
                 </details>
@@ -401,11 +401,12 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <div style="flex: 1; min-width: 200px;">
-                    <label for="table_search_k">Table Search Top K:</label>
+                    <label for="table_search_k">Per-table search k:</label>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="range" id="table_search_k_slider" min="1" max="20" value="10" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
-                        <input type="number" id="table_search_k" class="form-control" value="10" min="1" max="20" oninput="updateTableSearchKSlider(this.value)" style="width: 80px;">
+                        <input type="range" id="table_search_k_slider" min="1" max="5" value="1" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
+                        <input type="number" id="table_search_k" class="form-control" value="1" min="1" max="5" oninput="updateTableSearchKSlider(this.value)" style="width: 80px;">
                     </div>
+                    <span style="font-size: 11px; color: #666;">Top k for each individual table search (1–5). Results merged, filtered, capped at 20 tables; models capped at 50.</span>
                 </div>
                 <div>
                     <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>
