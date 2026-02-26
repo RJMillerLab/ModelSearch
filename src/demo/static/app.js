@@ -847,8 +847,8 @@
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
                         <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
-                        <button id="integrationRunAllTableBtn" onclick="runAllTableIntegrations('${results.job_id || currentJobId}', ${JSON.stringify(['single_column','keyword','by_type','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'])})" style="padding: 6px 10px; font-size: 12px; font-weight: 500; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;" title="Run table integrations for all search types in parallel and save them under this job.">
-                            Run all (Table Search)
+                        <button id="integrationRunAllTableBtn" onclick="runAllTableIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 10px; font-size: 12px; font-weight: 500; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;" title="Run all integration methods, model-search modes, and table-search types (tables_source fixed to Intermediate). Results are saved under this job; use the dropdowns to inspect.">
+                            Run all (Integration)
                         </button>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
@@ -871,11 +871,13 @@
                                     <option value="all_from_modelcards">All tables from Modelcards</option>
                                 </select></div>
                                 <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">search type:</label><select id="integration_search_type" class="form-control" onchange="syncTableSearchDisplay()" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                                    <!-- Currently only these three have non-empty results in pipeline -->
                                     <option value="single_column">Single Column</option>
                                     <option value="keyword">Keyword</option>
+                                    <option value="unionable">Unionable</option>
+                                    <!--
                                     <option value="by_type">By Type</option>
                                     <option value="multi_column">Multi Column</option>
-                                    <option value="unionable">Unionable</option>
                                     <option value="complex">Complex</option>
                                     <option value="correlation">Correlation</option>
                                     <option value="imputation">Imputation</option>
@@ -884,6 +886,7 @@
                                     <option value="feature_for_ml">Feature for ML</option>
                                     <option value="multi_column_collinearity">Multi-Column Collinearity</option>
                                     <option value="negative_example">Negative Example</option>
+                                    -->
                                 </select></div>
                             </div>
                             <div id="integrationResults"></div>
@@ -1019,7 +1022,7 @@
             const run = runs.find(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === key);
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
             const noResultMsg = placeholder;
-                if (run && run.status === 'success' && run.integrated_table) {
+            if (run && run.status === 'success' && run.integrated_table) {
                 const stats = run.stats || {};
                 let extra = '';
                 const modelIds = run.models_with_tables || [];
@@ -1028,9 +1031,19 @@
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
                     const basename = (p) => String(p).split('/').pop();
                     const tablePathsStr = tablePathsList.length > 0 ? tablePathsList.map(basename).join(' ') : '';
+                    const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
+                    const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : tablePathsList.length;
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
-                        <strong>Model IDs (Model Search):</strong> ${links} <span style="color:#004085;">(${modelIds.length} models)</span>
-                        ${tablePathsStr ? `<div style="margin-top: 6px; font-size: 11px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
+                        <details style="margin: 0;">
+                            <summary style="cursor: pointer; list-style: none; outline: none;">
+                                <span style="font-weight: 600;">Model IDs (Model Search)</span>
+                                <span style="color:#004085;">(${modelsCount} models, ${tablesCount} tables)</span>
+                            </summary>
+                            <div style="margin-top: 6px; font-size: 11px;">
+                                <div><strong>Models:</strong> ${links}</div>
+                                ${tablePathsStr ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
+                            </div>
+                        </details>
                     </div>`;
                 } else {
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
@@ -1151,9 +1164,20 @@
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
                     const basename = (p) => String(p).split('/').pop();
                     const tablePathsStr = tablePathsList.length > 0 ? tablePathsList.map(basename).join(' ') : '';
+                    const stats = run.stats || {};
+                    const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
+                    const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : tablePathsList.length;
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
-                        <strong>Model IDs (Table Search):</strong> ${links} <span style="color:#155724;">(${modelIds.length} models)</span>
-                        ${tablePathsStr ? `<div style="margin-top: 6px; font-size: 11px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
+                        <details style="margin: 0;">
+                            <summary style="cursor: pointer; list-style: none; outline: none;">
+                                <span style="font-weight: 600;">Model IDs (Table Search)</span>
+                                <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
+                            </summary>
+                            <div style="margin-top: 6px; font-size: 11px;">
+                                <div><strong>Models:</strong> ${links}</div>
+                                ${tablePathsStr ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
+                            </div>
+                        </details>
                     </div>`;
                 } else {
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';
@@ -1353,7 +1377,19 @@
                     let extra = '';
                     if (modelIds.length > 0) {
                         const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Model Search):</strong> ${links} (${modelIds.length} models)</div>`;
+                        const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
+                        const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : (table && table.data ? table.data.length : 0);
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
+                            <details style="margin: 0;">
+                                <summary style="cursor: pointer; list-style: none; outline: none;">
+                                    <span style="font-weight: 600;">Model IDs (Model Search)</span>
+                                    <span style="color:#004085;">(${modelsCount} models, ${tablesCount} rows)</span>
+                                </summary>
+                                <div style="margin-top: 6px; font-size: 11px;">
+                                    <div><strong>Models:</strong> ${links}</div>
+                                </div>
+                            </details>
+                        </div>`;
                     } else {
                         extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
                     }
@@ -1370,7 +1406,19 @@
                     const tableModelIds = tableRes.models_with_tables || [];
                     if (tableModelIds.length > 0) {
                         const links = tableModelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Table Search):</strong> ${links} <span style="color:#155724;">(${tableModelIds.length} models)</span></div>`;
+                        const modelsCount = (tableRes.stats && tableRes.stats.models_with_tables != null) ? tableRes.stats.models_with_tables : tableModelIds.length;
+                        const tablesCount = (tableRes.table_paths || []).length;
+                        tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
+                            <details style="margin: 0;">
+                                <summary style="cursor: pointer; list-style: none; outline: none;">
+                                    <span style="font-weight: 600;">Model IDs (Table Search)</span>
+                                    <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
+                                </summary>
+                                <div style="margin-top: 6px; font-size: 11px;">
+                                    <div><strong>Models:</strong> ${links}</div>
+                                </div>
+                            </details>
+                        </div>`;
                     } else {
                         tableExtra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';
                     }
@@ -1409,23 +1457,42 @@
             }
         }
 
-        async function runAllTableIntegrations(jobId, allSearchTypes) {
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+        async function runAllTableIntegrations(jobId) {
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
-            const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
+            // For run-all we fix tablesSource to "intermediate" to avoid very heavy all_from_modelcards scans.
+            const tablesSource = 'intermediate';
             const btn = document.getElementById('integrationRunAllTableBtn');
             if (!btn) return;
-            const searchTypes = (allSearchTypes || []).length ? allSearchTypes : ['single_column', 'keyword', 'by_type'];
+            const integrationTypes = ['union', 'intersection', 'alite', 'outer_join'];
+            const modelModes = ['dense', 'sparse', 'hybrid'];
+            const tableSearchTypes = ['single_column','keyword','by_type','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'];
             btn.disabled = true;
             const originalText = btn.textContent;
             btn.textContent = '⏳ Running all...';
             try {
-                await Promise.all(searchTypes.map(st => fetch('{{BACKEND_URL}}/api/integrate', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId, search_type: st, integration_type: integrationType, k, max_models: maxModels, tables_source: tablesSource })
-                }).then(r => r.json()).catch(() => null)));
+                const tasks = [];
+                // All Model Search integrations: all integrationTypes × modelModes
+                for (const it of integrationTypes) {
+                    for (const mode of modelModes) {
+                        tasks.push(fetch('{{BACKEND_URL}}/api/integrate-model-search', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ job_id: jobId, integration_type: it, k, max_models: maxModels, card2card_retrieval_mode: mode })
+                        }).then(r => r.json()).catch(() => null));
+                    }
+                }
+                // All Table Search integrations: all integrationTypes × tableSearchTypes, tablesSource fixed
+                for (const it of integrationTypes) {
+                    for (const st of tableSearchTypes) {
+                        tasks.push(fetch('{{BACKEND_URL}}/api/integrate', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ job_id: jobId, search_type: st, integration_type: it, k, max_models: maxModels, tables_source: tablesSource })
+                        }).then(r => r.json()).catch(() => null));
+                    }
+                }
+                await Promise.allSettled(tasks);
                 btn.textContent = '✅ All done';
                 setTimeout(() => { btn.textContent = originalText; }, 2000);
             } catch (e) {

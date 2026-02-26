@@ -273,19 +273,16 @@ def integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]
     
     try:
         # Use pandas concat for union (combine all rows)
-        # Align columns first
-        all_columns = set()
+        # Align columns first, but avoid repeated column insertion (fragmentation).
+        # Build a stable column order: in order of first appearance across tables.
+        all_columns: List[str] = []
         for df in tables:
-            all_columns.update(df.columns)
+            for col in df.columns:
+                if col not in all_columns:
+                    all_columns.append(col)
         
-        # Align all tables to have the same columns
-        aligned_tables = []
-        for df in tables:
-            aligned_df = df.copy()
-            for col in all_columns:
-                if col not in aligned_df.columns:
-                    aligned_df[col] = None
-            aligned_tables.append(aligned_df[list(all_columns)])
+        # Align all tables to have the same columns in one shot per DataFrame
+        aligned_tables = [df.reindex(columns=all_columns) for df in tables]
         
         # Union (concatenate) all tables - return full result, no row cap
         integrated = pd.concat(aligned_tables, axis=0, ignore_index=True)
@@ -783,12 +780,12 @@ def integrate_tables_from_search_results(
                     table_paths.append(p)
                     model_to_table_paths_ts[mid].append(p)
         # No table top-k cap: use ALL tables
-        print(f"   Resolved {len(table_paths)} tables for integration (no table top-k cap)")
+        print(f"   Resolved {len(table_paths)} tables for integration (no table top-k cap; from {len(retrieved_filenames)} retrieved tables)")
         models_with_tables_list = model_ids
     else:
         # intermediate: use retrieved tables (current behavior)
         # No table top-k cap: use ALL retrieved tables (per-table k already applied in card2tab2card)
-        print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} tables from search (no table top-k cap)")
+        print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} retrieved tables from search (no table top-k cap)")
         table_paths = retrieved_filenames
         table_to_models = intermediate.get("table_to_models", {})
         # Align with card2tab2card model_ids (50) when available - same set as retrieval results
@@ -837,6 +834,7 @@ def integrate_tables_from_search_results(
         result["stats"] = result.get("stats") or {}
     result["stats"]["elapsed_seconds"] = elapsed
     result["stats"]["tables_source"] = tables_source
+    result["stats"]["total_unique_tables"] = len(table_paths)
     print(f"⏱️  Table Search integration elapsed: {elapsed:.2f}s (tables_source={tables_source})")
     return result
 
