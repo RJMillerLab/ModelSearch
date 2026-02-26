@@ -41,6 +41,115 @@ def _flatten_cell(value: Any) -> List[Any]:
     return [value]
 
 
+def get_modelids_for_basenames_duckdb(parquet_path: str, basenames: List[str]) -> Dict[str, List[str]]:
+    """
+    Fast: use DuckDB SQL to get (basename -> modelIds) without loading full parquet.
+    Single SQL scan; returns subset for requested basenames only.
+    """
+    if not basenames or not os.path.exists(parquet_path):
+        return {b: [] for b in basenames}
+    path_abs = os.path.abspath(parquet_path).replace("\\", "/")
+    conn = duckdb.connect(":memory:")
+    try:
+        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
+    except Exception:
+        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
+    list_cols = [
+        c[0] for c in cols
+        if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
+    ][:4]
+    if not list_cols:
+        conn.close()
+        return {b: [] for b in basenames}
+    basenames_sql = ",".join(repr(b) for b in basenames)
+    union_parts = []
+    for c in list_cols:
+        union_parts.append(
+            f"SELECT modelId, unnest(COALESCE(\"{c}\", list_value())) as path "
+            f"FROM read_parquet('{path_abs}')"
+        )
+    query = f"""
+    WITH exploded AS (
+        {" UNION ALL ".join(union_parts)}
+    ),
+    with_basename AS (
+        SELECT modelId, COALESCE(regexp_extract(CAST(path AS VARCHAR), '([^/\\\\]+)$', 1), CAST(path AS VARCHAR)) as basename
+        FROM exploded WHERE path IS NOT NULL AND trim(CAST(path AS VARCHAR)) != ''
+    )
+    SELECT basename, modelId FROM with_basename
+    WHERE basename IN ({basenames_sql})
+    """
+    try:
+        df = conn.execute(query).fetchdf()
+    except Exception:
+        conn.close()
+        return {b: [] for b in basenames}
+    conn.close()
+    out: Dict[str, List[str]] = {b: [] for b in basenames}
+    for _, row in df.iterrows():
+        bn = str(row["basename"]).strip()
+        mid = str(row["modelId"]).strip()
+        if bn and mid and bn in out:
+            out[bn].append(mid)
+    for b in out:
+        out[b] = list(dict.fromkeys(out[b]))
+    return out
+
+
+def get_tables_for_model_duckdb(parquet_path: str, model_id: str) -> List[str]:
+    """
+    Fast: use DuckDB SQL to get tables for one model without loading full parquet.
+    """
+    result = _get_tables_for_models_duckdb_internal(parquet_path, [model_id])
+    return result.get(model_id, [])
+
+
+def _get_tables_for_models_duckdb_internal(parquet_path: str, model_ids: List[str]) -> Dict[str, List[str]]:
+    """Internal: DuckDB batch query model_ids -> tables. Used by get_tables_for_model_duckdb and table_integration."""
+    if not model_ids or not os.path.exists(parquet_path):
+        return {m: [] for m in model_ids}
+    path_abs = os.path.abspath(parquet_path).replace("\\", "/")
+    conn = duckdb.connect(":memory:")
+    ids_sql = ",".join(repr(m) for m in model_ids)
+    try:
+        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
+    except Exception:
+        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
+    list_cols = [
+        c[0] for c in cols
+        if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
+    ][:4]
+    if not list_cols:
+        conn.close()
+        return {m: [] for m in model_ids}
+    select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
+    try:
+        full_df = conn.execute(f"""
+            SELECT {select_cols} FROM read_parquet(?)
+            WHERE modelId IN ({ids_sql})
+        """, [path_abs]).fetchdf()
+    except Exception:
+        full_df = conn.execute(f"""
+            SELECT {select_cols} FROM read_parquet('{path_abs}')
+            WHERE modelId IN ({ids_sql})
+        """).fetchdf()
+    conn.close()
+    model_to_tables: Dict[str, List[str]] = {m: [] for m in model_ids}
+    for _, row in full_df.iterrows():
+        mid = str(row["modelId"])
+        for col in list_cols:
+            vals = _flatten_cell(row.get(col))
+            for v in vals:
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if s:
+                    base = os.path.basename(s)
+                    if base and base not in model_to_tables.get(mid, []):
+                        model_to_tables.setdefault(mid, []).append(base)
+    return model_to_tables
+
+
 def _read_relationships(parquet_path: str) -> pd.DataFrame:
     if not os.path.exists(parquet_path):
         raise FileNotFoundError(f"Relationship parquet not found: {parquet_path}")

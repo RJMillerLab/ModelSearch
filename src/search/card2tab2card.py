@@ -360,22 +360,22 @@ def search_card2tab2card(
             )
         
         print(f"⚠️  CitationLake not available, using relationship_parquet: {relationship_parquet}")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            relationship_df=relationship_df,
-            use_citationlake=False
-        )
+        try:
+            from src.modelsearch.compare_baselines import get_tables_for_model_duckdb
+            query_tables = get_tables_for_model_duckdb(relationship_parquet, model_id)
+        except Exception:
+            relationship_df = load_relationship_parquet(relationship_parquet)
+            query_tables = get_tables_for_model(model_id=model_id, relationship_df=relationship_df, use_citationlake=False)
     else:
-        # use_citationlake=False, use relationship_parquet
+        # use_citationlake=False, use relationship_parquet (DuckDB SQL preferred, fallback to full load)
         if relationship_parquet is None:
             raise ValueError("relationship_parquet is required when use_citationlake=False")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            relationship_df=relationship_df,
-            use_citationlake=False
-        )
+        try:
+            from src.modelsearch.compare_baselines import get_tables_for_model_duckdb
+            query_tables = get_tables_for_model_duckdb(relationship_parquet, model_id)
+        except Exception:
+            relationship_df = load_relationship_parquet(relationship_parquet)
+            query_tables = get_tables_for_model(model_id=model_id, relationship_df=relationship_df, use_citationlake=False)
     
     query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
@@ -858,55 +858,34 @@ def search_card2tab2card(
             similar_model_ids.update(model_ids)
             table_to_models[filename] = list(model_ids)
     else:
-        # Fallback: use relationship_df
+        # Fallback: use DuckDB SQL (no full parquet load) - same interface as ModelTables get_from
         if relationship_parquet is None:
             raise ValueError("relationship_parquet is required when use_citationlake=False")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        print(f"📋 Using relationship_parquet to map tables to model cards...")
-        
-        # Use filenames (basenames) to match with relationship_df
         table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
-        print(f"📝 Matching {len(table_basenames)} table basenames against relationship data...")
+        print(f"📋 Using relationship_parquet to map tables to model cards...")
+        print(f"📝 Matching {len(table_basenames)} table basenames...")
         print(f"   Sample basenames: {table_basenames[:3]}{'...' if len(table_basenames) > 3 else ''}")
-        
-        # Check what columns are available in relationship_df
-        print(f"   Relationship DF columns: {list(relationship_df.columns)[:10]}{'...' if len(relationship_df.columns) > 10 else ''}")
-        print(f"   Relationship DF shape: {relationship_df.shape}")
-        
-        # Try multiple column name variations
-        basename_col = None
-        for col in ["csv_basename", "basename", "filename", "table_basename"]:
-            if col in relationship_df.columns:
-                basename_col = col
-                break
-        
-        if basename_col is None:
-            print(f"⚠️  Could not find basename column in relationship_df. Available columns: {list(relationship_df.columns)}")
-            # Try to find a column that might contain basenames
-            for col in relationship_df.columns:
-                if "basename" in col.lower() or "filename" in col.lower() or "csv" in col.lower():
-                    basename_col = col
-                    print(f"   Using column: {col}")
-                    break
-        
-        if basename_col is None:
-            print(f"❌ No suitable column found for matching basenames")
-            similar_model_ids = set()
-        else:
-            for filename in retrieved_filenames:
-                basename = os.path.basename(filename)
-                matched_models = relationship_df.loc[
-                    relationship_df[basename_col] == basename,
-                    "modelId"
-                ].dropna().unique().tolist()
-                if matched_models:
-                    models_raw_count += len(matched_models)
-                    similar_model_ids.update(matched_models)
-                    table_to_models[filename] = matched_models
-                    print(f"   ✅ Matched {basename} -> {len(matched_models)} models")
-                else:
-                    print(f"   ⚠️  No match for {basename}")
-        
+        try:
+            from src.modelsearch.compare_baselines import get_modelids_for_basenames_duckdb
+            basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
+        except Exception:
+            relationship_df = load_relationship_parquet(relationship_parquet)
+            basename_col = next((c for c in ["csv_basename", "basename", "filename"] if c in relationship_df.columns), None)
+            basename_to_models = {b: [] for b in table_basenames}
+            if basename_col:
+                for bn in table_basenames:
+                    mids = relationship_df.loc[relationship_df[basename_col] == bn, "modelId"].dropna().unique().tolist()
+                    basename_to_models[bn] = [str(m) for m in mids]
+        for filename in retrieved_filenames:
+            basename = os.path.basename(filename)
+            matched_models = basename_to_models.get(basename, [])
+            if matched_models:
+                models_raw_count += len(matched_models)
+                similar_model_ids.update(matched_models)
+                table_to_models[filename] = matched_models
+                print(f"   ✅ Matched {basename} -> {len(matched_models)} models")
+            else:
+                print(f"   ⚠️  No match for {basename}")
         print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
     # Per-table model count (value_counts): which tables span how many models (user cares about "countless" tables)
@@ -1554,31 +1533,26 @@ def search_card2tab2card_by_type(
         # Fallback: use relationship_df
         if relationship_parquet is None:
             raise ValueError("relationship_parquet is required when use_citationlake=False")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        print(f"📋 Using relationship_parquet to map tables to model cards...")
-        
         table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
-        basename_col = None
-        for col in ["csv_basename", "basename", "filename", "table_basename"]:
-            if col in relationship_df.columns:
-                basename_col = col
-                break
-        
-        if basename_col is None:
-            print(f"⚠️  Could not find basename column in relationship_df")
-            similar_model_ids = set()
-        else:
-            for filename in retrieved_filenames:
-                basename = os.path.basename(filename)
-                matched_models = relationship_df.loc[
-                    relationship_df[basename_col] == basename,
-                    "modelId"
-                ].dropna().unique().tolist()
-                if matched_models:
-                    models_raw_count += len(matched_models)
-                    similar_model_ids.update(matched_models)
-                    table_to_models[filename] = matched_models
-        
+        print(f"📋 Using relationship_parquet to map tables to model cards...")
+        try:
+            from src.modelsearch.compare_baselines import get_modelids_for_basenames_duckdb
+            basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
+        except Exception:
+            relationship_df = load_relationship_parquet(relationship_parquet)
+            basename_col = next((c for c in ["csv_basename", "basename", "filename"] if c in relationship_df.columns), None)
+            basename_to_models = {b: [] for b in table_basenames}
+            if basename_col:
+                for bn in table_basenames:
+                    mids = relationship_df.loc[relationship_df[basename_col] == bn, "modelId"].dropna().unique().tolist()
+                    basename_to_models[bn] = [str(m) for m in mids]
+        for filename in retrieved_filenames:
+            basename = os.path.basename(filename)
+            matched_models = basename_to_models.get(basename, [])
+            if matched_models:
+                models_raw_count += len(matched_models)
+                similar_model_ids.update(matched_models)
+                table_to_models[filename] = matched_models
         print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
     # Per-table model count (value_counts): which tables span how many models
