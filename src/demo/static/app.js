@@ -576,15 +576,18 @@
             let queryTables = [];
             let searchedTables = [];
             const c2t2c = results.card2tab2card_results || {};
-            Object.keys(c2t2c).forEach(type => {
-                const data = c2t2c[type];
-                if (data && Array.isArray(data.query_tables) && data.query_tables.length > 0) {
+            const searchTypeOrder = ['single_column', 'keyword', 'by_type'];
+            for (const st of searchTypeOrder) {
+                const data = c2t2c[st];
+                if (!data) continue;
+                if (Array.isArray(data.query_tables) && data.query_tables.length > 0) {
                     data.query_tables.forEach(p => { if (p && !queryTables.includes(p)) queryTables.push(p); });
                 }
-                if (data && Array.isArray(data.searched_tables) && data.searched_tables.length > 0) {
-                    data.searched_tables.forEach(p => { if (p && !searchedTables.includes(p)) searchedTables.push(p); });
+                if (Array.isArray(data.searched_tables) && data.searched_tables.length > 0) {
+                    searchedTables = data.searched_tables;
+                    break;
                 }
-            });
+            }
             // Filter by source: exclude s2orc/llm by ModelTables naming rules (e.g. 215768677_table2.csv)
             const classifyTableSource = (path) => {
                 const b = String(path).split('/').pop().replace(/_s\.csv$/, '.csv').replace(/_t\.csv$/, '.csv');
@@ -597,7 +600,7 @@
             queryTables = queryTables.filter(p => classifyTableSource(p) !== 'llm');
             const basename = (p) => String(p).split('/').pop();
             const tablesNoteCell = results.error ? '<span style="' + headerStyle + '">—</span>' : (queryTables.length > 0 || searchedTables.length > 0
-                ? `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.length ? queryTables.map(basename).join(' ') : '—'}</span><br><strong>Searched table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${searchedTables.length ? searchedTables.map(basename).join(' ') : '—'}</span></span>`
+                ? `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.length ? queryTables.map(basename).join(' ') : '—'}</span><br><strong>Searched table(s) <span style="color:#6c757d;">(from table search results)</span>:</strong> <span style="font-size: 10px; font-family: monospace;">${searchedTables.length ? searchedTables.map(basename).join(' ') : '—'}</span></span>`
                 : `<span style="${headerStyle}"><strong>Query table(s):</strong> —<br><strong>Searched table(s):</strong> —</span>`);
             const runLogPath = results.run_log_path || results.folder_path ? (results.folder_path + '/pipeline_run.log') : null;
             const folderPath = results.folder_path || '';
@@ -1015,24 +1018,14 @@
                 const stats = run.stats || {};
                 let extra = '';
                 const modelIds = run.models_with_tables || [];
-                const modelToTablePaths = run.model_to_table_paths || {};
+                const tablePathsList = run.table_paths || [];
                 if (modelIds.length > 0) {
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    let tablePathsHtml = '';
-                    if (Object.keys(modelToTablePaths).length > 0) {
-                        const basename = (p) => String(p).split('/').pop();
-                        tablePathsHtml = modelIds.slice(0, 10).map(m => {
-                            const paths = modelToTablePaths[m] || [];
-                            const bn = paths.slice(0, 5).map(basename).join(', ');
-                            const more = paths.length > 5 ? ` … +${paths.length - 5} more` : '';
-                            return `<li style="margin: 4px 0;"><strong>${m}</strong>: ${bn || '—'}${more}</li>`;
-                        }).join('');
-                        if (modelIds.length > 10) tablePathsHtml += `<li style="color:#666;">… and ${modelIds.length - 10} more models</li>`;
-                        tablePathsHtml = `<ul style="margin: 6px 0 0 0; padding-left: 18px; font-size: 11px; max-height: 120px; overflow-y: auto;">${tablePathsHtml}</ul>`;
-                    }
+                    const basename = (p) => String(p).split('/').pop();
+                    const tablePathsStr = tablePathsList.length > 0 ? tablePathsList.map(basename).join(' ') : '';
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
                         <strong>Model IDs (Model Search):</strong> ${links} <span style="color:#004085;">(${modelIds.length} models)</span>
-                        ${tablePathsHtml ? `<div style="margin-top: 6px;"><strong>Table paths (for debug):</strong>${tablePathsHtml}</div>` : ''}
+                        ${tablePathsStr ? `<div style="margin-top: 6px; font-size: 11px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
                     </div>`;
                 } else {
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
@@ -1148,24 +1141,14 @@
             if (run && run.status === 'success' && run.integrated_table) {
                 let extra = '';
                 const modelIds = run.models_with_tables || [];
-                const modelToTablePaths = run.model_to_table_paths || {};
+                const tablePathsList = run.table_paths || [];
                 if (modelIds.length > 0) {
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    let tablePathsHtml = '';
-                    if (Object.keys(modelToTablePaths).length > 0) {
-                        const basename = (p) => String(p).split('/').pop();
-                        tablePathsHtml = modelIds.slice(0, 10).map(m => {
-                            const paths = modelToTablePaths[m] || [];
-                            const bn = paths.slice(0, 5).map(basename).join(', ');
-                            const more = paths.length > 5 ? ` … +${paths.length - 5} more` : '';
-                            return `<li style="margin: 4px 0;"><strong>${m}</strong>: ${bn || '—'}${more}</li>`;
-                        }).join('');
-                        if (modelIds.length > 10) tablePathsHtml += `<li style="color:#666;">… and ${modelIds.length - 10} more models</li>`;
-                        tablePathsHtml = `<ul style="margin: 6px 0 0 0; padding-left: 18px; font-size: 11px; max-height: 120px; overflow-y: auto;">${tablePathsHtml}</ul>`;
-                    }
+                    const basename = (p) => String(p).split('/').pop();
+                    const tablePathsStr = tablePathsList.length > 0 ? tablePathsList.map(basename).join(' ') : '';
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
                         <strong>Model IDs (Table Search):</strong> ${links} <span style="color:#155724;">(${modelIds.length} models)</span>
-                        ${tablePathsHtml ? `<div style="margin-top: 6px;"><strong>Table paths (for debug):</strong>${tablePathsHtml}</div>` : ''}
+                        ${tablePathsStr ? `<div style="margin-top: 6px; font-size: 11px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
                     </div>`;
                 } else {
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';

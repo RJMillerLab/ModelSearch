@@ -12,6 +12,7 @@ Works with pre-searched table results to avoid re-searching.
 
 import os
 import sys
+import time
 import pandas as pd
 import json
 from typing import List, Dict, Optional, Any, Set, Tuple
@@ -652,6 +653,7 @@ def integrate_tables_from_search_results(
     Returns:
         Dictionary with integration results
     """
+    t0 = time.time()
     print(f"\n{'='*60}")
     print(f"🔗 Table Integration from Search Results")
     print(f"{'='*60}")
@@ -760,9 +762,10 @@ def integrate_tables_from_search_results(
         for table_path, model_list in table_to_models.items():
             for m in (model_list if isinstance(model_list, list) else []):
                 mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
-                if mid:
-                    model_ids.add(mid)
-        model_ids = list(model_ids)[:50]
+                    if mid:
+                        model_ids.add(mid)
+        # No model cap: use ALL models from table_to_models (was: model_ids[:50])
+        model_ids = list(model_ids)
         if not model_ids:
             return {"success": False, "error": "No model IDs in intermediate for all_from_modelcards", "integrated_table": None}
         print(f"✅ tables_source=all_from_modelcards: DuckDB batch query for {len(model_ids)} models")
@@ -788,16 +791,25 @@ def integrate_tables_from_search_results(
         print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} tables from search (no table top-k cap)")
         table_paths = retrieved_filenames
         table_to_models = intermediate.get("table_to_models", {})
-        # Build basename->key index for robust lookup (handles path format mismatch)
-        basename_to_key = {os.path.basename(key): key for key in table_to_models}
-        model_ids_set = set()
-        for tp in table_paths:
-            model_list = table_to_models.get(tp) or table_to_models.get(basename_to_key.get(os.path.basename(tp)))
-            for m in (model_list or []):
-                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
-                if mid:
-                    model_ids_set.add(mid)
-        models_with_tables_list = list(model_ids_set)
+        # Align with card2tab2card model_ids (50) when available - same set as retrieval results
+        c2t2c_model_ids = []
+        if "card2tab2card_results" in search_results and search_type in search_results.get("card2tab2card_results", {}):
+            stub = search_results["card2tab2card_results"][search_type]
+            if isinstance(stub, dict) and "model_ids" in stub:
+                c2t2c_model_ids = list(stub["model_ids"]) if isinstance(stub["model_ids"], (list, tuple)) else []
+        if c2t2c_model_ids:
+            models_with_tables_list = c2t2c_model_ids
+            print(f"   Using card2tab2card model_ids ({len(c2t2c_model_ids)}) for alignment with retrieval results")
+        else:
+            basename_to_key = {os.path.basename(key): key for key in table_to_models}
+            model_ids_set = set()
+            for tp in table_paths:
+                model_list = table_to_models.get(tp) or table_to_models.get(basename_to_key.get(os.path.basename(tp)))
+                for m in (model_list or []):
+                    mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
+                    if mid:
+                        model_ids_set.add(mid)
+            models_with_tables_list = list(model_ids_set)
     
     if not table_paths:
         return {"success": False, "error": "No tables to integrate", "integrated_table": None}
@@ -819,6 +831,8 @@ def integrate_tables_from_search_results(
     result = integrate_tables(table_paths, integration_type, k, db_path)
     result["models_with_tables"] = models_with_tables_list
     result["model_to_table_paths"] = model_to_table_paths_ts
+    elapsed = time.time() - t0
+    print(f"⏱️  Table Search integration elapsed: {elapsed:.2f}s (tables_source={tables_source})")
     return result
 
 
@@ -850,6 +864,7 @@ def integrate_tables_from_model_search_results(
     Returns:
         Dictionary with integration results
     """
+    t0 = time.time()
     print(f"\n{'='*60}")
     print(f"🔗 Table Integration from Model Search Results")
     print(f"{'='*60}")
@@ -1074,8 +1089,9 @@ def integrate_tables_from_model_search_results(
         for mid in models_with_tables:
             model_to_table_paths[mid] = fallback_models_with_tables.get(mid, [])
     elif relationship_parquet and os.path.exists(relationship_parquet):
-        # Fast path: DuckDB batch query (single SQL scan)
-        print(f"✅ DuckDB batch query on parquet (fast)")
+        # Fast path: DuckDB batch query (single SQL scan, no full parquet load)
+        t_duck = time.time()
+        print(f"✅ DuckDB batch query on parquet (fast, no full load)")
         model_to_tables = _get_tables_for_models_duckdb(relationship_parquet, model_ids)
         for model_id in model_ids:
             basenames = model_to_tables.get(model_id, [])
@@ -1090,9 +1106,10 @@ def integrate_tables_from_model_search_results(
                         model_to_table_paths[model_id].append(path)
                 models_with_tables.append(model_id)
                 print(f"  ✅ Model {model_id}: {len(basenames)} tables")
-            else:
-                models_without_tables.append(model_id)
+                else:
+                    models_without_tables.append(model_id)
                 print(f"  ⚠️  Model {model_id}: No tables found")
+        print(f"   DuckDB query elapsed: {time.time() - t_duck:.2f}s")
     else:
         # Fallback: per-model get_tables_for_model (slower)
         for model_id in model_ids:
@@ -1189,6 +1206,9 @@ def integrate_tables_from_model_search_results(
         # model_id -> list of table paths for UI debug display
         result["model_to_table_paths"] = model_to_table_paths
     
+    elapsed = time.time() - t0
+    duckdb_used = relationship_parquet and os.path.exists(relationship_parquet) and not use_fallback
+    print(f"⏱️  Model Search integration elapsed: {elapsed:.2f}s (DuckDB={'yes' if duckdb_used else 'no'})")
     return result
 
 

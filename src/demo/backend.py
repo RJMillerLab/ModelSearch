@@ -468,7 +468,7 @@ def _run_pipeline_body(
             "--model_id", model_id,
             "--search_type", st,
             "--k", str(k_table),
-            "--modelcard_k", "50",  # Default cap: return at most 50 models
+            "--modelcard_k", "0",  # 0 = no limit (was 50; comment: "50" to re-enable cap)
             "--db_path", DEFAULT_DB_PATH,
             "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
             "--no_citationlake",
@@ -494,7 +494,7 @@ def _run_pipeline_body(
             "--mode", "by_type",
             "--search_type", "keyword",
             "--k", str(k_table),
-            "--modelcard_k", "50",
+            "--modelcard_k", "0",  # 0 = no limit (was 50)
             "--db_path", DEFAULT_DB_PATH,
             "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
             "--no_citationlake",
