@@ -832,6 +832,11 @@ def integrate_tables_from_search_results(
     result["models_with_tables"] = models_with_tables_list
     result["model_to_table_paths"] = model_to_table_paths_ts
     elapsed = time.time() - t0
+    # Attach timing + source info to stats for debugging
+    if not isinstance(result.get("stats"), dict):
+        result["stats"] = result.get("stats") or {}
+    result["stats"]["elapsed_seconds"] = elapsed
+    result["stats"]["tables_source"] = tables_source
     print(f"⏱️  Table Search integration elapsed: {elapsed:.2f}s (tables_source={tables_source})")
     return result
 
@@ -950,29 +955,26 @@ def integrate_tables_from_model_search_results(
         except ImportError:
             raise ImportError(f"Could not import get_tables_for_model and load_relationship_parquet: {e}")
     
-    # Load relationship data if needed
+    # Load relationship data only when DuckDB path is unavailable and we truly need a full DataFrame
     relationship_df = None
     if not use_citationlake:
-        # Only load relationship parquet if CitationLake is not being used
+        # If we don't have a usable parquet path for DuckDB, fall back to loading via pandas
+        parquet_for_df = None
         if relationship_parquet and os.path.exists(relationship_parquet):
-            try:
-                relationship_df = load_relationship_parquet(relationship_parquet)
-                print(f"✅ Loaded relationship parquet: {relationship_parquet}")
-            except Exception as e:
-                print(f"⚠️  Failed to load relationship parquet {relationship_parquet}: {e}")
-                print(f"   Will try to use CitationLake approach instead...")
-                use_citationlake = True  # Fallback to CitationLake
+            # DuckDB branch below will handle this path directly; avoid full load here
+            parquet_for_df = None
         else:
-            # Try default path
             default_parquet = "data_citationlake/processed/modelcard_step3_dedup.parquet"
             if os.path.exists(default_parquet):
-                try:
-                    relationship_df = load_relationship_parquet(default_parquet)
-                    print(f"✅ Loaded default relationship parquet: {default_parquet}")
-                except Exception as e:
-                    print(f"⚠️  Failed to load default relationship parquet: {e}")
-                    print(f"   Will try to use CitationLake approach instead...")
-                    use_citationlake = True  # Fallback to CitationLake
+                parquet_for_df = default_parquet
+        if parquet_for_df:
+            try:
+                relationship_df = load_relationship_parquet(parquet_for_df)
+                print(f"✅ Loaded relationship parquet for fallback DataFrame path: {parquet_for_df}")
+            except Exception as e:
+                print(f"⚠️  Failed to load relationship parquet {parquet_for_df}: {e}")
+                print(f"   Will try to use CitationLake approach instead...")
+                use_citationlake = True  # Fallback to CitationLake
     
     # Check if CitationLake is actually available
     try:
@@ -1196,6 +1198,8 @@ def integrate_tables_from_model_search_results(
     
     # Add model search specific stats
     if result.get("success"):
+        if not isinstance(result.get("stats"), dict):
+            result["stats"] = result.get("stats") or {}
         result["stats"]["models_processed"] = len(model_ids)
         result["stats"]["models_with_tables"] = len(models_with_tables)
         result["stats"]["models_without_tables"] = len(models_without_tables)
@@ -1208,6 +1212,10 @@ def integrate_tables_from_model_search_results(
     
     elapsed = time.time() - t0
     duckdb_used = relationship_parquet and os.path.exists(relationship_parquet) and not use_fallback
+    # Attach timing + DuckDB info to stats for debugging
+    if isinstance(result.get("stats"), dict):
+        result["stats"]["elapsed_seconds"] = elapsed
+        result["stats"]["duckdb_used"] = bool(duckdb_used)
     print(f"⏱️  Model Search integration elapsed: {elapsed:.2f}s (DuckDB={'yes' if duckdb_used else 'no'})")
     return result
 
