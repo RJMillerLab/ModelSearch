@@ -541,13 +541,16 @@ def search_card2tab2card(
         print(f"✅ Got search_table2table function")
         sys.stdout.flush()
         if use_per_table_search:
-            # table_search_k = per-table k (directly: how many each table searches), no division
+            # table_search_k = per-table k (user input, e.g. 1)
+            # k_request = k_per_table + 4 (over-fetch for self/s2orc/generic filter)
+            # merge_target = num_seed_tables * k_request (merge all over-fetched; enough so remain ≥10 after filter)
             num_seed_tables = len(query_tables[:20])
-            k_per_table = max(1, table_search_k)  # Each table searches top k (1, 2, 3, ...)
-            k_request = max(k_per_table * 2 + 2, k_per_table + 5)  # Over-fetch for self + s2orc filter
-            merge_target = k_per_table * num_seed_tables  # Merge then filter; cap tables to avoid model explosion
-            max_final_tables = min(20, merge_target)  # Cap tables used for model mapping
-            print(f"📊 Per-table k={k_per_table} (each of {num_seed_tables} tables searches top {k_per_table}) | request={k_request} (over-fetch) | max_final_tables={max_final_tables}")
+            k_per_table = max(1, table_search_k)
+            k_request = k_per_table + 4  # Over-fetch: top1 -> request 5, so after filter we can get enough
+            merge_target = num_seed_tables * k_request  # Merge all (e.g. 11 tables * 5 = 55 before filter)
+            min_remain = 10  # Ensure we aim for at least 10 tables for model mapping after filter
+            max_final_tables = min(20, max(min_remain, merge_target))  # Cap at 20, but ensure target ≥10
+            print(f"📊 Per-table k={k_per_table} | request={k_request} (over-fetch k+4) | merge_target={merge_target} → filter self/s2orc/generic → remain≥{min_remain} (max {max_final_tables})")
             print(f"🔎 [STEP 2a] Parallel per-table search (each table independent read-only), then merge+filter+topk")
             sys.stdout.flush()
 
@@ -620,7 +623,7 @@ def search_card2tab2card(
                     break
             print(f"   [STEP 2b] Merge: {len(similar_table_data)} (before filter)")
             similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables), will filter self+s2orc → top {max_final_tables} (for model mapping)")
+            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables), will filter self+s2orc+generic → top {max_final_tables} (for model mapping)")
         else:
             k_overfetch = table_search_k * 2  # Over-fetch, then filter, then topk
             print(f"🔎 [STEP 2] Single-query search: INPUT=query | k_request={k_overfetch} | OUTPUT=merged")
@@ -1299,10 +1302,11 @@ def search_card2tab2card_by_type(
         if use_per_table_search:
             num_seed_tables = len(query_tables[:20])
             k_per_table = max(1, table_search_k)  # Each table searches top k (direct, no division)
-            k_request = max(k_per_table * 2 + 2, k_per_table + 5)
-            merge_target = k_per_table * num_seed_tables
-            max_final_tables = min(20, merge_target)
-            print(f"📊 Per-table k={k_per_table} (each of {num_seed_tables} tables) | request={k_request} | max_final_tables={max_final_tables}")
+            k_request = k_per_table + 4  # Over-fetch: top1 -> request 5
+            merge_target = num_seed_tables * k_request
+            min_remain = 10
+            max_final_tables = min(20, max(min_remain, merge_target))
+            print(f"📊 Per-table k={k_per_table} | request={k_request} (k+4) | merge_target={merge_target} → filter → remain≥{min_remain} (max {max_final_tables})")
             print(f"🔎 [STEP 2a] Parallel per-table search (by_type)...")
             sys.stdout.flush()
 
