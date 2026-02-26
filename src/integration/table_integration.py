@@ -762,8 +762,8 @@ def integrate_tables_from_search_results(
         for table_path, model_list in table_to_models.items():
             for m in (model_list if isinstance(model_list, list) else []):
                 mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
-                    if mid:
-                        model_ids.add(mid)
+                if mid:
+                    model_ids.add(mid)
         # No model cap: use ALL models from table_to_models (was: model_ids[:50])
         model_ids = list(model_ids)
         if not model_ids:

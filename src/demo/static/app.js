@@ -599,9 +599,9 @@
             };
             queryTables = queryTables.filter(p => classifyTableSource(p) !== 'llm');
             const basename = (p) => String(p).split('/').pop();
-            const tablesNoteCell = results.error ? '<span style="' + headerStyle + '">—</span>' : (queryTables.length > 0 || searchedTables.length > 0
-                ? `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.length ? queryTables.map(basename).join(' ') : '—'}</span><br><strong>Searched table(s) <span style="color:#6c757d;">(from table search results)</span>:</strong> <span style="font-size: 10px; font-family: monospace;">${searchedTables.length ? searchedTables.map(basename).join(' ') : '—'}</span></span>`
-                : `<span style="${headerStyle}"><strong>Query table(s):</strong> —<br><strong>Searched table(s):</strong> —</span>`);
+            const tablesNoteCell = results.error
+                ? '<span style="' + headerStyle + '">—</span>'
+                : `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.length ? queryTables.map(basename).join(' ') : '—'}</span></span>`;
             const runLogPath = results.run_log_path || results.folder_path ? (results.folder_path + '/pipeline_run.log') : null;
             const folderPath = results.folder_path || '';
             const runLogRow = (folderPath || runLogPath)
