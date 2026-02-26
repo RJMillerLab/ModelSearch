@@ -543,15 +543,11 @@ def search_card2tab2card(
         if use_per_table_search:
             # table_search_k = per-table k (user input, e.g. 1)
             # k_request = k_per_table + 4 (over-fetch for self/s2orc/generic filter)
-            # merge_target = num_seed_tables * k_request (merge all over-fetched; enough so remain ≥10 after filter)
             num_seed_tables = len(query_tables[:20])
             k_per_table = max(1, table_search_k)
-            k_request = k_per_table + 4  # Over-fetch: top1 -> request 5, so after filter we can get enough
-            merge_target = num_seed_tables * k_request  # Merge all (e.g. 11 tables * 5 = 55 before filter)
-            min_remain = 10  # Ensure we aim for at least 10 tables for model mapping after filter
-            max_final_tables = min(20, max(min_remain, merge_target))  # Cap at 20, but ensure target ≥10
-            print(f"📊 Per-table k={k_per_table} | request={k_request} (over-fetch k+4) | merge_target={merge_target} → filter self/s2orc/generic → remain≥{min_remain} (max {max_final_tables})")
-            print(f"🔎 [STEP 2a] Parallel per-table search (each table independent read-only), then merge+filter+topk")
+            k_request = k_per_table + 4  # Over-fetch: top1 -> request 5, so after filter we can get top-k
+            print(f"📊 Per-table k={k_per_table} | request={k_request} (over-fetch k+4) | flow: filter per table → top-{k_per_table} → merge (no post-filter)")
+            print(f"🔎 [STEP 2a] Parallel per-table search (each table independent read-only), then filter→topk→merge")
             sys.stdout.flush()
 
             def _search_one_table(args: Tuple[int, str, str, str]) -> Optional[Tuple[List[int], str]]:
@@ -608,22 +604,56 @@ def search_card2tab2card(
             per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
             print(f"   [STEP 2a] Done: {len(per_table_results)} tables searched in parallel")
 
-            # Round-robin merge (over-fetch), then filter self+s2orc, then take topk
+            # Flow: 1) Filter per table (self/s2orc/generic), 2) top-k per table, 3) merge (no post-filter)
+            all_ids = [tid for ids, _ in per_table_results for tid in ids]
+            tableid_to_filename: Dict[int, str] = {}
+            if all_ids:
+                import duckdb
+                con_filter = duckdb.connect(db_path, read_only=True)
+                try:
+                    table_ids_str = ','.join(str(tid) for tid in all_ids)
+                    filename_query = f"""
+                        SELECT DISTINCT tableid, filename
+                        FROM modellake_index
+                        WHERE tableid IN ({table_ids_str}) AND rowid = -1
+                    """
+                    filename_results = con_filter.execute(filename_query).fetchall()
+                    tableid_to_filename = {tid: filename for tid, filename in filename_results}
+                finally:
+                    con_filter.close()
+
+            per_table_filtered_topk: List[List[Tuple[int, str]]] = []
+            n_self, n_s2orc, n_generic = 0, 0, 0
+            for ids, src_basename in per_table_results:
+                kept: List[Tuple[int, str]] = []
+                for tid in ids:
+                    if tid not in tableid_to_filename:
+                        continue
+                    fbase = os.path.basename(str(tableid_to_filename[tid]))
+                    if fbase == src_basename:
+                        n_self += 1
+                        continue
+                    if _classify_table_source_by_basename(fbase) == "llm":
+                        n_s2orc += 1
+                        continue
+                    if _is_generic_table(fbase):
+                        n_generic += 1
+                        continue
+                    kept.append((tid, src_basename))
+                per_table_filtered_topk.append(kept[:k_per_table])  # top-k per table
+            if n_self or n_s2orc or n_generic:
+                print(f"   [STEP 2b] Filter per table: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | top-k={k_per_table}/table")
+            print(f"   [STEP 2c] Merge (round-robin of per-table top-{k_per_table})")
             seen: Set[int] = set()
             similar_table_data: List[Tuple[int, str]] = []
-            max_len = max(len(r[0]) for r in per_table_results) if per_table_results else 0
+            max_len = max(len(r) for r in per_table_filtered_topk) if per_table_filtered_topk else 0
             for rank in range(max_len):
-                for ids, src_basename in per_table_results:
-                    if rank < len(ids) and ids[rank] not in seen:
-                        seen.add(ids[rank])
-                        similar_table_data.append((ids[rank], src_basename))
-                        if len(similar_table_data) >= merge_target:
-                            break
-                if len(similar_table_data) >= merge_target:
-                    break
-            print(f"   [STEP 2b] Merge: {len(similar_table_data)} (before filter)")
+                for row in per_table_filtered_topk:
+                    if rank < len(row) and row[rank][0] not in seen:
+                        seen.add(row[rank][0])
+                        similar_table_data.append(row[rank])
             similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables), will filter self+s2orc+generic → top {max_final_tables} (for model mapping)")
+            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables, per-table filter→top{k_per_table}→merge, no post-filter)")
         else:
             k_overfetch = table_search_k * 2  # Over-fetch, then filter, then topk
             print(f"🔎 [STEP 2] Single-query search: INPUT=query | k_request={k_overfetch} | OUTPUT=merged")
@@ -757,31 +787,8 @@ def search_card2tab2card(
         """
         filename_results = con.execute(filename_query).fetchall()
         tableid_to_filename = {tid: filename for tid, filename in filename_results}
-        # Filter: (1) per-table self, (2) s2orc/llm from retrieved; then take top table_search_k
-        if use_per_table_search and per_table_results:
-            similar_table_data_filtered = []
-            n_self, n_s2orc, n_generic = 0, 0, 0
-            for tid, src_basename in similar_table_data:
-                if tid not in tableid_to_filename:
-                    continue
-                fname = tableid_to_filename[tid]
-                fbase = os.path.basename(str(fname))
-                if fbase == src_basename:
-                    n_self += 1
-                    continue  # skip self
-                if _classify_table_source_by_basename(fbase) == "llm":
-                    n_s2orc += 1
-                    continue  # skip s2orc/llm from retrieved
-                if _is_generic_table(fbase):
-                    n_generic += 1
-                    continue  # skip carbon/country code (countless model cards)
-                similar_table_data_filtered.append((tid, src_basename))
-            if n_self or n_s2orc or n_generic:
-                print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | remain={len(similar_table_data_filtered)}")
-            similar_table_data = similar_table_data_filtered[:max_final_tables]  # Take top max_final_tables after filter
-            similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"   [STEP 2c] Final: {len(similar_table_ids)} tables (for model mapping)")
-        else:
+        # Per-table path: already filtered+topk+merge in Step 2, no post-filter
+        if not (use_per_table_search and per_table_results):
             seed_basenames = {os.path.basename(str(t)) for t in query_tables}
             filtered = []
             for tid in similar_table_ids:
@@ -1301,12 +1308,9 @@ def search_card2tab2card_by_type(
         sys.stdout.flush()
         if use_per_table_search:
             num_seed_tables = len(query_tables[:20])
-            k_per_table = max(1, table_search_k)  # Each table searches top k (direct, no division)
+            k_per_table = max(1, table_search_k)
             k_request = k_per_table + 4  # Over-fetch: top1 -> request 5
-            merge_target = num_seed_tables * k_request
-            min_remain = 10
-            max_final_tables = min(20, max(min_remain, merge_target))
-            print(f"📊 Per-table k={k_per_table} | request={k_request} (k+4) | merge_target={merge_target} → filter → remain≥{min_remain} (max {max_final_tables})")
+            print(f"📊 Per-table k={k_per_table} | request={k_request} (k+4) | flow: filter per table → top-{k_per_table} → merge (no post-filter)")
             print(f"🔎 [STEP 2a] Parallel per-table search (by_type)...")
             sys.stdout.flush()
 
@@ -1362,20 +1366,54 @@ def search_card2tab2card_by_type(
                     if res:
                         results_by_ti[ti] = res
             per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
+            # Flow: filter per table → top-k per table → merge (no post-filter)
+            import duckdb
+            all_ids = [tid for ids, _ in per_table_results for tid in ids]
+            tableid_to_filename: Dict[int, str] = {}
+            if all_ids:
+                con_filter = duckdb.connect(db_path, read_only=True)
+                try:
+                    table_ids_str = ','.join(str(tid) for tid in all_ids)
+                    filename_query = f"""
+                        SELECT DISTINCT tableid, filename
+                        FROM modellake_index
+                        WHERE tableid IN ({table_ids_str}) AND rowid = -1
+                    """
+                    filename_results = con_filter.execute(filename_query).fetchall()
+                    tableid_to_filename = {tid: filename for tid, filename in filename_results}
+                finally:
+                    con_filter.close()
+            per_table_filtered_topk: List[List[Tuple[int, str]]] = []
+            n_self, n_s2orc, n_generic = 0, 0, 0
+            for ids, src_basename in per_table_results:
+                kept: List[Tuple[int, str]] = []
+                for tid in ids:
+                    if tid not in tableid_to_filename:
+                        continue
+                    fbase = os.path.basename(str(tableid_to_filename[tid]))
+                    if fbase == src_basename:
+                        n_self += 1
+                        continue
+                    if _classify_table_source_by_basename(fbase) == "llm":
+                        n_s2orc += 1
+                        continue
+                    if _is_generic_table(fbase):
+                        n_generic += 1
+                        continue
+                    kept.append((tid, src_basename))
+                per_table_filtered_topk.append(kept[:k_per_table])
+            if n_self or n_s2orc or n_generic:
+                print(f"   [STEP 2b] Filter per table: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | top-k={k_per_table}/table")
             seen = set()
             similar_table_data = []
-            max_len = max(len(r[0]) for r in per_table_results) if per_table_results else 0
+            max_len = max(len(r) for r in per_table_filtered_topk) if per_table_filtered_topk else 0
             for rank in range(max_len):
-                for ids, src_basename in per_table_results:
-                    if rank < len(ids) and ids[rank] not in seen:
-                        seen.add(ids[rank])
-                        similar_table_data.append((ids[rank], src_basename))
-                        if len(similar_table_data) >= merge_target:
-                            break
-                if len(similar_table_data) >= merge_target:
-                    break
+                for row in per_table_filtered_topk:
+                    if rank < len(row) and row[rank][0] not in seen:
+                        seen.add(row[rank][0])
+                        similar_table_data.append(row[rank])
             similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"   [STEP 2a] Done: {len(per_table_results)} tables | merge: {len(similar_table_data)}")
+            print(f"   [STEP 2a] Done: {len(per_table_results)} tables | filter→top{k_per_table}→merge: {len(similar_table_data)}")
         else:
             print(f"🔎 Searching for similar tables (with classification filtering)...")
             sys.stdout.flush()
@@ -1437,29 +1475,8 @@ def search_card2tab2card_by_type(
             """
             filename_results = con.execute(filename_query).fetchall()
             tableid_to_filename = {tid: filename for tid, filename in filename_results}
-            # Filter: self + s2orc, then take topk
-            if use_per_table_search and per_table_results:
-                similar_table_data_filtered = []
-                n_self, n_s2orc, n_generic = 0, 0, 0
-                for tid, src_basename in similar_table_data:
-                    if tid not in tableid_to_filename:
-                        continue
-                    fbase = os.path.basename(str(tableid_to_filename[tid]))
-                    if fbase == src_basename:
-                        n_self += 1
-                        continue
-                    if _classify_table_source_by_basename(fbase) == "llm":
-                        n_s2orc += 1
-                        continue
-                    if _is_generic_table(fbase):
-                        n_generic += 1
-                        continue
-                    similar_table_data_filtered.append((tid, src_basename))
-                if n_self or n_s2orc or n_generic:
-                    print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc}, generic={n_generic}")
-                similar_table_data_filtered = similar_table_data_filtered[:max_final_tables]
-                similar_table_ids = [tid for tid, _ in similar_table_data_filtered]
-            else:
+            # Per-table path: already filtered+topk+merge in Step 2, no post-filter
+            if not (use_per_table_search and per_table_results):
                 seed_basenames = {os.path.basename(str(t)) for t in query_tables}
                 filtered = [tid for tid in similar_table_ids if tid in tableid_to_filename
                     and os.path.basename(str(tableid_to_filename[tid])) not in seed_basenames
