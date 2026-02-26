@@ -632,6 +632,8 @@
             Object.keys(card2tab2cardResults).forEach((type, idx) => {
                 card2tab2cardIds[type] = 'card2tab2card-' + type + '-' + Date.now() + '-' + idx;
             });
+            // All table search types that actually have card2tab2card results for this job
+            const availableTableSearchTypes = Object.keys(card2tab2cardResults).filter(t => !!card2tab2cardResults[t]);
             
             // Get Card2Card results for all modes
             const card2cardAllModes = results.card2card_all_modes || {};
@@ -834,7 +836,7 @@
             html += `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 16px;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
-                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Model Search and Table Search are saved separately. Switch via dropdowns to view different saved results. One <strong>Integrated</strong> button runs both.</p>
+                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Model Search and Table Search are saved separately. Switch via dropdowns to view different saved results. <strong>Integrated</strong> runs the current combination; <strong>Run all (Table Search)</strong> precomputes all table search types in parallel.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="union">Union</option>
@@ -845,6 +847,9 @@
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
                         <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
+                        <button id="integrationRunAllTableBtn" onclick="runAllTableIntegrations('${results.job_id || currentJobId}', ${JSON.stringify(['single_column','keyword','by_type','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'])})" style="padding: 6px 10px; font-size: 12px; font-weight: 500; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;" title="Run table integrations for all search types in parallel and save them under this job.">
+                            Run all (Table Search)
+                        </button>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
                         <div style="margin-bottom: 16px; padding: 10px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #007bff;">
@@ -1401,6 +1406,34 @@
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Integrated';
+            }
+        }
+
+        async function runAllTableIntegrations(jobId, allSearchTypes) {
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
+            const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
+            const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
+            const btn = document.getElementById('integrationRunAllTableBtn');
+            if (!btn) return;
+            const searchTypes = (allSearchTypes || []).length ? allSearchTypes : ['single_column', 'keyword', 'by_type'];
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = '⏳ Running all...';
+            try {
+                await Promise.all(searchTypes.map(st => fetch('{{BACKEND_URL}}/api/integrate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ job_id: jobId, search_type: st, integration_type: integrationType, k, max_models: maxModels, tables_source: tablesSource })
+                }).then(r => r.json()).catch(() => null)));
+                btn.textContent = '✅ All done';
+                setTimeout(() => { btn.textContent = originalText; }, 2000);
+            } catch (e) {
+                console.error('runAllTableIntegrations error', e);
+                btn.textContent = '❌ Error';
+                setTimeout(() => { btn.textContent = originalText; }, 2000);
+            } finally {
+                btn.disabled = false;
             }
         }
         

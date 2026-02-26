@@ -1106,8 +1106,8 @@ def integrate_tables_from_model_search_results(
                         model_to_table_paths[model_id].append(path)
                 models_with_tables.append(model_id)
                 print(f"  ✅ Model {model_id}: {len(basenames)} tables")
-                else:
-                    models_without_tables.append(model_id)
+            else:
+                models_without_tables.append(model_id)
                 print(f"  ⚠️  Model {model_id}: No tables found")
         print(f"   DuckDB query elapsed: {time.time() - t_duck:.2f}s")
     else:
