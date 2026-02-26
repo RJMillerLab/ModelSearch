@@ -570,21 +570,50 @@ def search_card2tab2card(
                                 break
                     if not csv_path:
                         return None
-                    df_temp = pd.read_csv(csv_path, nrows=0)
-                    headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
-                    tquery = headers or [os.path.basename(str(table_path))]
-                    if st == "single_column":
-                        df_read = pd.read_csv(csv_path, nrows=100)
-                        if len(df_read) > 0 and len(df_read.columns) > 0:
-                            tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
-                    if not tquery:
-                        return None
+
+                    # Build per-table query for different search types
+                    tquery: Any
+                    # Types that require a full DataFrame query (per tab2tab.search_table2table contract)
+                    df_required_types = {
+                        "multi_column",
+                        "unionable",
+                        "complex",
+                        "correlation",
+                        "imputation",
+                        "augmentation",
+                        "dependent_data",
+                        "feature_for_ml",
+                        "multi_column_collinearity",
+                        "negative_example",
+                    }
+                    if st in df_required_types:
+                        # Use the full table as query DataFrame (consistent with tab2tab CLI behaviour)
+                        tquery = pd.read_csv(csv_path)
+                        if tquery is None or tquery.empty:
+                            return None
+                    else:
+                        # Header-driven query (keyword / single_column)
+                        df_temp = pd.read_csv(csv_path, nrows=0)
+                        headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
+                        tquery = headers or [os.path.basename(str(table_path))]
+                        if st == "single_column":
+                            df_read = pd.read_csv(csv_path, nrows=100)
+                            if len(df_read) > 0 and len(df_read.columns) > 0:
+                                tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
+                        if not tquery:
+                            return None
                     t0 = time.time()
                     ids = search_table2table(tquery, st, k_request, db_path=db)
                     elapsed = time.time() - t0
                     bn = os.path.basename(str(table_path))
                     ts = time.strftime("%H:%M:%S")
-                    print(f"   [Table {ti+1}] @{ts} INPUT={bn} | query_len={len(tquery)} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
+                    # For DataFrame queries, report (rows, cols); otherwise use len(query)
+                    if isinstance(tquery, pd.DataFrame):
+                        q_rows, q_cols = tquery.shape
+                        q_info = f"{q_rows}x{q_cols}"
+                    else:
+                        q_info = str(len(tquery))
+                    print(f"   [Table {ti+1}] @{ts} INPUT={bn} | query_len={q_info} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
                     sys.stdout.flush()
                     return (ids, bn) if ids else None
                 except Exception as e:
