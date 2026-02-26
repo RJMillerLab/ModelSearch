@@ -1494,6 +1494,18 @@
                 }
                 await Promise.allSettled(tasks);
                 btn.textContent = '✅ All done';
+                // Load saved runs from server so switching dropdowns shows them without reload
+                try {
+                    const r = await fetch('{{BACKEND_URL}}/api/integration-runs/' + jobId);
+                    const apiData = await r.json();
+                    if (apiData.status === 'success') {
+                        const modelRuns = apiData.model_search_runs || [];
+                        const tableRuns = apiData.table_search_runs || [];
+                        window.__modelSearchRuns = modelRuns;
+                        window.__tableSearchRuns = tableRuns;
+                        syncBothIntegrationDisplays();
+                    }
+                } catch (e) { console.warn('Run all: could not refresh integration runs', e); }
                 setTimeout(() => { btn.textContent = originalText; }, 2000);
             } catch (e) {
                 console.error('runAllTableIntegrations error', e);
