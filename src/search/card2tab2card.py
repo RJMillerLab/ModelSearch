@@ -14,7 +14,8 @@ import os
 import re
 import sys
 import time
-from typing import List, Set, Dict, Optional, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Set, Dict, Optional, Any, Tuple
 import argparse
 import pandas as pd
 
@@ -388,10 +389,11 @@ def search_card2tab2card(
             print(f"✅ Results saved to {output_json}")
         return []
     
-    # Step 1: Query -> ModelCard -> Tables (Part of Pipeline)
     print(f"\n{'='*60}")
-    print(f"📊 Step 1: Query -> ModelCard -> Tables (Part of Pipeline)")
+    print(f"[Card2Tab2Card] INPUT: model_id={model_id} search_type={search_type} k={table_search_k} | OUTPUT: {output_json}")
     print(f"{'='*60}")
+    # Step 1: Query -> ModelCard -> Tables (Part of Pipeline)
+    print(f"[STEP 1] INPUT: model_id={model_id} | OUTPUT: query_tables (for Step 2)")
     print(f"✅ Query Model ID: {model_id}")
     print(f"✅ Found {len(query_tables)} tables for model {model_id}")
     print(f"📝 Sample tables (showing first 2):")
@@ -528,65 +530,88 @@ def search_card2tab2card(
         print(f"✅ Got search_table2table function")
         sys.stdout.flush()
         if use_per_table_search:
-            # Per-table k = ceil(table_topk / seed_table_count), min 1 per table
+            # Over-fetch: request more than needed, then filter (self + s2orc), then return top table_search_k
             num_seed_tables = len(query_tables[:20])
             k_per_table = max(1, math.ceil(table_search_k / num_seed_tables))
-            print(f"📊 TopK: seed_tables={num_seed_tables} | table_topk={table_search_k} → per_table_k=ceil({table_search_k}/{num_seed_tables})={k_per_table}")
-            print(f"🔎 Searching per table (each equivalent), merge → global top-{table_search_k}...")
+            k_request = max(k_per_table * 2 + 2, k_per_table + 5)  # Over-fetch for self + s2orc filter
+            merge_target = table_search_k * 2  # Merge more, then filter, then take topk
+            print(f"📊 TopK: seed_tables={num_seed_tables} | table_topk={table_search_k} → per_table_k={k_per_table} | request={k_request} (over-fetch) | merge_target={merge_target}")
+            print(f"🔎 [STEP 2a] Parallel per-table search (each table independent read-only), then merge+filter+topk")
             sys.stdout.flush()
-            per_table_results: List[List[int]] = []
-            for ti, table_path in enumerate(query_tables[:20]):  # Cap to avoid too many searches
+
+            def _search_one_table(args: Tuple[int, str, str, str]) -> Optional[Tuple[List[int], str]]:
+                """Run one table search. Returns (ids, query_basename) or None. Used for parallel."""
+                ti, table_path, st, db = args
                 try:
                     csv_path = None
                     if os.path.exists(str(table_path)):
                         csv_path = str(table_path)
                     else:
-                        basename = os.path.basename(str(table_path))
+                        bn = os.path.basename(str(table_path))
                         for base_dir in [
                             "data_citationlake/processed/deduped_hugging_csvs",
                             "data_citationlake/processed/deduped_github_csvs",
                             "data_citationlake/processed/tables_output",
                         ]:
-                            full_path = os.path.join(base_dir, basename)
-                            if os.path.exists(full_path):
-                                csv_path = full_path
+                            fp = os.path.join(base_dir, bn)
+                            if os.path.exists(fp):
+                                csv_path = fp
                                 break
                     if not csv_path:
-                        continue
+                        return None
                     df_temp = pd.read_csv(csv_path, nrows=0)
-                    headers = [str(col).lower().strip() for col in df_temp.columns]
-                    headers = [h for h in headers if h]
+                    headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
                     tquery = headers or [os.path.basename(str(table_path))]
-                    if search_type == "single_column":
+                    if st == "single_column":
                         df_read = pd.read_csv(csv_path, nrows=100)
                         if len(df_read) > 0 and len(df_read.columns) > 0:
                             tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
                     if not tquery:
-                        continue
-                    ids = search_table2table(tquery, search_type, k_per_table, db_path=db_path)
-                    if ids:
-                        per_table_results.append(ids)
+                        return None
+                    t0 = time.time()
+                    ids = search_table2table(tquery, st, k_request, db_path=db)
+                    elapsed = time.time() - t0
+                    bn = os.path.basename(str(table_path))
+                    print(f"   [Table {ti+1}] INPUT={bn} | query_len={len(tquery)} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
+                    sys.stdout.flush()
+                    return (ids, bn) if ids else None
                 except Exception as e:
-                    print(f"   ⚠️  Table {ti+1} ({os.path.basename(str(table_path))}): {e}")
-                    continue
-            # Round-robin merge: t1_r1, t2_r1, ..., t1_r2, t2_r2, ...; dedupe, take global top-k
+                    print(f"   ⚠️  [Table {ti+1}] {os.path.basename(str(table_path))}: {e}")
+                    return None
+
+            tables_to_search = [(ti, tp, search_type, db_path) for ti, tp in enumerate(query_tables[:20])]
+            max_workers = min(8, len(tables_to_search))  # Parallel table search
+            results_by_ti: Dict[int, Tuple[List[int], str]] = {}
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = {ex.submit(_search_one_table, a): a[0] for a in tables_to_search}
+                for fut in as_completed(futures):
+                    ti = futures[fut]
+                    res = fut.result()
+                    if res:
+                        results_by_ti[ti] = res
+            per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
+            print(f"   [STEP 2a] Done: {len(per_table_results)} tables searched in parallel")
+
+            # Round-robin merge (over-fetch), then filter self+s2orc, then take topk
             seen: Set[int] = set()
-            similar_table_ids = []
-            max_len = max(len(r) for r in per_table_results) if per_table_results else 0
+            similar_table_data: List[Tuple[int, str]] = []
+            max_len = max(len(r[0]) for r in per_table_results) if per_table_results else 0
             for rank in range(max_len):
-                for row in per_table_results:
-                    if rank < len(row) and row[rank] not in seen:
-                        seen.add(row[rank])
-                        similar_table_ids.append(row[rank])
-                        if len(similar_table_ids) >= table_search_k:
+                for ids, src_basename in per_table_results:
+                    if rank < len(ids) and ids[rank] not in seen:
+                        seen.add(ids[rank])
+                        similar_table_data.append((ids[rank], src_basename))
+                        if len(similar_table_data) >= merge_target:
                             break
-                if len(similar_table_ids) >= table_search_k:
+                if len(similar_table_data) >= merge_target:
                     break
-            similar_table_ids = similar_table_ids[:table_search_k]
-            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables, global top-{table_search_k})")
+            print(f"   [STEP 2b] Merge: {len(similar_table_data)} (before filter)")
+            similar_table_ids = [tid for tid, _ in similar_table_data]
+            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables), will filter self+s2orc → top {table_search_k}")
         else:
-            print(f"🔎 Searching for similar tables...")
-            print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}, db_path: {db_path}")
+            k_overfetch = table_search_k * 2  # Over-fetch, then filter, then topk
+            print(f"🔎 [STEP 2] Single-query search: INPUT=query | k_request={k_overfetch} | OUTPUT=merged")
+            print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}")
             sys.stdout.flush()
             # Handle correlation search specially - need to extract source and target columns
             if search_type == "correlation" and isinstance(query, pd.DataFrame):
@@ -596,14 +621,14 @@ def search_card2tab2card(
                     target_col = query[numeric_cols[0]].tolist()
                     print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
                     similar_table_ids = search_table2table(
-                        query, search_type, table_search_k, db_path=db_path,
+                        query, search_type, k_overfetch, db_path=db_path,
                         source_column=source_col, target_column=target_col
                     )
                 else:
                     print(f"⚠️  No numeric column found for correlation search, skipping...")
                     similar_table_ids = []
             else:
-                similar_table_ids = search_table2table(query, search_type, table_search_k, db_path=db_path)
+                similar_table_ids = search_table2table(query, search_type, k_overfetch, db_path=db_path)
             print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
         sys.stdout.flush()
         
@@ -677,7 +702,7 @@ def search_card2tab2card(
     
     # Step 3: Retrieved Tables -> Corresponding ModelCards
     print(f"\n{'='*60}")
-    print(f"🔄 Step 3: Retrieved Tables -> Corresponding ModelCards")
+    print(f"[STEP 3] INPUT: {len(similar_table_ids)} retrieved table IDs | OUTPUT: model_ids (from relationship)")
     print(f"{'='*60}")
     print(f"✅ Mapping {len(similar_table_ids)} retrieved tables to model cards...")
     
@@ -716,22 +741,38 @@ def search_card2tab2card(
         """
         filename_results = con.execute(filename_query).fetchall()
         tableid_to_filename = {tid: filename for tid, filename in filename_results}
-        # Filter out seed tables (self-matches): when we search with table1, don't include table1 in results
-        seed_basenames = {os.path.basename(str(t)) for t in query_tables}
-        n_before = len(similar_table_ids)
-        filtered_similar_table_ids = []
-        for tid in similar_table_ids:
-            if tid not in tableid_to_filename:
-                continue
-            fname = tableid_to_filename[tid]
-            fbase = os.path.basename(str(fname))
-            if fbase in seed_basenames:
-                continue  # skip seed table (self-match)
-            filtered_similar_table_ids.append(tid)
-        similar_table_ids = filtered_similar_table_ids
-        n_filtered = n_before - len(similar_table_ids)
-        if n_filtered > 0:
-            print(f"ℹ️  Filtered out {n_filtered} seed table(s) (self-match)")
+        # Filter: (1) per-table self, (2) s2orc/llm from retrieved; then take top table_search_k
+        if use_per_table_search and per_table_results:
+            similar_table_data_filtered = []
+            n_self, n_s2orc = 0, 0
+            for tid, src_basename in similar_table_data:
+                if tid not in tableid_to_filename:
+                    continue
+                fname = tableid_to_filename[tid]
+                fbase = os.path.basename(str(fname))
+                if fbase == src_basename:
+                    n_self += 1
+                    continue  # skip self
+                if _classify_table_source_by_basename(fbase) == "llm":
+                    n_s2orc += 1
+                    continue  # skip s2orc/llm from retrieved
+                similar_table_data_filtered.append((tid, src_basename))
+            if n_self or n_s2orc:
+                print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc} | remain={len(similar_table_data_filtered)}")
+            similar_table_data = similar_table_data_filtered[:table_search_k]  # Take top k after filter
+            similar_table_ids = [tid for tid, _ in similar_table_data]
+            print(f"   [STEP 2c] Final: {len(similar_table_ids)} tables (top {table_search_k})")
+        else:
+            seed_basenames = {os.path.basename(str(t)) for t in query_tables}
+            filtered = []
+            for tid in similar_table_ids:
+                if tid not in tableid_to_filename:
+                    continue
+                fbase = os.path.basename(str(tableid_to_filename[tid]))
+                if fbase in seed_basenames or _classify_table_source_by_basename(fbase) == "llm":
+                    continue
+                filtered.append(tid)
+            similar_table_ids = filtered[:table_search_k]
         # Preserve Tab2Tab relevance order: iterate, dedupe by filename
         seen_filenames = set()
         retrieved_filenames = []
@@ -1242,62 +1283,77 @@ def search_card2tab2card_by_type(
         if use_per_table_search:
             num_seed_tables = len(query_tables[:20])
             k_per_table = max(1, math.ceil(table_search_k / num_seed_tables))
-            print(f"📊 TopK: seed_tables={num_seed_tables} | table_topk={table_search_k} → per_table_k=ceil({table_search_k}/{num_seed_tables})={k_per_table}")
-            print(f"🔎 Searching per table (each equivalent, with classification), merge → global top-{table_search_k}...")
+            k_request = max(k_per_table * 2 + 2, k_per_table + 5)
+            merge_target = table_search_k * 2
+            print(f"📊 TopK: seed_tables={num_seed_tables} | request={k_request} (over-fetch) | merge_target={merge_target}")
+            print(f"🔎 [STEP 2a] Parallel per-table search (by_type)...")
             sys.stdout.flush()
-            per_table_results = []
-            for ti, table_path in enumerate(query_tables[:20]):
+
+            def _search_one_by_type(args):
+                ti, table_path, st, db, cj, cl = args
                 try:
                     csv_path = None
                     if os.path.exists(str(table_path)):
                         csv_path = str(table_path)
                     else:
-                        basename = os.path.basename(str(table_path))
+                        bn = os.path.basename(str(table_path))
                         for base_dir in [
                             "data_citationlake/processed/deduped_hugging_csvs",
                             "data_citationlake/processed/deduped_github_csvs",
                             "data_citationlake/processed/tables_output",
                         ]:
-                            full_path = os.path.join(base_dir, basename)
-                            if os.path.exists(full_path):
-                                csv_path = full_path
+                            fp = os.path.join(base_dir, bn)
+                            if os.path.exists(fp):
+                                csv_path = fp
                                 break
                     if not csv_path:
-                        continue
+                        return None
                     df_temp = pd.read_csv(csv_path, nrows=0)
-                    headers = [str(col).lower().strip() for col in df_temp.columns]
-                    headers = [h for h in headers if h]
+                    headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
                     tquery = headers or [os.path.basename(str(table_path))]
-                    if search_type == "single_column":
+                    if st == "single_column":
                         df_read = pd.read_csv(csv_path, nrows=100)
                         if len(df_read) > 0 and len(df_read.columns) > 0:
                             tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
                     if not tquery:
-                        continue
-                    ids = search_table2table_by_type(
-                        tquery, search_type, k_per_table, db_path=db_path,
-                        classification_json=classification_json,
-                        classifications=classifications,
-                    )
-                    if ids:
-                        per_table_results.append(ids)
+                        return None
+                    t0 = time.time()
+                    ids = search_table2table_by_type(tquery, st, k_request, db_path=db,
+                        classification_json=cj, classifications=cl)
+                    elapsed = time.time() - t0
+                    bn = os.path.basename(str(table_path))
+                    print(f"   [Table {ti+1}] INPUT={bn} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
+                    sys.stdout.flush()
+                    return (ids, bn) if ids else None
                 except Exception as e:
-                    print(f"   ⚠️  Table {ti+1} ({os.path.basename(str(table_path))}): {e}")
-                    continue
+                    print(f"   ⚠️  [Table {ti+1}] {os.path.basename(str(table_path))}: {e}")
+                    return None
+
+            tables_to_search = [(ti, tp, search_type, db_path, classification_json, classifications) for ti, tp in enumerate(query_tables[:20])]
+            max_workers = min(8, len(tables_to_search))
+            results_by_ti = {}
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = {ex.submit(_search_one_by_type, a): a[0] for a in tables_to_search}
+                for fut in as_completed(futures):
+                    ti = futures[fut]
+                    res = fut.result()
+                    if res:
+                        results_by_ti[ti] = res
+            per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
             seen = set()
-            similar_table_ids = []
-            max_len = max(len(r) for r in per_table_results) if per_table_results else 0
+            similar_table_data = []
+            max_len = max(len(r[0]) for r in per_table_results) if per_table_results else 0
             for rank in range(max_len):
-                for row in per_table_results:
-                    if rank < len(row) and row[rank] not in seen:
-                        seen.add(row[rank])
-                        similar_table_ids.append(row[rank])
-                        if len(similar_table_ids) >= table_search_k:
+                for ids, src_basename in per_table_results:
+                    if rank < len(ids) and ids[rank] not in seen:
+                        seen.add(ids[rank])
+                        similar_table_data.append((ids[rank], src_basename))
+                        if len(similar_table_data) >= merge_target:
                             break
-                if len(similar_table_ids) >= table_search_k:
+                if len(similar_table_data) >= merge_target:
                     break
-            similar_table_ids = similar_table_ids[:table_search_k]
-            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables, global top-{table_search_k})")
+            similar_table_ids = [tid for tid, _ in similar_table_data]
+            print(f"   [STEP 2a] Done: {len(per_table_results)} tables | merge: {len(similar_table_data)}")
         else:
             print(f"🔎 Searching for similar tables (with classification filtering)...")
             sys.stdout.flush()
@@ -1359,22 +1415,29 @@ def search_card2tab2card_by_type(
             """
             filename_results = con.execute(filename_query).fetchall()
             tableid_to_filename = {tid: filename for tid, filename in filename_results}
-            # Filter out seed tables (self-matches): when we search with table1, don't include table1 in results
-            seed_basenames = {os.path.basename(str(t)) for t in query_tables}
-            n_before = len(similar_table_ids)
-            filtered_similar_table_ids = []
-            for tid in similar_table_ids:
-                if tid not in tableid_to_filename:
-                    continue
-                fname = tableid_to_filename[tid]
-                fbase = os.path.basename(str(fname))
-                if fbase in seed_basenames:
-                    continue  # skip seed table (self-match)
-                filtered_similar_table_ids.append(tid)
-            similar_table_ids = filtered_similar_table_ids
-            n_filtered = n_before - len(similar_table_ids)
-            if n_filtered > 0:
-                print(f"ℹ️  Filtered out {n_filtered} seed table(s) (self-match)")
+            # Filter: self + s2orc, then take topk
+            if use_per_table_search and per_table_results:
+                similar_table_data_filtered = []
+                n_self, n_s2orc = 0, 0
+                for tid, src_basename in similar_table_data:
+                    if tid not in tableid_to_filename:
+                        continue
+                    fbase = os.path.basename(str(tableid_to_filename[tid]))
+                    if fbase == src_basename:
+                        n_self += 1
+                        continue
+                    if _classify_table_source_by_basename(fbase) == "llm":
+                        n_s2orc += 1
+                        continue
+                    similar_table_data_filtered.append((tid, src_basename))
+                if n_self or n_s2orc:
+                    print(f"   [STEP 2c] Filter: self={n_self}, s2orc={n_s2orc}")
+                similar_table_data_filtered = similar_table_data_filtered[:table_search_k]
+                similar_table_ids = [tid for tid, _ in similar_table_data_filtered]
+            else:
+                seed_basenames = {os.path.basename(str(t)) for t in query_tables}
+                filtered = [tid for tid in similar_table_ids if tid in tableid_to_filename and os.path.basename(str(tableid_to_filename[tid])) not in seed_basenames and _classify_table_source_by_basename(os.path.basename(str(tableid_to_filename[tid]))) != "llm"]
+                similar_table_ids = filtered[:table_search_k]
             # Preserve Tab2Tab relevance order: iterate, dedupe by filename
             seen_filenames = set()
             retrieved_filenames = []
