@@ -508,7 +508,9 @@ def _run_pipeline_body(
         return (st, rc, out_path, out, err, elapsed)
 
     card2card_modes = ["dense", "sparse", "hybrid"]
-    card2tab2card_types = ["keyword", "single_column"]  # CLI supports these without CSV
+    # Table-search modes to actually run in the pipeline.
+    # keyword / single_column were always enabled; unionable is now also run (uses model's tables as query when no CSV is provided).
+    card2tab2card_types = ["keyword", "single_column", "unionable"]
     # Add by_type if requested (from frontend checkbox or backend --use-by-type)
     if use_by_type or USE_BY_TYPE:
         card2tab2card_types = list(card2tab2card_types) + ["by_type"]
