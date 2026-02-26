@@ -16,7 +16,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
 import math
@@ -667,6 +667,48 @@ def _run_pipeline_body(
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
+
+# ----- Optional UI (single-server deploy, e.g. Hugging Face Spaces) -----
+# When SERVE_UI=1 or running on port 7860, backend serves the frontend so one port is enough.
+def _serve_ui():
+    """Serve index and static assets with BACKEND_URL='' (same-origin API)."""
+    from src.demo.frontend import RAW_HTML_TEMPLATE
+    html = RAW_HTML_TEMPLATE.replace("{{BACKEND_URL}}", "")
+    return render_template_string(html)
+
+
+@app.route("/")
+def index():
+    if os.environ.get("SERVE_UI", "").strip().lower() in ("1", "true", "yes"):
+        return _serve_ui()
+    return jsonify({"message": "ModelSearch API. Set SERVE_UI=1 to serve the demo UI.", "docs": "/api/health"})
+
+
+@app.route("/static/app.js")
+def serve_app_js():
+    if os.environ.get("SERVE_UI", "").strip().lower() not in ("1", "true", "yes"):
+        return jsonify({"error": "Set SERVE_UI=1 to serve UI"}), 404
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    app_js_path = os.path.join(static_dir, "app.js")
+    if not os.path.isfile(app_js_path):
+        return jsonify({"error": "app.js not found"}), 404
+    with open(app_js_path, "r", encoding="utf-8") as f:
+        content = f.read().replace("{{BACKEND_URL}}", "")
+    return Response(content, mimetype="application/javascript")
+
+
+@app.route("/static/fig/<path:filename>")
+def serve_fig(filename):
+    if os.environ.get("SERVE_UI", "").strip().lower() not in ("1", "true", "yes"):
+        return jsonify({"error": "Set SERVE_UI=1 to serve UI"}), 404
+    fig_dir = os.path.join(REPO_ROOT, "fig")
+    if not os.path.isdir(fig_dir):
+        return jsonify({"error": "fig not found"}), 404
+    file_path = os.path.join(fig_dir, filename)
+    if not os.path.isfile(file_path):
+        return jsonify({"error": "file not found"}), 404
+    return send_from_directory(fig_dir, filename)
 
 
 @app.route("/api/search", methods=["POST"])

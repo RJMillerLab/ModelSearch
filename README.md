@@ -1,6 +1,22 @@
+---
+title: ModelSearch Demo
+emoji: 🔍
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+---
+
 # ModelSearch Demo
 
 A comprehensive model search system that combines multiple retrieval methods, table integration, and LLM-based evaluation/QA.
+
+## Deploy on Hugging Face Spaces
+
+1. Create a new Space at [huggingface.co/new-space](https://huggingface.co/new-space), choose **Docker** as SDK.
+2. Push this repo (or copy `Dockerfile` and ensure `README.md` has the YAML block above with `sdk: docker`, `app_port: 7860`).
+3. The container runs the backend with `SERVE_UI=1` so the demo UI and API are served on one port (7860).
+4. **Data**: The pipeline expects `data/` (e.g. `card2card_embeddings.npz`, `card2card.faiss`, `modellake.db`). For a minimal demo you can add a small dataset to the Space or use [persistent storage](https://huggingface.co/docs/hub/spaces-storage) and upload files at runtime.
 
 ## Implementation Overview
 

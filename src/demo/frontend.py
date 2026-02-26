@@ -21,7 +21,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 # Backend API URL
 BACKEND_URL = "http://localhost:5002"
 
-HTML_TEMPLATE = """
+# Raw template with {{BACKEND_URL}} placeholder (for single-server deploy; backend uses this with "").
+RAW_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -439,7 +440,8 @@ HTML_TEMPLATE = """
 
 </body>
 </html>
-""".replace('{{BACKEND_URL}}', BACKEND_URL)
+"""
+HTML_TEMPLATE = RAW_HTML_TEMPLATE.replace('{{BACKEND_URL}}', BACKEND_URL)
 
 
 @app.route('/')
