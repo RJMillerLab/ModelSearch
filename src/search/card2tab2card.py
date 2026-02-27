@@ -21,6 +21,7 @@ import pandas as pd
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+from src.utils.table_loader import resolve_table_path
 
 # Add CitationLake to path for get_from functionality
 citationlake_path = os.path.join(os.path.dirname(__file__), '../../CitationLake')
@@ -433,22 +434,10 @@ def search_card2tab2card(
             for table_path in query_tables[:10]:  # Limit to first 10 tables
                 try:
                     # Try to find the CSV file
-                    csv_path = None
                     if os.path.exists(table_path):
                         csv_path = table_path
                     else:
-                        # Try common locations
-                        basename = os.path.basename(str(table_path))
-                        for base_dir in [
-                            "data_citationlake/processed/deduped_hugging_csvs",
-                            "data_citationlake/processed/deduped_github_csvs",
-                            "data_citationlake/processed/tables_output"
-                        ]:
-                            full_path = os.path.join(base_dir, basename)
-                            if os.path.exists(full_path):
-                                csv_path = full_path
-                                break
-                    
+                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
                     if csv_path:
                         df_temp = pd.read_csv(csv_path, nrows=0)
                         headers = [str(col).lower().strip() for col in df_temp.columns]
@@ -466,20 +455,10 @@ def search_card2tab2card(
             all_headers = []
             for table_path in query_tables[:10]:
                 try:
-                    csv_path = None
                     if os.path.exists(table_path):
                         csv_path = table_path
                     else:
-                        basename = os.path.basename(str(table_path))
-                        for base_dir in [
-                            "data_citationlake/processed/deduped_hugging_csvs",
-                            "data_citationlake/processed/deduped_github_csvs",
-                            "data_citationlake/processed/tables_output"
-                        ]:
-                            full_path = os.path.join(base_dir, basename)
-                            if os.path.exists(full_path):
-                                csv_path = full_path
-                                break
+                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
                     if csv_path:
                         df_temp = pd.read_csv(csv_path, nrows=0)
                         headers = [str(col).lower().strip() for col in df_temp.columns]
@@ -558,16 +537,7 @@ def search_card2tab2card(
                     if os.path.exists(str(table_path)):
                         csv_path = str(table_path)
                     else:
-                        bn = os.path.basename(str(table_path))
-                        for base_dir in [
-                            "data_citationlake/processed/deduped_hugging_csvs",
-                            "data_citationlake/processed/deduped_github_csvs",
-                            "data_citationlake/processed/tables_output",
-                        ]:
-                            fp = os.path.join(base_dir, bn)
-                            if os.path.exists(fp):
-                                csv_path = fp
-                                break
+                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
                     if not csv_path:
                         return None
 
@@ -1278,21 +1248,10 @@ def search_card2tab2card_by_type(
             all_headers = []
             for table_path in query_tables[:10]:  # Limit to first 10 tables
                 try:
-                    csv_path = None
                     if os.path.exists(table_path):
                         csv_path = table_path
                     else:
-                        basename = os.path.basename(str(table_path))
-                        for base_dir in [
-                            "data_citationlake/processed/deduped_hugging_csvs",
-                            "data_citationlake/processed/deduped_github_csvs",
-                            "data_citationlake/processed/tables_output"
-                        ]:
-                            full_path = os.path.join(base_dir, basename)
-                            if os.path.exists(full_path):
-                                csv_path = full_path
-                                break
-                    
+                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
                     if csv_path:
                         df_temp = pd.read_csv(csv_path, nrows=0)
                         headers = [str(col).lower().strip() for col in df_temp.columns]
@@ -1346,20 +1305,10 @@ def search_card2tab2card_by_type(
             def _search_one_by_type(args):
                 ti, table_path, st, db, cj, cl = args
                 try:
-                    csv_path = None
                     if os.path.exists(str(table_path)):
                         csv_path = str(table_path)
                     else:
-                        bn = os.path.basename(str(table_path))
-                        for base_dir in [
-                            "data_citationlake/processed/deduped_hugging_csvs",
-                            "data_citationlake/processed/deduped_github_csvs",
-                            "data_citationlake/processed/tables_output",
-                        ]:
-                            fp = os.path.join(base_dir, bn)
-                            if os.path.exists(fp):
-                                csv_path = fp
-                                break
+                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
                     if not csv_path:
                         return None
                     df_temp = pd.read_csv(csv_path, nrows=0)

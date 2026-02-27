@@ -19,11 +19,8 @@ TABLE_SEARCH_LOG_KEYWORDS = ("tab2tab",)
 
 
 def csv_search_dirs() -> List[Path]:
-    """Dirs to search for CSV by basename: data_citationlake/processed, data/raw, ../ModelTables/data/processed."""
+    """Extra dirs for CSV search (standard three are in utils.table_loader). Used by find_csv_file fallback."""
     dirs: List[Path] = [
-        _REPO_ROOT / "data_citationlake/processed/deduped_hugging_csvs",
-        _REPO_ROOT / "data_citationlake/processed/deduped_github_csvs",
-        _REPO_ROOT / "data_citationlake/processed/tables_output",
         _REPO_ROOT / "data_citationlake/processed",
         _REPO_ROOT / "data/raw",
     ]
@@ -37,12 +34,19 @@ def csv_search_dirs() -> List[Path]:
 
 
 def find_csv_file(filename: str) -> Optional[str]:
-    """Resolve CSV path by basename under repo, data_citationlake/processed, and ../ModelTables/data/processed."""
+    """Resolve CSV path: try utils.resolve_table_path first, then extra dirs (data/raw, ModelTables)."""
     basename = os.path.basename(filename)
+    try:
+        from src.utils.table_loader import resolve_table_path
+    except ImportError:
+        from utils.table_loader import resolve_table_path
+    p = resolve_table_path(basename)
+    if p:
+        return p
     for d in csv_search_dirs():
-        p = d / basename
-        if p.exists():
-            return str(p)
+        path = d / basename
+        if path.exists():
+            return str(path)
     if os.path.exists(filename):
         return filename
     return None

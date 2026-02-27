@@ -397,39 +397,21 @@ def classify_table_from_db(
 
 
 def _find_csv_file(filename: str) -> Optional[str]:
-    """
-    Try to find the CSV file given a filename/basename.
-    
-    Args:
-        filename: Filename or basename to search for
-    
-    Returns:
-        Full path to CSV file or None if not found
-    """
+    """Find CSV by basename: use utils.resolve_table_path, then data/raw, then path as-is."""
+    try:
+        from src.utils.table_loader import resolve_table_path
+    except ImportError:
+        from utils.table_loader import resolve_table_path
     basename = os.path.basename(filename)
-    
-    # Common locations to search
-    search_dirs = [
-        "data_citationlake/processed/deduped_hugging_csvs",
-        "data_citationlake/processed/deduped_github_csvs",
-        "data_citationlake/processed/tables_output",
-        "data/raw",
-    ]
-    
-    # Also try relative to project root
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-    
-    for search_dir in search_dirs:
-        full_dir = os.path.join(project_root, search_dir)
-        if os.path.exists(full_dir):
-            full_path = os.path.join(full_dir, basename)
-            if os.path.exists(full_path):
-                return full_path
-    
-    # Try the filename as-is if it's already a full path
+    p = resolve_table_path(basename)
+    if p:
+        return p
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    data_raw = os.path.join(project_root, "data", "raw", basename)
+    if os.path.exists(data_raw):
+        return data_raw
     if os.path.exists(filename):
         return filename
-    
     return None
 
 
