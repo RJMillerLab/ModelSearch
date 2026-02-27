@@ -1469,8 +1469,14 @@ def main():
                 print(f"  {i}. {model_id}")
 
         elapsed = time.time() - start_time
-        from src.utils import get_device
-        print(f"\nTotal time: {elapsed:.2f}s (device: {get_device()})")
+        # Inline device detection so we don't depend on src.utils (subprocess may have different path)
+        def _device_str():
+            try:
+                import torch
+                return "cuda" if torch.cuda.is_available() else "cpu"
+            except Exception:
+                return "cpu"
+        print(f"\nTotal time: {elapsed:.2f}s (device: {_device_str()})")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

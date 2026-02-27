@@ -979,9 +979,13 @@ To create modellake.db, use:
     with open(args.output, 'w', encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
     print(f"✅ Results saved to {args.output}")
-    from src.utils import get_device
-    dev = get_device()
-    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {dev})")
+    def _get_device():
+        try:
+            import torch
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
+    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {_get_device()})")
 
 
 if __name__ == '__main__':

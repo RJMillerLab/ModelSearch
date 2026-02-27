@@ -41,14 +41,19 @@ from sentence_transformers import SentenceTransformer
 import pandas as pd
 from typing import Tuple, List
 
-from src.utils import get_device
+def _get_device() -> str:
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
 
 def resolve_device(device: str) -> str:
     """If device is cuda but CUDA is not available, fall back to cpu and notify."""
     if device.lower() != 'cuda':
         return device
-    resolved = get_device()
+    resolved = _get_device()
     if resolved != 'cuda':
         print('CUDA not available; falling back to CPU.')
     return resolved

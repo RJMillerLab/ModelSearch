@@ -23,7 +23,15 @@ from src.baseline1.table_retrieval_pipeline import (
     search_neighbors
 )
 
-from src.utils import load_combined_data as citationlake_load_combined_data, get_device
+from src.utils import load_combined_data as citationlake_load_combined_data
+
+
+def _get_device() -> str:
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
 USE_CITATIONLAKE_UTILS = True
 
@@ -594,7 +602,7 @@ def main():
     
     args = parser.parse_args()
     start_time = time.time()
-    device = getattr(args, 'device', None) or get_device()
+    device = getattr(args, 'device', None) or _get_device()
 
     if args.command == 'build-index':
         build_card_index(

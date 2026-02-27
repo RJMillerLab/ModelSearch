@@ -17,7 +17,12 @@ from sentence_transformers import SentenceTransformer
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
-from src.utils import get_device
+def _get_device() -> str:
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
 
 def search_query2modelcard(
@@ -53,7 +58,7 @@ def search_query2modelcard(
     
     # Auto-detect device if not specified
     if device is None:
-        device = get_device()
+        device = _get_device()
     
     # Encode query
     model = SentenceTransformer(model_name, device=device)
@@ -104,7 +109,7 @@ def main():
     start_time = time.time()
 
     # Auto-detect device if not specified
-    device = args.device if args.device else get_device()
+    device = args.device if args.device else _get_device()
     
     results = search_query2modelcard(
         query=args.query,
@@ -130,7 +135,7 @@ def _test():
         return
     q = "For text-to-SQL, which models have the most complete and comparable benchmark results?"
     print("Test query2modelcard (top_k=1):", q[:60] + "...")
-    r = search_query2modelcard(query=q, emb_npz=emb_npz, faiss_index=faiss_index, top_k=1, device=get_device())
+    r = search_query2modelcard(query=q, emb_npz=emb_npz, faiss_index=faiss_index, top_k=1, device=_get_device())
     print("Result:", r[0] if r else "none")
 
 

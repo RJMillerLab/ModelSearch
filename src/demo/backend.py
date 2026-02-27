@@ -102,11 +102,12 @@ def _api_error(message: str, status: int = 500):
 
 
 def _require_job_id(data: Optional[Dict]) -> tuple:
-    """Returns (job_id, None) or (None, error_response). Caller should return error_response if not None."""
-    job_id = (data or {}).get("job_id") if data else None
+    """Returns (job_id, None) or (None, error_response). Caller should return error_response if not None. job_id is always returned as str."""
+    safe = data if isinstance(data, dict) else {}
+    job_id = safe.get("job_id")
     if not job_id or (isinstance(job_id, str) and not job_id.strip()):
         return None, _api_error("job_id required", 400)
-    return (job_id.strip() if isinstance(job_id, str) else job_id), None
+    return (str(job_id).strip(), None)
 
 
 def _require_results_file(job_id: str) -> tuple:
@@ -579,42 +580,36 @@ def _run_pipeline_body(
                 for line in combined.strip().split("\n"):
                     if line.strip():
                         logger.log(f"  | {line.strip()}")
-            if rc != 0:
-                logger.log(f"[Card2Tab2Card-{st}] Error (exit {rc}): {err or out}")
-                # Save as empty result (not error object) so frontend can handle it gracefully
-                card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
+            # Always try to read JSON from disk: CLI may write results then exit(1) e.g. due to get_device() in another process env
+            data = _read_json(out_path)
+            if data is not None and isinstance(data, dict):
+                # CLI writes {"model_ids": [...], "query_tables": [...], "intermediate": {...}}
+                card2tab2card_all[st] = data
+                mid = data.get("model_ids", [])
+                lst = list(mid) if isinstance(mid, (list, np.ndarray)) else []
+                qty = len(data.get("query_tables", []))
+                logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
+                if rc != 0:
+                    logger.log(f"[Card2Tab2Card-{st}] Used on-disk JSON despite exit code {rc} (CLI may have failed after writing)")
+                if len(lst) == 0 and qty == 0:
+                    logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {DEFAULT_RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
+                    if table_search_empty_reason is None:
+                        table_search_empty_reason = (
+                            f"Seed model «{model_id}» has no tables in the dataset: it is not in "
+                            f"{DEFAULT_RELATIONSHIP_PARQUET} or has no csv_basename. "
+                            "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
+                        )
+                    cli_out = (err or out or "").strip()
+                    if cli_out and ("No tables" in cli_out or "Warning" in cli_out):
+                        for line in cli_out.split("\n")[-3:]:
+                            if line.strip():
+                                logger.log(f"[Card2Tab2Card-{st}] CLI: {line.strip()}")
             else:
-                data = _read_json(out_path)
-                if data is not None:
-                    # CLI writes {"model_ids": [...], "query_tables": [...], "intermediate": {...}}
-                    # Save the full data object (not just model_ids) so frontend can access intermediate.table_to_models
-                    if isinstance(data, dict):
-                        card2tab2card_all[st] = data
-                        mid = data.get("model_ids", [])
-                        lst = list(mid) if isinstance(mid, (list, np.ndarray)) else []
-                        qty = len(data.get("query_tables", []))
-                    else:
-                        # Legacy format: just a list/array of model_ids
-                        lst = list(data) if isinstance(data, (list, np.ndarray)) else []
-                        card2tab2card_all[st] = {"model_ids": lst, "intermediate": {}}
-                        qty = 0
-                    logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
-                    if len(lst) == 0 and qty == 0:
-                        logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {DEFAULT_RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
-                        if table_search_empty_reason is None:
-                            table_search_empty_reason = (
-                                f"Seed model «{model_id}» has no tables in the dataset: it is not in "
-                                f"{DEFAULT_RELATIONSHIP_PARQUET} or has no csv_basename. "
-                                "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
-                            )
-                        cli_out = (err or out or "").strip()
-                        if cli_out and ("No tables" in cli_out or "Warning" in cli_out):
-                            for line in cli_out.split("\n")[-3:]:
-                                if line.strip():
-                                    logger.log(f"[Card2Tab2Card-{st}] CLI: {line.strip()}")
-                else:
-                    # Save as empty object (consistent format) so frontend can handle it
-                    card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
+                if rc != 0:
+                    logger.log(f"[Card2Tab2Card-{st}] Error (exit {rc}): {err or out}")
+                # No valid JSON on disk: save empty so frontend can handle it
+                card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
+                if data is None:
                     logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
     # When we skipped Table Search (require_seed_has_tables but none had tables), fill empty
