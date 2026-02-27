@@ -30,6 +30,31 @@ from src.modelsearch.compare_baselines import (
     _read_relationships,
 )
 
+
+def _resolve_csv_path(table_path) -> Optional[str]:
+    """Resolve table_path to CSV path: use as-is if exists, else resolve_table_path(basename)."""
+    p = str(table_path)
+    if os.path.exists(p):
+        return p
+    return resolve_table_path(os.path.basename(p))
+
+
+def _get_csv_headers(csv_path: str) -> List[str]:
+    """Read CSV header row and return normalized column names (lower, stripped, non-empty)."""
+    df = pd.read_csv(csv_path, nrows=0)
+    return [str(c).lower().strip() for c in df.columns if str(c).strip()]
+
+
+def _get_table_query(csv_path: str, table_path, search_type: str):
+    """Build tquery for search: headers (keyword) or first column values (single_column)."""
+    headers = _get_csv_headers(csv_path)
+    if search_type == "single_column":
+        df_read = pd.read_csv(csv_path, nrows=100)
+        if len(df_read) > 0 and len(df_read.columns) > 0:
+            return df_read[df_read.columns[0]].dropna().astype(str).tolist()
+    return headers or [os.path.basename(str(table_path))]
+
+
 # Lazy import tab2tab to avoid DBHandler initialization on import
 # tab2tab will only be imported when search_card2tab2card is actually called
 _tab2tab_search_table2table = None
@@ -282,37 +307,21 @@ def search_card2tab2card(
         if use_per_table_search:
             print(f"ℹ️  global_table_topk=True: each of {len(query_tables)} tables as equivalent query, merge → global top-{table_search_k}")
         if search_type == "keyword":
-            # Load headers from model's tables (consistent with Blend_internal)
             all_headers = []
-            for table_path in query_tables[:10]:  # Limit to first 10 tables
-                # Try to find the CSV file; one bad table fails the whole step
-                if os.path.exists(table_path):
-                    csv_path = table_path
-                else:
-                    csv_path = resolve_table_path(os.path.basename(str(table_path)))
+            for table_path in query_tables[:10]:
+                csv_path = _resolve_csv_path(table_path)
                 if csv_path:
-                    df_temp = pd.read_csv(csv_path, nrows=0)
-                    headers = [str(col).lower().strip() for col in df_temp.columns]
-                    headers = [h for h in headers if h]  # Filter empty
-                    all_headers.extend(headers)
-            query = list(set(all_headers))  # Remove duplicates
+                    all_headers.extend(_get_csv_headers(csv_path))
+            query = list(set(all_headers))
             if not query:
-                # Fallback: use table basenames if no headers found
                 query = [os.path.basename(str(t)) for t in query_tables[:10]]
         else:
-            # For other search types (e.g. single_column) we'd need table data; no query provided → fall back to keyword
             search_type = "keyword"
             all_headers = []
             for table_path in query_tables[:10]:
-                if os.path.exists(table_path):
-                    csv_path = table_path
-                else:
-                    csv_path = resolve_table_path(os.path.basename(str(table_path)))
+                csv_path = _resolve_csv_path(table_path)
                 if csv_path:
-                    df_temp = pd.read_csv(csv_path, nrows=0)
-                    headers = [str(col).lower().strip() for col in df_temp.columns]
-                    headers = [h for h in headers if h]
-                    all_headers.extend(headers)
+                    all_headers.extend(_get_csv_headers(csv_path))
             query = list(set(all_headers))
             if not query:
                 query = [os.path.basename(str(t)) for t in query_tables[:10]]
@@ -378,43 +387,19 @@ def search_card2tab2card(
         def _search_one_table(args: Tuple[int, str, str, str]) -> Optional[Tuple[List[int], str]]:
             """Run one table search. Returns (ids, query_basename) or None. Used for parallel. Fails fast on error."""
             ti, table_path, st, db = args
-            csv_path = None
-            if os.path.exists(str(table_path)):
-                csv_path = str(table_path)
-            else:
-                csv_path = resolve_table_path(os.path.basename(str(table_path)))
+            csv_path = _resolve_csv_path(table_path)
             if not csv_path:
                 return None
-
-            # Build per-table query for different search types
-            tquery: Any
-            # Types that require a full DataFrame query (per tab2tab.search_table2table contract)
             df_required_types = {
-                "multi_column",
-                "unionable",
-                "complex",
-                "correlation",
-                "imputation",
-                "augmentation",
-                "dependent_data",
-                "feature_for_ml",
-                "multi_column_collinearity",
-                "negative_example",
+                "multi_column", "unionable", "complex", "correlation", "imputation",
+                "augmentation", "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example",
             }
             if st in df_required_types:
-                # Use the full table as query DataFrame (consistent with tab2tab CLI behaviour)
                 tquery = pd.read_csv(csv_path)
                 if tquery is None or tquery.empty:
                     return None
             else:
-                # Header-driven query (keyword / single_column)
-                df_temp = pd.read_csv(csv_path, nrows=0)
-                headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
-                tquery = headers or [os.path.basename(str(table_path))]
-                if st == "single_column":
-                    df_read = pd.read_csv(csv_path, nrows=100)
-                    if len(df_read) > 0 and len(df_read.columns) > 0:
-                        tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
+                tquery = _get_table_query(csv_path, table_path, st)
                 if not tquery:
                     return None
             t0 = time.time()
@@ -951,18 +936,11 @@ def search_card2tab2card_by_type(
         if use_per_table_search:
             print(f"ℹ️  global_table_topk=True: each of {len(query_tables)} tables as equivalent query, merge → global top-{table_search_k}")
         if search_type == "keyword":
-            # Load headers from model's tables
             all_headers = []
-            for table_path in query_tables[:10]:  # Limit to first 10 tables
-                if os.path.exists(table_path):
-                    csv_path = table_path
-                else:
-                    csv_path = resolve_table_path(os.path.basename(str(table_path)))
+            for table_path in query_tables[:10]:
+                csv_path = _resolve_csv_path(table_path)
                 if csv_path:
-                    df_temp = pd.read_csv(csv_path, nrows=0)
-                    headers = [str(col).lower().strip() for col in df_temp.columns]
-                    headers = [h for h in headers if h]
-                    all_headers.extend(headers)
+                    all_headers.extend(_get_csv_headers(csv_path))
             query = list(set(all_headers))
             if not query:
                 query = [os.path.basename(str(t)) for t in query_tables[:10]]
@@ -1007,19 +985,10 @@ def search_card2tab2card_by_type(
 
         def _search_one_by_type(args):
             ti, table_path, st, db, cj, cl = args
-            if os.path.exists(str(table_path)):
-                csv_path = str(table_path)
-            else:
-                csv_path = resolve_table_path(os.path.basename(str(table_path)))
+            csv_path = _resolve_csv_path(table_path)
             if not csv_path:
                 return None
-            df_temp = pd.read_csv(csv_path, nrows=0)
-            headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
-            tquery = headers or [os.path.basename(str(table_path))]
-            if st == "single_column":
-                df_read = pd.read_csv(csv_path, nrows=100)
-                if len(df_read) > 0 and len(df_read.columns) > 0:
-                    tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
+            tquery = _get_table_query(csv_path, table_path, st)
             if not tquery:
                 return None
             t0 = time.time()

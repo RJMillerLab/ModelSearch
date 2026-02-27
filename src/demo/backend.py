@@ -96,6 +96,36 @@ def _sanitize_for_js_template(obj: Any) -> Any:
     return obj
 
 
+def _api_error(message: str, status: int = 500):
+    """Uniform API error response."""
+    return jsonify({"status": "error", "message": message}), status
+
+
+def _require_job_id(data: Optional[Dict]) -> tuple:
+    """Returns (job_id, None) or (None, error_response). Caller should return error_response if not None."""
+    job_id = (data or {}).get("job_id") if data else None
+    if not job_id or (isinstance(job_id, str) and not job_id.strip()):
+        return None, _api_error("job_id required", 400)
+    return (job_id.strip() if isinstance(job_id, str) else job_id), None
+
+
+def _require_results_file(job_id: str) -> tuple:
+    """Returns (job_dir, results_file, None) or (None, None, error_response)."""
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    results_file = os.path.join(job_dir, "search_results.json")
+    if not os.path.exists(results_file):
+        return None, None, _api_error(f"Results file not found for job {job_id}", 404)
+    return job_dir, results_file, None
+
+
+def _require_job_dir(job_id: str) -> tuple:
+    """Returns (job_dir, None) or (None, error_response)."""
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    if not os.path.isdir(job_dir):
+        return None, _api_error(f"Job directory not found: {job_id}", 404)
+    return job_dir, None
+
+
 app = Flask(__name__)
 CORS(app)
 
@@ -939,20 +969,18 @@ def list_saved_searches():
 def integrate():
     """Integrate tables from Card2Tab2Card search results"""
     data = request.get_json()
-    job_id = data.get("job_id")
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
+    job_dir, results_file, err = _require_results_file(job_id)
+    if err is not None:
+        return err
+    os.makedirs(job_dir, exist_ok=True)
     search_type = data.get("search_type", "keyword")
     integration_type = data.get("integration_type", "union")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
     tables_source = data.get("tables_source", "intermediate")
-    if not job_id:
-        return jsonify({"status": "error", "message": "job_id required"}), 400
-    
-    job_dir = os.path.join(JOBS_DIR, job_id)
-    results_file = os.path.join(job_dir, "search_results.json")
-    if not os.path.exists(results_file):
-        return jsonify({"status": "error", "message": f"Results file not found for job {job_id}"}), 404
-    os.makedirs(job_dir, exist_ok=True)
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from integration.table_integration import integrate_tables_from_search_results
@@ -1019,26 +1047,24 @@ def integrate():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return _api_error(str(e), 500)
 
 
 @app.route("/api/integrate-model-search", methods=["POST"])
 def integrate_model_search():
     """Integrate tables from Card2Card (model search) results"""
     data = request.get_json()
-    job_id = data.get("job_id")
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
+    job_dir, results_file, err = _require_results_file(job_id)
+    if err is not None:
+        return err
+    os.makedirs(job_dir, exist_ok=True)
     integration_type = data.get("integration_type", "union")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
-    card2card_retrieval_mode = data.get("card2card_retrieval_mode") or None  # dense, sparse, hybrid
-
-    if not job_id:
-        return jsonify({"status": "error", "message": "job_id required"}), 400
-    job_dir = os.path.join(JOBS_DIR, job_id)
-    results_file = os.path.join(job_dir, "search_results.json")
-    if not os.path.exists(results_file):
-        return jsonify({"status": "error", "message": f"Results file not found for job {job_id}"}), 404
-    os.makedirs(job_dir, exist_ok=True)
+    card2card_retrieval_mode = data.get("card2card_retrieval_mode") or None
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from integration.table_integration import integrate_tables_from_model_search_results
@@ -1105,7 +1131,7 @@ def integrate_model_search():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return _api_error(str(e), 500)
 
 
 def _load_integrated_table_from_json(job_dir: str, json_name: str) -> Optional[pd.DataFrame]:
@@ -1156,15 +1182,13 @@ def _load_tables_from_integration_run(job_dir: str, run_key: str):
 def evaluate():
     """Evaluate quality (relevance, coverage, diversity) between Table Search and Model Search integrated tables using LLM."""
     data = request.get_json() or {}
-    job_id = data.get("job_id")
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
+    job_dir, err = _require_job_dir(job_id)
+    if err is not None:
+        return err
     integration_run_key = data.get("integration_run_key")
-
-    if not job_id:
-        return jsonify({"status": "error", "message": "job_id required"}), 400
-
-    job_dir = os.path.join(JOBS_DIR, job_id)
-    if not os.path.isdir(job_dir):
-        return jsonify({"status": "error", "message": f"Job directory not found: {job_id}"}), 404
 
     # Load integrated tables: table1 = Table Search, table2 = Model Search
     table1_df, table2_df = None, None
@@ -1225,15 +1249,13 @@ def evaluate():
 def qa():
     """Answer question based on integrated table using LLM."""
     data = request.get_json() or {}
-    job_id = data.get("job_id")
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
+    job_dir, err = _require_job_dir(job_id)
+    if err is not None:
+        return err
     use_table_search = bool(data.get("use_table_search", True))
-
-    if not job_id:
-        return jsonify({"status": "error", "message": "job_id required"}), 400
-
-    job_dir = os.path.join(JOBS_DIR, job_id)
-    if not os.path.isdir(job_dir):
-        return jsonify({"status": "error", "message": f"Job directory not found: {job_id}"}), 404
 
     # Load the appropriate integrated table
     if use_table_search:
@@ -1342,10 +1364,12 @@ def get_integration_runs(job_id: str):
 def save_integration_run():
     """Save one integration run to job_dir as integration_run_<key>.json for tabs. Creates job_dir if missing."""
     data = request.get_json() or {}
-    job_id = data.get("job_id")
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
     key = data.get("key")
-    if not job_id or not key:
-        return jsonify({"status": "error", "message": "job_id and key required"}), 400
+    if not key or (isinstance(key, str) and not key.strip()):
+        return _api_error("job_id and key required", 400)
     job_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
     safe_key = re.sub(r"[^a-z0-9_]", "_", (key or "").lower().strip()) or "run"
@@ -1355,16 +1379,16 @@ def save_integration_run():
             json.dump(data, f, ensure_ascii=False, indent=0)
         return jsonify({"status": "success"})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return _api_error(str(e), 500)
 
 
 @app.route("/api/save-evaluation", methods=["POST"])
 def save_evaluation():
     """Save evaluation result to job_dir for load-previous restore. Creates job_dir if missing."""
     data = request.get_json() or {}
-    job_id = data.get("job_id")
-    if not job_id:
-        return jsonify({"status": "error", "message": "job_id required"}), 400
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
     job_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
     path = os.path.join(job_dir, "evaluation_results.json")
@@ -1373,16 +1397,16 @@ def save_evaluation():
             json.dump(data, f, ensure_ascii=False, indent=0)
         return jsonify({"status": "success"})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return _api_error(str(e), 500)
 
 
 @app.route("/api/save-qa", methods=["POST"])
 def save_qa():
     """Save QA result to job_dir for load-previous restore. Creates job_dir if missing."""
     data = request.get_json() or {}
-    job_id = data.get("job_id")
-    if not job_id:
-        return jsonify({"status": "error", "message": "job_id required"}), 400
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
     job_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
     path = os.path.join(job_dir, "qa_results.json")
@@ -1391,7 +1415,7 @@ def save_qa():
             json.dump(data, f, ensure_ascii=False, indent=0)
         return jsonify({"status": "success"})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return _api_error(str(e), 500)
 
 
 if __name__ == "__main__":
