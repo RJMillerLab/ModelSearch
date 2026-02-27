@@ -125,11 +125,8 @@ class JobLogger:
             line = f"[{ts}] [{self.job_id}] {message}"
             print(line, flush=True)
             if self._log_file_path:
-                try:
-                    with open(self._log_file_path, "a", encoding="utf-8") as f:
-                        f.write(line + "\n")
-                except Exception:
-                    pass
+                with open(self._log_file_path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
 
     def log_cmd(self, step: str, cmd: List[str], out_path: Optional[str] = None, elapsed: Optional[float] = None, rc: Optional[int] = None):
         """Log command execution details (CMD, OUT, ELAPSED) for pipeline run log."""
@@ -191,13 +188,10 @@ def _get_valid_model_ids_with_tables(txt_path: Optional[str] = None) -> set:
     mtime = os.path.getmtime(path)
     if _CACHED_VALID_MODEL_IDS is not None and mtime == _CACHED_VALID_MODEL_IDS_MTIME:
         return _CACHED_VALID_MODEL_IDS
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            _CACHED_VALID_MODEL_IDS = {line.strip() for line in f if line.strip()}
-        _CACHED_VALID_MODEL_IDS_MTIME = mtime
-        return _CACHED_VALID_MODEL_IDS
-    except Exception:
-        return set()
+    with open(path, "r", encoding="utf-8") as f:
+        _CACHED_VALID_MODEL_IDS = {line.strip() for line in f if line.strip()}
+    _CACHED_VALID_MODEL_IDS_MTIME = mtime
+    return _CACHED_VALID_MODEL_IDS
 
 
 def run_search_pipeline(
@@ -806,45 +800,33 @@ def _load_job_extras(job_id: str, base_dir: Optional[str] = None) -> dict:
     ]:
         p = os.path.join(job_dir, filename)
         if os.path.isfile(p):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    out[key] = json.load(f)
-            except Exception:
-                pass
+            with open(p, "r", encoding="utf-8") as f:
+                out[key] = json.load(f)
     model_runs = []
     table_runs = []
     for fname in sorted(os.listdir(job_dir)):
         if fname.startswith("integration_model_search_") and fname.endswith(".json"):
-            try:
-                with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
-                    d = json.load(f)
-                key = fname.replace("integration_model_search_", "").replace(".json", "")
-                model_runs.append({"key": key, **d})
-            except Exception:
-                pass
+            with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
+                d = json.load(f)
+            key = fname.replace("integration_model_search_", "").replace(".json", "")
+            model_runs.append({"key": key, **d})
         elif fname.startswith("integration_table_search_") and fname.endswith(".json"):
-            try:
-                with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
-                    d = json.load(f)
-                key = fname.replace("integration_table_search_", "").replace(".json", "")
-                table_runs.append({"key": key, **d})
-            except Exception:
-                pass
+            with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
+                d = json.load(f)
+            key = fname.replace("integration_table_search_", "").replace(".json", "")
+            table_runs.append({"key": key, **d})
         elif fname.startswith("integration_run_") and fname.endswith(".json"):
-            try:
-                with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
-                    run = json.load(f)
-                m, t = run.get("model_result"), run.get("table_result")
-                if m and m.get("status") == "success":
-                    mk = _model_search_key(run.get("integration_type"), run.get("card2card_retrieval_mode"))
-                    if not any(r["key"] == mk for r in model_runs):
-                        model_runs.append({"key": mk, **m})
-                if t and t.get("status") == "success":
-                    tk = _table_search_key(run.get("integration_type"), run.get("search_type"))
-                    if not any(r["key"] == tk for r in table_runs):
-                        table_runs.append({"key": tk, **t})
-            except Exception:
-                pass
+            with open(os.path.join(job_dir, fname), "r", encoding="utf-8") as f:
+                run = json.load(f)
+            m, t = run.get("model_result"), run.get("table_result")
+            if m and m.get("status") == "success":
+                mk = _model_search_key(run.get("integration_type"), run.get("card2card_retrieval_mode"))
+                if not any(r["key"] == mk for r in model_runs):
+                    model_runs.append({"key": mk, **m})
+            if t and t.get("status") == "success":
+                tk = _table_search_key(run.get("integration_type"), run.get("search_type"))
+                if not any(r["key"] == tk for r in table_runs):
+                    table_runs.append({"key": tk, **t})
     if model_runs:
         out["model_search_runs"] = model_runs
     elif out.get("integration_model_search") and out["integration_model_search"].get("status") == "success":

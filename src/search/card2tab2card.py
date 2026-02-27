@@ -19,14 +19,16 @@ from typing import List, Set, Dict, Optional, Any, Tuple
 import argparse
 import pandas as pd
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+# Add parent directory to path for imports (so "from src.*" works when run as script or from demo)
+_reporoot = os.path.join(os.path.dirname(__file__), '../..')
+if _reporoot not in sys.path:
+    sys.path.insert(0, _reporoot)
 from src.utils.table_loader import resolve_table_path
-
-# Add ModelTables to path for get_from-style functionality (if available)
-modeltables_path = os.path.join(os.path.dirname(__file__), '../../ModelTables')
-if os.path.exists(modeltables_path) and modeltables_path not in sys.path:
-    sys.path.insert(0, modeltables_path)
+from src.modelsearch.compare_baselines import (
+    get_tables_for_model_duckdb,
+    get_modelids_for_basenames_duckdb,
+    _read_relationships,
+)
 
 # Lazy import tab2tab to avoid DBHandler initialization on import
 # tab2tab will only be imported when search_card2tab2card is actually called
@@ -59,118 +61,30 @@ def _get_search_table2table_by_type():
         _tab2tab_by_type_search_table2table_by_type = search_table2table_by_type
     return _tab2tab_by_type_search_table2table_by_type
 
-# Try to import get_from (e.g., from ModelTables), fallback to local implementation
-try:
-    from src.data_analysis.get_from import generic_get_attr_from_attr
-    USE_CITATIONLAKE_GET_FROM = True
-except ImportError:
-    # Fallback to local implementation
-    from src.modelsearch.compare_baselines import _read_relationships
-    USE_CITATIONLAKE_GET_FROM = False
-
-
-def get_tables_for_model_from_citationlake(
-    model_id: str,
-    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
-    table_attr: str = "hugging_table_list_dedup",
-    debug: bool = False
-) -> List[str]:
-    """
-    Get list of table CSV paths/basenames for a given model ID using a get_from-style function.
-    
-    This function uses the generic_get_attr_from_attr approach which automatically
-    discovers the right parquet file from the schema log.
-    
-    Args:
-        model_id: Hugging Face model ID
-        schema_log_path: Path to parquet_schema.log (default: data_citationlake/logs/parquet_schema.log)
-        table_attr: Which table attribute to get. Options:
-            - "hugging_table_list_dedup"
-            - "github_table_list_dedup"
-            - "html_table_list_mapped_dedup"
-            - "llm_table_list_mapped_dedup"
-            - Or any combination (will try all if None)
-        debug: Whether to print debug information
-    
-    Returns:
-        List of CSV paths/basenames
-    """
-    if not USE_CITATIONLAKE_GET_FROM:
-        raise ImportError(
-            "get_from module not available. Please ensure ModelTables (or another compatible "
-            "get_from implementation) is accessible, or use relationship_parquet/data_citationlake instead."
-        )
-    
-    if table_attr:
-        # Get specific table attribute
-        results = generic_get_attr_from_attr(
-            target_attr=table_attr,
-            source_attr="modelId",
-            value=model_id,
-            log_path=schema_log_path,
-            debug=debug
-        )
-        return [str(r) for r in results if r]
-    else:
-        # Get all table attributes
-        all_tables = []
-        for attr in [
-            "hugging_table_list_dedup",
-            "github_table_list_dedup",
-            "html_table_list_mapped_dedup",
-            "llm_table_list_mapped_dedup"
-        ]:
-            results = generic_get_attr_from_attr(
-                target_attr=attr,
-                source_attr="modelId",
-                value=model_id,
-                log_path=schema_log_path,
-                debug=debug
-            )
-            all_tables.extend([str(r) for r in results if r])
-        return list(set(all_tables))  # Deduplicate
+# Default path for model–table relationship (used when caller does not pass relationship_parquet)
+DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
 
 
 def get_modelids_from_table(
     table_path: str,
-    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
+    relationship_parquet: Optional[str] = None,
     debug: bool = False
 ) -> List[str]:
     """
-    Get model IDs that have a specific table, using a get_from-style function when available.
-    
-    Args:
-        table_path: CSV path or basename to search for
-        schema_log_path: Path to parquet_schema.log
-        debug: Whether to print debug information
-    
-    Returns:
-        List of model IDs
+    Get model IDs that have a specific table (by CSV basename), using relationship parquet.
+    Uses DuckDB when parquet exists, else loads parquet and does DataFrame lookup.
     """
-    if not USE_CITATIONLAKE_GET_FROM:
-        raise ImportError(
-            "get_from module not available. Please ensure ModelTables (or another compatible "
-            "get_from implementation) is accessible, or use relationship_parquet/data_citationlake instead."
-        )
-    
-    # Try different table attributes as source
-    all_model_ids = []
-    for attr in [
-        "hugging_table_list_dedup",
-        "github_table_list_dedup",
-        "html_table_list_mapped_dedup",
-        "llm_table_list_mapped_dedup"
-    ]:
-        results = generic_get_attr_from_attr(
-            target_attr="modelId",
-            source_attr=attr,
-            value=table_path,
-            log_path=schema_log_path,
-            debug=debug
-        )
-        all_model_ids.extend([str(r) for r in results if r])
-    
-    return list(set(all_model_ids))  # Deduplicate
+    parquet = relationship_parquet or DEFAULT_RELATIONSHIP_PARQUET
+    basename = os.path.basename(str(table_path))
+    if os.path.exists(parquet):
+        mapping = get_modelids_for_basenames_duckdb(parquet, [basename])
+        return list(mapping.get(basename, []))
+    df = _read_relationships(parquet)
+    basename_col = next((c for c in ["csv_basename", "basename", "filename"] if c in df.columns), None)
+    if basename_col is None:
+        return []
+    mids = df.loc[df[basename_col] == basename, "modelId"].dropna().unique().tolist()
+    return [str(m) for m in mids]
 
 
 def _classify_table_source_by_basename(basename: str) -> str:
@@ -220,58 +134,30 @@ def _filter_s2orc_tables(tables: List[str]) -> List[str]:
 def load_relationship_parquet(parquet_path: str) -> pd.DataFrame:
     """
     Load relationship parquet file that maps modelId to CSV basenames.
-    Fallback method when a get_from-style approach is not available.
-    
-    Args:
-        parquet_path: Path to relationship parquet file
-    
-    Returns:
-        DataFrame with columns: modelId, csv_basename
+    Returns DataFrame with columns: modelId, csv_basename
     """
-    if USE_CITATIONLAKE_GET_FROM:
-        # If we have get_from, we don't need to load the full parquet
-        # But we keep this for backward compatibility
-        pass
-    from src.modelsearch.compare_baselines import _read_relationships
     return _read_relationships(parquet_path)
 
 
 def get_tables_for_model(
     model_id: str,
     relationship_df: Optional[pd.DataFrame] = None,
-    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
-    use_citationlake: bool = True
+    relationship_parquet: Optional[str] = None,
 ) -> List[str]:
     """
     Get list of table CSV basenames for a given model ID.
-    
-    Uses a get_from-style function if available, otherwise falls back to DataFrame lookup.
-    
-    Args:
-        model_id: Hugging Face model ID
-        relationship_df: Optional DataFrame from load_relationship_parquet (fallback)
-        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
-        use_citationlake: Whether to use get_from-style mapping (default: True)
-    
-    Returns:
-        List of CSV basenames
+    Uses DuckDB when relationship_parquet exists, else DataFrame (given or loaded from parquet).
     """
-    if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        return get_tables_for_model_from_citationlake(
-            model_id=model_id,
-            schema_log_path=schema_log_path,
-            table_attr=None,  # Get all table types
-            debug=False
-        )
-    else:
-        # Fallback to DataFrame approach
-        if relationship_df is None:
-            raise ValueError("relationship_df is required when use_citationlake=False")
-        csvs = relationship_df.loc[
-            relationship_df["modelId"] == model_id,
-            "csv_basename"
-        ].dropna().unique().tolist()
-        return csvs
+    parquet = relationship_parquet or DEFAULT_RELATIONSHIP_PARQUET
+    if os.path.exists(parquet):
+        return get_tables_for_model_duckdb(parquet, model_id)
+    if relationship_df is None:
+        relationship_df = load_relationship_parquet(parquet)
+    csvs = relationship_df.loc[
+        relationship_df["modelId"] == model_id,
+        "csv_basename"
+    ].dropna().unique().tolist()
+    return csvs
 
 
 def search_card2tab2card(
@@ -330,60 +216,21 @@ def search_card2tab2card(
     print(f"Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards")
     print(f"{'='*60}\n")
     sys.stdout.flush()
-    # Get tables for the query model
-    if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            schema_log_path=schema_log_path,
-            use_citationlake=True
+    # Resolve relationship parquet path (default or first existing)
+    if relationship_parquet is None:
+        for p in (DEFAULT_RELATIONSHIP_PARQUET, "data_citationlake/processed/modelcard_step3.parquet"):
+            if os.path.exists(p):
+                relationship_parquet = p
+                break
+        if relationship_parquet is None:
+            relationship_parquet = DEFAULT_RELATIONSHIP_PARQUET
+    if not os.path.exists(relationship_parquet):
+        raise FileNotFoundError(
+            f"relationship_parquet not found: {relationship_parquet}\n"
+            "Use --relationship_parquet or place modelcard_step3_dedup.parquet in data_citationlake/processed/"
         )
-        query_tables = _filter_s2orc_tables(query_tables)
-    elif use_citationlake and not USE_CITATIONLAKE_GET_FROM:
-        # User wants get_from-style mapping but it's not available, try to find default relationship_parquet
-        if relationship_parquet is None:
-            # Try to find default relationship parquet files
-            default_paths = [
-                "data_citationlake/processed/modelcard_step3_dedup.parquet",
-                "data_citationlake/processed/modelcard_step3.parquet",
-            ]
-            for default_path in default_paths:
-                if os.path.exists(default_path):
-                    relationship_parquet = default_path
-                    print(f"⚠️  get_from-based approach not available, found default relationship_parquet: {relationship_parquet}")
-                    break
-        
-        if relationship_parquet is None:
-            raise ValueError(
-                "get_from-style mapping is not available and no relationship_parquet found. Please either:\n"
-                "  1. Ensure ModelTables (or another compatible get_from implementation) is installed and on PYTHONPATH, or\n"
-                "  2. Use --relationship_parquet to specify the path to modelcard_step3_dedup.parquet, or\n"
-                "  3. Place modelcard_step3_dedup.parquet in data_citationlake/processed/"
-            )
-        
-        if not os.path.exists(relationship_parquet):
-            raise FileNotFoundError(
-                f"relationship_parquet not found: {relationship_parquet}\n"
-                "Please check the path or use --relationship_parquet to specify the correct path."
-            )
-        
-        print(f"⚠️  get_from-based approach not available, using relationship_parquet: {relationship_parquet}")
-        try:
-            from src.modelsearch.compare_baselines import get_tables_for_model_duckdb
-            query_tables = get_tables_for_model_duckdb(relationship_parquet, model_id)
-        except Exception:
-            relationship_df = load_relationship_parquet(relationship_parquet)
-            query_tables = get_tables_for_model(model_id=model_id, relationship_df=relationship_df, use_citationlake=False)
-    else:
-        # use_citationlake=False, use relationship_parquet (DuckDB SQL preferred, fallback to full load)
-        if relationship_parquet is None:
-            raise ValueError("relationship_parquet is required when use_citationlake=False")
-        try:
-            from src.modelsearch.compare_baselines import get_tables_for_model_duckdb
-            query_tables = get_tables_for_model_duckdb(relationship_parquet, model_id)
-        except Exception:
-            relationship_df = load_relationship_parquet(relationship_parquet)
-            query_tables = get_tables_for_model(model_id=model_id, relationship_df=relationship_df, use_citationlake=False)
-    
+    # Get tables for the query model (DuckDB or full parquet load)
+    query_tables = get_tables_for_model(model_id=model_id, relationship_parquet=relationship_parquet)
     query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"⚠️  Warning: No tables found for model {model_id}")
@@ -438,19 +285,16 @@ def search_card2tab2card(
             # Load headers from model's tables (consistent with Blend_internal)
             all_headers = []
             for table_path in query_tables[:10]:  # Limit to first 10 tables
-                try:
-                    # Try to find the CSV file
-                    if os.path.exists(table_path):
-                        csv_path = table_path
-                    else:
-                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
-                    if csv_path:
-                        df_temp = pd.read_csv(csv_path, nrows=0)
-                        headers = [str(col).lower().strip() for col in df_temp.columns]
-                        headers = [h for h in headers if h]  # Filter empty
-                        all_headers.extend(headers)
-                except Exception:
-                    continue
+                # Try to find the CSV file; one bad table fails the whole step
+                if os.path.exists(table_path):
+                    csv_path = table_path
+                else:
+                    csv_path = resolve_table_path(os.path.basename(str(table_path)))
+                if csv_path:
+                    df_temp = pd.read_csv(csv_path, nrows=0)
+                    headers = [str(col).lower().strip() for col in df_temp.columns]
+                    headers = [h for h in headers if h]  # Filter empty
+                    all_headers.extend(headers)
             query = list(set(all_headers))  # Remove duplicates
             if not query:
                 # Fallback: use table basenames if no headers found
@@ -460,18 +304,15 @@ def search_card2tab2card(
             search_type = "keyword"
             all_headers = []
             for table_path in query_tables[:10]:
-                try:
-                    if os.path.exists(table_path):
-                        csv_path = table_path
-                    else:
-                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
-                    if csv_path:
-                        df_temp = pd.read_csv(csv_path, nrows=0)
-                        headers = [str(col).lower().strip() for col in df_temp.columns]
-                        headers = [h for h in headers if h]
-                        all_headers.extend(headers)
-                except Exception:
-                    continue
+                if os.path.exists(table_path):
+                    csv_path = table_path
+                else:
+                    csv_path = resolve_table_path(os.path.basename(str(table_path)))
+                if csv_path:
+                    df_temp = pd.read_csv(csv_path, nrows=0)
+                    headers = [str(col).lower().strip() for col in df_temp.columns]
+                    headers = [h for h in headers if h]
+                    all_headers.extend(headers)
             query = list(set(all_headers))
             if not query:
                 query = [os.path.basename(str(t)) for t in query_tables[:10]]
@@ -519,218 +360,168 @@ def search_card2tab2card(
         db_path = "data_citationlake/modellake.db"
     print(f"✅ Database: {db_path}")
     
-    try:
-        print(f"🔎 Getting search_table2table function...")
+    print(f"🔎 Getting search_table2table function...")
+    sys.stdout.flush()
+    search_table2table = _get_search_table2table()
+    print(f"✅ Got search_table2table function")
+    sys.stdout.flush()
+    if use_per_table_search:
+        # table_search_k = per-table k (user input, e.g. 1)
+        # k_request = k_per_table + 4 (over-fetch for self/s2orc/generic filter)
+        num_seed_tables = len(query_tables[:20])
+        k_per_table = max(1, table_search_k)
+        k_request = k_per_table + 4  # Over-fetch: top1 -> request 5, so after filter we can get top-k
+        print(f"📊 Per-table k={k_per_table} | request={k_request} (over-fetch k+4) | flow: filter per table → top-{k_per_table} → merge (no post-filter)")
+        print(f"🔎 [STEP 2a] Parallel per-table search (each table independent read-only), then filter→topk→merge")
         sys.stdout.flush()
-        search_table2table = _get_search_table2table()
-        print(f"✅ Got search_table2table function")
-        sys.stdout.flush()
-        if use_per_table_search:
-            # table_search_k = per-table k (user input, e.g. 1)
-            # k_request = k_per_table + 4 (over-fetch for self/s2orc/generic filter)
-            num_seed_tables = len(query_tables[:20])
-            k_per_table = max(1, table_search_k)
-            k_request = k_per_table + 4  # Over-fetch: top1 -> request 5, so after filter we can get top-k
-            print(f"📊 Per-table k={k_per_table} | request={k_request} (over-fetch k+4) | flow: filter per table → top-{k_per_table} → merge (no post-filter)")
-            print(f"🔎 [STEP 2a] Parallel per-table search (each table independent read-only), then filter→topk→merge")
-            sys.stdout.flush()
 
-            def _search_one_table(args: Tuple[int, str, str, str]) -> Optional[Tuple[List[int], str]]:
-                """Run one table search. Returns (ids, query_basename) or None. Used for parallel."""
-                ti, table_path, st, db = args
-                try:
-                    csv_path = None
-                    if os.path.exists(str(table_path)):
-                        csv_path = str(table_path)
-                    else:
-                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
-                    if not csv_path:
-                        return None
-
-                    # Build per-table query for different search types
-                    tquery: Any
-                    # Types that require a full DataFrame query (per tab2tab.search_table2table contract)
-                    df_required_types = {
-                        "multi_column",
-                        "unionable",
-                        "complex",
-                        "correlation",
-                        "imputation",
-                        "augmentation",
-                        "dependent_data",
-                        "feature_for_ml",
-                        "multi_column_collinearity",
-                        "negative_example",
-                    }
-                    if st in df_required_types:
-                        # Use the full table as query DataFrame (consistent with tab2tab CLI behaviour)
-                        tquery = pd.read_csv(csv_path)
-                        if tquery is None or tquery.empty:
-                            return None
-                    else:
-                        # Header-driven query (keyword / single_column)
-                        df_temp = pd.read_csv(csv_path, nrows=0)
-                        headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
-                        tquery = headers or [os.path.basename(str(table_path))]
-                        if st == "single_column":
-                            df_read = pd.read_csv(csv_path, nrows=100)
-                            if len(df_read) > 0 and len(df_read.columns) > 0:
-                                tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
-                        if not tquery:
-                            return None
-                    t0 = time.time()
-                    ids = search_table2table(tquery, st, k_request, db_path=db)
-                    elapsed = time.time() - t0
-                    bn = os.path.basename(str(table_path))
-                    ts = time.strftime("%H:%M:%S")
-                    # For DataFrame queries, report (rows, cols); otherwise use len(query)
-                    if isinstance(tquery, pd.DataFrame):
-                        q_rows, q_cols = tquery.shape
-                        q_info = f"{q_rows}x{q_cols}"
-                    else:
-                        q_info = str(len(tquery))
-                    print(f"   [Table {ti+1}] @{ts} INPUT={bn} | query_len={q_info} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
-                    sys.stdout.flush()
-                    return (ids, bn) if ids else None
-                except Exception as e:
-                    print(f"   ⚠️  [Table {ti+1}] {os.path.basename(str(table_path))}: {e}")
-                    return None
-
-            tables_to_search = [(ti, tp, search_type, db_path) for ti, tp in enumerate(query_tables[:20])]
-            max_workers = min(8, len(tables_to_search))  # Parallel table search
-            results_by_ti: Dict[int, Tuple[List[int], str]] = {}
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                futures = {ex.submit(_search_one_table, a): a[0] for a in tables_to_search}
-                for fut in as_completed(futures):
-                    ti = futures[fut]
-                    res = fut.result()
-                    if res:
-                        results_by_ti[ti] = res
-            per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
-            print(f"   [STEP 2a] Done: {len(per_table_results)} tables searched in parallel")
-
-            # Flow: 1) Filter per table (self/s2orc/generic), 2) top-k per table, 3) merge (no post-filter)
-            all_ids = [tid for ids, _ in per_table_results for tid in ids]
-            tableid_to_filename: Dict[int, str] = {}
-            if all_ids:
-                import duckdb
-                con_filter = duckdb.connect(db_path, read_only=True)
-                try:
-                    table_ids_str = ','.join(str(tid) for tid in all_ids)
-                    filename_query = f"""
-                        SELECT DISTINCT tableid, filename
-                        FROM modellake_index
-                        WHERE tableid IN ({table_ids_str}) AND rowid = -1
-                    """
-                    filename_results = con_filter.execute(filename_query).fetchall()
-                    tableid_to_filename = {tid: filename for tid, filename in filename_results}
-                finally:
-                    con_filter.close()
-
-            per_table_filtered_topk: List[List[Tuple[int, str]]] = []
-            n_self, n_s2orc, n_generic = 0, 0, 0
-            for ids, src_basename in per_table_results:
-                kept: List[Tuple[int, str]] = []
-                for tid in ids:
-                    if tid not in tableid_to_filename:
-                        continue
-                    fbase = os.path.basename(str(tableid_to_filename[tid]))
-                    if fbase == src_basename:
-                        n_self += 1
-                        continue
-                    if _classify_table_source_by_basename(fbase) == "llm":
-                        n_s2orc += 1
-                        continue
-                    if _is_generic_table(fbase):
-                        n_generic += 1
-                        continue
-                    kept.append((tid, src_basename))
-                per_table_filtered_topk.append(kept[:k_per_table])  # top-k per table
-            if n_self or n_s2orc or n_generic:
-                print(f"   [STEP 2b] Filter per table: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | top-k={k_per_table}/table")
-            print(f"   [STEP 2c] Merge (round-robin of per-table top-{k_per_table})")
-            seen: Set[int] = set()
-            similar_table_data: List[Tuple[int, str]] = []
-            max_len = max(len(r) for r in per_table_filtered_topk) if per_table_filtered_topk else 0
-            for rank in range(max_len):
-                for row in per_table_filtered_topk:
-                    if rank < len(row) and row[rank][0] not in seen:
-                        seen.add(row[rank][0])
-                        similar_table_data.append(row[rank])
-            similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables, per-table filter→top{k_per_table}→merge, no post-filter)")
-        else:
-            k_overfetch = table_search_k * 2  # Over-fetch, then filter, then topk
-            print(f"🔎 [STEP 2] Single-query search: INPUT=query | k_request={k_overfetch} | OUTPUT=merged")
-            print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}")
-            sys.stdout.flush()
-            # Handle correlation search specially - need to extract source and target columns
-            if search_type == "correlation" and isinstance(query, pd.DataFrame):
-                source_col = query[query.columns[0]].astype(str).tolist()
-                numeric_cols = query.select_dtypes(include=['number']).columns
-                if len(numeric_cols) > 0:
-                    target_col = query[numeric_cols[0]].tolist()
-                    print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
-                    similar_table_ids = search_table2table(
-                        query, search_type, k_overfetch, db_path=db_path,
-                        source_column=source_col, target_column=target_col
-                    )
-                else:
-                    print(f"⚠️  No numeric column found for correlation search, skipping...")
-                    similar_table_ids = []
+        def _search_one_table(args: Tuple[int, str, str, str]) -> Optional[Tuple[List[int], str]]:
+            """Run one table search. Returns (ids, query_basename) or None. Used for parallel. Fails fast on error."""
+            ti, table_path, st, db = args
+            csv_path = None
+            if os.path.exists(str(table_path)):
+                csv_path = str(table_path)
             else:
-                similar_table_ids = search_table2table(query, search_type, k_overfetch, db_path=db_path)
-            print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
+                csv_path = resolve_table_path(os.path.basename(str(table_path)))
+            if not csv_path:
+                return None
+
+            # Build per-table query for different search types
+            tquery: Any
+            # Types that require a full DataFrame query (per tab2tab.search_table2table contract)
+            df_required_types = {
+                "multi_column",
+                "unionable",
+                "complex",
+                "correlation",
+                "imputation",
+                "augmentation",
+                "dependent_data",
+                "feature_for_ml",
+                "multi_column_collinearity",
+                "negative_example",
+            }
+            if st in df_required_types:
+                # Use the full table as query DataFrame (consistent with tab2tab CLI behaviour)
+                tquery = pd.read_csv(csv_path)
+                if tquery is None or tquery.empty:
+                    return None
+            else:
+                # Header-driven query (keyword / single_column)
+                df_temp = pd.read_csv(csv_path, nrows=0)
+                headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
+                tquery = headers or [os.path.basename(str(table_path))]
+                if st == "single_column":
+                    df_read = pd.read_csv(csv_path, nrows=100)
+                    if len(df_read) > 0 and len(df_read.columns) > 0:
+                        tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
+                if not tquery:
+                    return None
+            t0 = time.time()
+            ids = search_table2table(tquery, st, k_request, db_path=db)
+            elapsed = time.time() - t0
+            bn = os.path.basename(str(table_path))
+            ts = time.strftime("%H:%M:%S")
+            # For DataFrame queries, report (rows, cols); otherwise use len(query)
+            if isinstance(tquery, pd.DataFrame):
+                q_rows, q_cols = tquery.shape
+                q_info = f"{q_rows}x{q_cols}"
+            else:
+                q_info = str(len(tquery))
+            print(f"   [Table {ti+1}] @{ts} INPUT={bn} | query_len={q_info} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
+            sys.stdout.flush()
+            return (ids, bn) if ids else None
+
+        tables_to_search = [(ti, tp, search_type, db_path) for ti, tp in enumerate(query_tables[:20])]
+        max_workers = min(8, len(tables_to_search))  # Parallel table search
+        results_by_ti: Dict[int, Tuple[List[int], str]] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_search_one_table, a): a[0] for a in tables_to_search}
+            for fut in as_completed(futures):
+                ti = futures[fut]
+                res = fut.result()
+                if res:
+                    results_by_ti[ti] = res
+        per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
+        print(f"   [STEP 2a] Done: {len(per_table_results)} tables searched in parallel")
+
+        # Flow: 1) Filter per table (self/s2orc/generic), 2) top-k per table, 3) merge (no post-filter)
+        all_ids = [tid for ids, _ in per_table_results for tid in ids]
+        tableid_to_filename: Dict[int, str] = {}
+        if all_ids:
+            import duckdb
+            con_filter = duckdb.connect(db_path, read_only=True)
+            try:
+                table_ids_str = ','.join(str(tid) for tid in all_ids)
+                filename_query = f"""
+                    SELECT DISTINCT tableid, filename
+                    FROM modellake_index
+                    WHERE tableid IN ({table_ids_str}) AND rowid = -1
+                """
+                filename_results = con_filter.execute(filename_query).fetchall()
+                tableid_to_filename = {tid: filename for tid, filename in filename_results}
+            finally:
+                con_filter.close()
+
+        per_table_filtered_topk: List[List[Tuple[int, str]]] = []
+        n_self, n_s2orc, n_generic = 0, 0, 0
+        for ids, src_basename in per_table_results:
+            kept: List[Tuple[int, str]] = []
+            for tid in ids:
+                if tid not in tableid_to_filename:
+                    continue
+                fbase = os.path.basename(str(tableid_to_filename[tid]))
+                if fbase == src_basename:
+                    n_self += 1
+                    continue
+                if _classify_table_source_by_basename(fbase) == "llm":
+                    n_s2orc += 1
+                    continue
+                if _is_generic_table(fbase):
+                    n_generic += 1
+                    continue
+                kept.append((tid, src_basename))
+            per_table_filtered_topk.append(kept[:k_per_table])  # top-k per table
+        if n_self or n_s2orc or n_generic:
+            print(f"   [STEP 2b] Filter per table: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | top-k={k_per_table}/table")
+        print(f"   [STEP 2c] Merge (round-robin of per-table top-{k_per_table})")
+        seen: Set[int] = set()
+        similar_table_data: List[Tuple[int, str]] = []
+        max_len = max(len(r) for r in per_table_filtered_topk) if per_table_filtered_topk else 0
+        for rank in range(max_len):
+            for row in per_table_filtered_topk:
+                if rank < len(row) and row[rank][0] not in seen:
+                    seen.add(row[rank][0])
+                    similar_table_data.append(row[rank])
+        similar_table_ids = [tid for tid, _ in similar_table_data]
+        print(f"✅ Found {len(similar_table_ids)} tables (from {len(per_table_results)} query tables, per-table filter→top{k_per_table}→merge, no post-filter)")
+    else:
+        k_overfetch = table_search_k * 2  # Over-fetch, then filter, then topk
+        print(f"🔎 [STEP 2] Single-query search: INPUT=query | k_request={k_overfetch} | OUTPUT=merged")
+        print(f"   Query type: {type(query)}, Search type: {search_type}, table_search_k: {table_search_k}")
         sys.stdout.flush()
-        
-        if not similar_table_ids:
-            print(f"⚠️  No tables retrieved, cannot proceed to Step 3")
-            # Still save intermediate results even if no tables retrieved
-            if output_json:
-                result = {
-                    "query_model": model_id,
-                    "query_tables": query_tables,
-                    "model_ids": [],
-                    "intermediate": {
-                        "retrieved_table_ids": [],
-                        "retrieved_table_filenames": [],
-                        "table_id_to_filename": {},
-                        "table_to_models": {}
-                    }
-                }
-                os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
-                with open(output_json, 'w', encoding='utf-8') as f:
-                    import json
-                    json.dump(result, f, ensure_ascii=False, indent=2)
-                print(f"✅ Results saved to {output_json}")
-            return []
-        
-        # Get filenames for retrieved tables from database
-        import duckdb
-        con = duckdb.connect(db_path, read_only=True)
-        try:
-            # Get distinct filenames for the retrieved table IDs
-            table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
-            filename_query = f"""
-                SELECT DISTINCT tableid, filename 
-                FROM modellake_index 
-                WHERE tableid IN ({table_ids_str}) AND rowid = -1
-            """
-            filename_results = con.execute(filename_query).fetchall()
-            retrieved_table_files = {tid: filename for tid, filename in filename_results}
-            print(f"📝 Sample retrieved tables (showing first 2):")
-            for i, (tid, filename) in enumerate(list(retrieved_table_files.items())[:2], 1):
-                print(f"   {i}. Table ID {tid}: {filename}")
-            if len(retrieved_table_files) > 2:
-                print(f"   ... and {len(retrieved_table_files) - 2} more retrieved tables")
-        finally:
-            con.close()
-            
-    except Exception as e:
-        print(f"❌ Error in table search: {e}")
-        import traceback
-        traceback.print_exc()
-        # Still save intermediate results even on error
+        # Handle correlation search specially - need to extract source and target columns
+        if search_type == "correlation" and isinstance(query, pd.DataFrame):
+            source_col = query[query.columns[0]].astype(str).tolist()
+            numeric_cols = query.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0:
+                target_col = query[numeric_cols[0]].tolist()
+                print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
+                similar_table_ids = search_table2table(
+                    query, search_type, k_overfetch, db_path=db_path,
+                    source_column=source_col, target_column=target_col
+                )
+            else:
+                print(f"⚠️  No numeric column found for correlation search, skipping...")
+                similar_table_ids = []
+        else:
+            similar_table_ids = search_table2table(query, search_type, k_overfetch, db_path=db_path)
+        print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
+    sys.stdout.flush()
+    
+    if not similar_table_ids:
+        print(f"⚠️  No tables retrieved, cannot proceed to Step 3")
+        # Still save intermediate results even if no tables retrieved
         if output_json:
             result = {
                 "query_model": model_id,
@@ -740,17 +531,37 @@ def search_card2tab2card(
                     "retrieved_table_ids": [],
                     "retrieved_table_filenames": [],
                     "table_id_to_filename": {},
-                    "table_to_models": {},
-                    "error": str(e)
+                    "table_to_models": {}
                 }
             }
             os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
             with open(output_json, 'w', encoding='utf-8') as f:
                 import json
                 json.dump(result, f, ensure_ascii=False, indent=2)
-            print(f"✅ Results saved to {output_json} (with error)")
+            print(f"✅ Results saved to {output_json}")
         return []
     
+    # Get filenames for retrieved tables from database
+    import duckdb
+    con = duckdb.connect(db_path, read_only=True)
+    try:
+        # Get distinct filenames for the retrieved table IDs
+        table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
+        filename_query = f"""
+            SELECT DISTINCT tableid, filename 
+            FROM modellake_index 
+            WHERE tableid IN ({table_ids_str}) AND rowid = -1
+        """
+        filename_results = con.execute(filename_query).fetchall()
+        retrieved_table_files = {tid: filename for tid, filename in filename_results}
+        print(f"📝 Sample retrieved tables (showing first 2):")
+        for i, (tid, filename) in enumerate(list(retrieved_table_files.items())[:2], 1):
+            print(f"   {i}. Table ID {tid}: {filename}")
+        if len(retrieved_table_files) > 2:
+            print(f"   ... and {len(retrieved_table_files) - 2} more retrieved tables")
+    finally:
+        con.close()
+
     # Step 3: Retrieved Tables -> Corresponding ModelCards
     print(f"\n{'='*60}")
     print(f"[STEP 3] INPUT: {len(similar_table_ids)} retrieved table IDs | OUTPUT: model_ids (from relationship)")
@@ -860,48 +671,23 @@ def search_card2tab2card(
     table_to_models = {}  # Map table filename to list of model IDs
     models_raw_count = 0  # before dedup
 
-    # If using get_from-style mapping, we can map table paths to model IDs
-    if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        print(f"📋 Using get_from-style mapping to map tables to model cards...")
-        for filename in retrieved_filenames:
-            model_ids = get_modelids_from_table(
-                table_path=filename,
-                schema_log_path=schema_log_path,
-                debug=False
-            )
-            models_raw_count += len(model_ids)
-            similar_model_ids.update(model_ids)
-            table_to_models[filename] = list(model_ids)
-    else:
-        # Fallback: use DuckDB SQL (no full parquet load) - same interface as ModelTables get_from
-        if relationship_parquet is None:
-            raise ValueError("relationship_parquet is required when use_citationlake=False")
-        table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
-        print(f"📋 Using relationship_parquet to map tables to model cards...")
-        print(f"📝 Matching {len(table_basenames)} table basenames...")
-        print(f"   Sample basenames: {table_basenames[:3]}{'...' if len(table_basenames) > 3 else ''}")
-        try:
-            from src.modelsearch.compare_baselines import get_modelids_for_basenames_duckdb
-            basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
-        except Exception:
-            relationship_df = load_relationship_parquet(relationship_parquet)
-            basename_col = next((c for c in ["csv_basename", "basename", "filename"] if c in relationship_df.columns), None)
-            basename_to_models = {b: [] for b in table_basenames}
-            if basename_col:
-                for bn in table_basenames:
-                    mids = relationship_df.loc[relationship_df[basename_col] == bn, "modelId"].dropna().unique().tolist()
-                    basename_to_models[bn] = [str(m) for m in mids]
-        for filename in retrieved_filenames:
-            basename = os.path.basename(filename)
-            matched_models = basename_to_models.get(basename, [])
-            if matched_models:
-                models_raw_count += len(matched_models)
-                similar_model_ids.update(matched_models)
-                table_to_models[filename] = matched_models
-                print(f"   ✅ Matched {basename} -> {len(matched_models)} models")
-            else:
-                print(f"   ⚠️  No match for {basename}")
-        print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
+    # Map table basenames to model IDs via relationship parquet (DuckDB or full load)
+    table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
+    print(f"📋 Using relationship_parquet to map tables to model cards...")
+    print(f"📝 Matching {len(table_basenames)} table basenames...")
+    print(f"   Sample basenames: {table_basenames[:3]}{'...' if len(table_basenames) > 3 else ''}")
+    basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
+    for filename in retrieved_filenames:
+        basename = os.path.basename(filename)
+        matched_models = basename_to_models.get(basename, [])
+        if matched_models:
+            models_raw_count += len(matched_models)
+            similar_model_ids.update(matched_models)
+            table_to_models[filename] = matched_models
+            print(f"   ✅ Matched {basename} -> {len(matched_models)} models")
+        else:
+            print(f"   ⚠️  No match for {basename}")
+    print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
     # Per-table model count (value_counts): which tables span how many models (user cares about "countless" tables)
     if table_to_models:
@@ -1003,24 +789,11 @@ def search_card2tab2card_from_tables(
     # Handle backward compatibility
     if modelcard_k is None:
         modelcard_k = k
-    # Get tables for the query model
-    if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            schema_log_path=schema_log_path,
-            use_citationlake=True
-        )
-        query_tables = _filter_s2orc_tables(query_tables)
-    else:
-        if relationship_parquet is None:
-            raise ValueError("relationship_parquet is required when use_citationlake=False")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            relationship_df=relationship_df,
-            use_citationlake=False
-        )
-        query_tables = _filter_s2orc_tables(query_tables)
+    parquet = relationship_parquet or DEFAULT_RELATIONSHIP_PARQUET
+    if not os.path.exists(parquet):
+        raise FileNotFoundError(f"relationship_parquet not found: {parquet}")
+    query_tables = get_tables_for_model(model_id=model_id, relationship_parquet=parquet)
+    query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"Warning: No tables found for model {model_id}")
         return []
@@ -1040,33 +813,13 @@ def search_card2tab2card_from_tables(
     if not retrieved_tables:
         return []
     
-    # Map retrieved tables to model IDs
+    # Map retrieved tables to model IDs via relationship parquet
     similar_model_ids = set()
-    
-    if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        # Use get_from-style mapping to map tables to model IDs
-        for table_path in retrieved_tables:
-            model_ids = get_modelids_from_table(
-                table_path=table_path,
-                schema_log_path=schema_log_path,
-                debug=False
-            )
-            similar_model_ids.update(model_ids)
-    else:
-        # Fallback: use relationship_df
-        if relationship_parquet is None:
-            raise ValueError("relationship_parquet is required when use_citationlake=False")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        
-        # Try both full paths and basenames
-        table_basenames = [os.path.basename(str(t)) for t in retrieved_tables]
-        all_keys = list(retrieved_tables) + table_basenames
-        
-        similar_model_ids = set(relationship_df.loc[
-            relationship_df["csv_basename"].isin(all_keys),
-            "modelId"
-        ].dropna().unique().tolist())
-    
+    table_basenames = [os.path.basename(str(t)) for t in retrieved_tables]
+    basename_to_models = get_modelids_for_basenames_duckdb(parquet, table_basenames)
+    for bn in table_basenames:
+        similar_model_ids.update(basename_to_models.get(bn, []))
+
     # Remove the query model itself
     similar_model_ids = [mid for mid in similar_model_ids if mid != model_id]
     
@@ -1157,59 +910,18 @@ def search_card2tab2card_by_type(
     print(f"{'='*60}\n")
     sys.stdout.flush()
     
-    # Get tables for the query model (same as search_card2tab2card)
-    if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            schema_log_path=schema_log_path,
-            use_citationlake=True
-        )
-        query_tables = _filter_s2orc_tables(query_tables)
-    elif use_citationlake and not USE_CITATIONLAKE_GET_FROM:
-        # User wants get_from-style mapping but it's not available, try to find default relationship_parquet
+    # Resolve relationship parquet and get tables for the query model
+    if relationship_parquet is None:
+        for p in (DEFAULT_RELATIONSHIP_PARQUET, "data_citationlake/processed/modelcard_step3.parquet"):
+            if os.path.exists(p):
+                relationship_parquet = p
+                break
         if relationship_parquet is None:
-            default_paths = [
-                "data_citationlake/processed/modelcard_step3_dedup.parquet",
-                "data_citationlake/processed/modelcard_step3.parquet",
-            ]
-            for default_path in default_paths:
-                if os.path.exists(default_path):
-                    relationship_parquet = default_path
-                    print(f"⚠️  get_from-based approach not available, found default relationship_parquet: {relationship_parquet}")
-                    break
-        
-        if relationship_parquet is None:
-            raise ValueError(
-                "get_from-style mapping is not available and no relationship_parquet found. Please either:\n"
-                "  1. Ensure ModelTables (or another compatible get_from implementation) is installed and on PYTHONPATH, or\n"
-                "  2. Use --relationship_parquet to specify the path to modelcard_step3_dedup.parquet, or\n"
-                "  3. Place modelcard_step3_dedup.parquet in data_citationlake/processed/"
-            )
-        
-        if not os.path.exists(relationship_parquet):
-            raise FileNotFoundError(
-                f"relationship_parquet not found: {relationship_parquet}\n"
-                "Please check the path or use --relationship_parquet to specify the correct path."
-            )
-        
-        print(f"⚠️  get_from-based approach not available, using relationship_parquet: {relationship_parquet}")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            relationship_df=relationship_df,
-            use_citationlake=False
-        )
-    else:
-        # use_citationlake=False, use relationship_parquet
-        if relationship_parquet is None:
-            raise ValueError("relationship_parquet is required when use_citationlake=False")
-        relationship_df = load_relationship_parquet(relationship_parquet)
-        query_tables = get_tables_for_model(
-            model_id=model_id,
-            relationship_df=relationship_df,
-            use_citationlake=False
-        )
-    
+            relationship_parquet = DEFAULT_RELATIONSHIP_PARQUET
+    if not os.path.exists(relationship_parquet):
+        raise FileNotFoundError(f"relationship_parquet not found: {relationship_parquet}")
+    query_tables = get_tables_for_model(model_id=model_id, relationship_parquet=relationship_parquet)
+    query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"⚠️  Warning: No tables found for model {model_id}")
         if output_json:
@@ -1253,18 +965,15 @@ def search_card2tab2card_by_type(
             # Load headers from model's tables
             all_headers = []
             for table_path in query_tables[:10]:  # Limit to first 10 tables
-                try:
-                    if os.path.exists(table_path):
-                        csv_path = table_path
-                    else:
-                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
-                    if csv_path:
-                        df_temp = pd.read_csv(csv_path, nrows=0)
-                        headers = [str(col).lower().strip() for col in df_temp.columns]
-                        headers = [h for h in headers if h]
-                        all_headers.extend(headers)
-                except Exception:
-                    continue
+                if os.path.exists(table_path):
+                    csv_path = table_path
+                else:
+                    csv_path = resolve_table_path(os.path.basename(str(table_path)))
+                if csv_path:
+                    df_temp = pd.read_csv(csv_path, nrows=0)
+                    headers = [str(col).lower().strip() for col in df_temp.columns]
+                    headers = [h for h in headers if h]
+                    all_headers.extend(headers)
             query = list(set(all_headers))
             if not query:
                 query = [os.path.basename(str(t)) for t in query_tables[:10]]
@@ -1294,224 +1003,195 @@ def search_card2tab2card_by_type(
     tableid_to_filename = {}
     retrieved_filenames = []
     
-    try:
-        print(f"🔎 Getting search_table2table_by_type function...")
+    print(f"🔎 Getting search_table2table_by_type function...")
+    sys.stdout.flush()
+    search_table2table_by_type = _get_search_table2table_by_type()
+    print(f"✅ Got search_table2table_by_type function")
+    sys.stdout.flush()
+    if use_per_table_search:
+        num_seed_tables = len(query_tables[:20])
+        k_per_table = max(1, table_search_k)
+        k_request = k_per_table + 4  # Over-fetch: top1 -> request 5
+        print(f"📊 Per-table k={k_per_table} | request={k_request} (k+4) | flow: filter per table → top-{k_per_table} → merge (no post-filter)")
+        print(f"🔎 [STEP 2a] Parallel per-table search (by_type)...")
         sys.stdout.flush()
-        search_table2table_by_type = _get_search_table2table_by_type()
-        print(f"✅ Got search_table2table_by_type function")
-        sys.stdout.flush()
-        if use_per_table_search:
-            num_seed_tables = len(query_tables[:20])
-            k_per_table = max(1, table_search_k)
-            k_request = k_per_table + 4  # Over-fetch: top1 -> request 5
-            print(f"📊 Per-table k={k_per_table} | request={k_request} (k+4) | flow: filter per table → top-{k_per_table} → merge (no post-filter)")
-            print(f"🔎 [STEP 2a] Parallel per-table search (by_type)...")
-            sys.stdout.flush()
 
-            def _search_one_by_type(args):
-                ti, table_path, st, db, cj, cl = args
-                try:
-                    if os.path.exists(str(table_path)):
-                        csv_path = str(table_path)
-                    else:
-                        csv_path = resolve_table_path(os.path.basename(str(table_path)))
-                    if not csv_path:
-                        return None
-                    df_temp = pd.read_csv(csv_path, nrows=0)
-                    headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
-                    tquery = headers or [os.path.basename(str(table_path))]
-                    if st == "single_column":
-                        df_read = pd.read_csv(csv_path, nrows=100)
-                        if len(df_read) > 0 and len(df_read.columns) > 0:
-                            tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
-                    if not tquery:
-                        return None
-                    t0 = time.time()
-                    ids = search_table2table_by_type(tquery, st, k_request, db_path=db,
-                        classification_json=cj, classifications=cl)
-                    elapsed = time.time() - t0
-                    bn = os.path.basename(str(table_path))
-                    ts = time.strftime("%H:%M:%S")
-                    print(f"   [Table {ti+1}] @{ts} INPUT={bn} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
-                    sys.stdout.flush()
-                    return (ids, bn) if ids else None
-                except Exception as e:
-                    print(f"   ⚠️  [Table {ti+1}] {os.path.basename(str(table_path))}: {e}")
-                    return None
-
-            tables_to_search = [(ti, tp, search_type, db_path, classification_json, classifications) for ti, tp in enumerate(query_tables[:20])]
-            max_workers = min(8, len(tables_to_search))
-            results_by_ti = {}
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                futures = {ex.submit(_search_one_by_type, a): a[0] for a in tables_to_search}
-                for fut in as_completed(futures):
-                    ti = futures[fut]
-                    res = fut.result()
-                    if res:
-                        results_by_ti[ti] = res
-            per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
-            # Flow: filter per table → top-k per table → merge (no post-filter)
-            import duckdb
-            all_ids = [tid for ids, _ in per_table_results for tid in ids]
-            tableid_to_filename: Dict[int, str] = {}
-            if all_ids:
-                con_filter = duckdb.connect(db_path, read_only=True)
-                try:
-                    table_ids_str = ','.join(str(tid) for tid in all_ids)
-                    filename_query = f"""
-                        SELECT DISTINCT tableid, filename
-                        FROM modellake_index
-                        WHERE tableid IN ({table_ids_str}) AND rowid = -1
-                    """
-                    filename_results = con_filter.execute(filename_query).fetchall()
-                    tableid_to_filename = {tid: filename for tid, filename in filename_results}
-                finally:
-                    con_filter.close()
-            per_table_filtered_topk: List[List[Tuple[int, str]]] = []
-            n_self, n_s2orc, n_generic = 0, 0, 0
-            for ids, src_basename in per_table_results:
-                kept: List[Tuple[int, str]] = []
-                for tid in ids:
-                    if tid not in tableid_to_filename:
-                        continue
-                    fbase = os.path.basename(str(tableid_to_filename[tid]))
-                    if fbase == src_basename:
-                        n_self += 1
-                        continue
-                    if _classify_table_source_by_basename(fbase) == "llm":
-                        n_s2orc += 1
-                        continue
-                    if _is_generic_table(fbase):
-                        n_generic += 1
-                        continue
-                    kept.append((tid, src_basename))
-                per_table_filtered_topk.append(kept[:k_per_table])
-            if n_self or n_s2orc or n_generic:
-                print(f"   [STEP 2b] Filter per table: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | top-k={k_per_table}/table")
-            seen = set()
-            similar_table_data = []
-            max_len = max(len(r) for r in per_table_filtered_topk) if per_table_filtered_topk else 0
-            for rank in range(max_len):
-                for row in per_table_filtered_topk:
-                    if rank < len(row) and row[rank][0] not in seen:
-                        seen.add(row[rank][0])
-                        similar_table_data.append(row[rank])
-            similar_table_ids = [tid for tid, _ in similar_table_data]
-            print(f"   [STEP 2a] Done: {len(per_table_results)} tables | filter→top{k_per_table}→merge: {len(similar_table_data)}")
-        else:
-            print(f"🔎 Searching for similar tables (with classification filtering)...")
-            sys.stdout.flush()
-            # Handle correlation search specially
-            if search_type == "correlation" and isinstance(query, pd.DataFrame):
-                source_col = query[query.columns[0]].astype(str).tolist()
-                numeric_cols = query.select_dtypes(include=['number']).columns
-                if len(numeric_cols) > 0:
-                    target_col = query[numeric_cols[0]].tolist()
-                    print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
-                    similar_table_ids = search_table2table_by_type(
-                        query, search_type, table_search_k, db_path=db_path,
-                        classification_json=classification_json,
-                        classifications=classifications,
-                        source_column=source_col, target_column=target_col
-                    )
-                else:
-                    print(f"⚠️  No numeric column found for correlation search, skipping...")
-                    similar_table_ids = []
+        def _search_one_by_type(args):
+            ti, table_path, st, db, cj, cl = args
+            if os.path.exists(str(table_path)):
+                csv_path = str(table_path)
             else:
+                csv_path = resolve_table_path(os.path.basename(str(table_path)))
+            if not csv_path:
+                return None
+            df_temp = pd.read_csv(csv_path, nrows=0)
+            headers = [str(c).lower().strip() for c in df_temp.columns if str(c).strip()]
+            tquery = headers or [os.path.basename(str(table_path))]
+            if st == "single_column":
+                df_read = pd.read_csv(csv_path, nrows=100)
+                if len(df_read) > 0 and len(df_read.columns) > 0:
+                    tquery = df_read[df_read.columns[0]].dropna().astype(str).tolist()
+            if not tquery:
+                return None
+            t0 = time.time()
+            ids = search_table2table_by_type(tquery, st, k_request, db_path=db,
+                classification_json=cj, classifications=cl)
+            elapsed = time.time() - t0
+            bn = os.path.basename(str(table_path))
+            ts = time.strftime("%H:%M:%S")
+            print(f"   [Table {ti+1}] @{ts} INPUT={bn} k_request={k_request} | OUTPUT={len(ids) if ids else 0} ids | {elapsed:.1f}s")
+            sys.stdout.flush()
+            return (ids, bn) if ids else None
+
+        tables_to_search = [(ti, tp, search_type, db_path, classification_json, classifications) for ti, tp in enumerate(query_tables[:20])]
+        max_workers = min(8, len(tables_to_search))
+        results_by_ti = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_search_one_by_type, a): a[0] for a in tables_to_search}
+            for fut in as_completed(futures):
+                ti = futures[fut]
+                res = fut.result()
+                if res:
+                    results_by_ti[ti] = res
+        per_table_results = [results_by_ti[ti] for ti in sorted(results_by_ti.keys())]
+        # Flow: filter per table → top-k per table → merge (no post-filter)
+        import duckdb
+        all_ids = [tid for ids, _ in per_table_results for tid in ids]
+        tableid_to_filename: Dict[int, str] = {}
+        if all_ids:
+            con_filter = duckdb.connect(db_path, read_only=True)
+            try:
+                table_ids_str = ','.join(str(tid) for tid in all_ids)
+                filename_query = f"""
+                    SELECT DISTINCT tableid, filename
+                    FROM modellake_index
+                    WHERE tableid IN ({table_ids_str}) AND rowid = -1
+                """
+                filename_results = con_filter.execute(filename_query).fetchall()
+                tableid_to_filename = {tid: filename for tid, filename in filename_results}
+            finally:
+                con_filter.close()
+        per_table_filtered_topk: List[List[Tuple[int, str]]] = []
+        n_self, n_s2orc, n_generic = 0, 0, 0
+        for ids, src_basename in per_table_results:
+            kept: List[Tuple[int, str]] = []
+            for tid in ids:
+                if tid not in tableid_to_filename:
+                    continue
+                fbase = os.path.basename(str(tableid_to_filename[tid]))
+                if fbase == src_basename:
+                    n_self += 1
+                    continue
+                if _classify_table_source_by_basename(fbase) == "llm":
+                    n_s2orc += 1
+                    continue
+                if _is_generic_table(fbase):
+                    n_generic += 1
+                    continue
+                kept.append((tid, src_basename))
+            per_table_filtered_topk.append(kept[:k_per_table])
+        if n_self or n_s2orc or n_generic:
+            print(f"   [STEP 2b] Filter per table: self={n_self}, s2orc={n_s2orc}, generic={n_generic} | top-k={k_per_table}/table")
+        seen = set()
+        similar_table_data = []
+        max_len = max(len(r) for r in per_table_filtered_topk) if per_table_filtered_topk else 0
+        for rank in range(max_len):
+            for row in per_table_filtered_topk:
+                if rank < len(row) and row[rank][0] not in seen:
+                    seen.add(row[rank][0])
+                    similar_table_data.append(row[rank])
+        similar_table_ids = [tid for tid, _ in similar_table_data]
+        print(f"   [STEP 2a] Done: {len(per_table_results)} tables | filter→top{k_per_table}→merge: {len(similar_table_data)}")
+    else:
+        print(f"🔎 Searching for similar tables (with classification filtering)...")
+        sys.stdout.flush()
+        # Handle correlation search specially
+        if search_type == "correlation" and isinstance(query, pd.DataFrame):
+            source_col = query[query.columns[0]].astype(str).tolist()
+            numeric_cols = query.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0:
+                target_col = query[numeric_cols[0]].tolist()
+                print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
                 similar_table_ids = search_table2table_by_type(
                     query, search_type, table_search_k, db_path=db_path,
                     classification_json=classification_json,
-                    classifications=classifications
+                    classifications=classifications,
+                    source_column=source_col, target_column=target_col
                 )
-            print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs, filtered by classification)")
-        sys.stdout.flush()
-        
-        if not similar_table_ids:
-            print(f"⚠️  No tables retrieved, cannot proceed to Step 3")
-            if output_json:
-                result = {
-                    "query_model": model_id,
-                    "query_tables": query_tables,
-                    "model_ids": [],
-                    "intermediate": {
-                        "retrieved_table_ids": [],
-                        "retrieved_table_filenames": [],
-                        "table_id_to_filename": {},
-                        "table_to_models": {}
-                    }
-                }
-                os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
-                with open(output_json, 'w', encoding='utf-8') as f:
-                    import json
-                    json.dump(result, f, ensure_ascii=False, indent=2)
-                print(f"✅ Results saved to {output_json}")
-            return []
-        
-        # Get filenames for retrieved tables from database
-        import duckdb
-        con = duckdb.connect(db_path, read_only=True)
-        try:
-            table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
-            filename_query = f"""
-                SELECT DISTINCT tableid, filename 
-                FROM modellake_index 
-                WHERE tableid IN ({table_ids_str}) AND rowid = -1
-            """
-            filename_results = con.execute(filename_query).fetchall()
-            tableid_to_filename = {tid: filename for tid, filename in filename_results}
-            # Per-table path: already filtered+topk+merge in Step 2, no post-filter
-            if not (use_per_table_search and per_table_results):
-                seed_basenames = {os.path.basename(str(t)) for t in query_tables}
-                filtered = [tid for tid in similar_table_ids if tid in tableid_to_filename
-                    and os.path.basename(str(tableid_to_filename[tid])) not in seed_basenames
-                    and _classify_table_source_by_basename(os.path.basename(str(tableid_to_filename[tid]))) != "llm"
-                    and not _is_generic_table(tableid_to_filename[tid])]
-                similar_table_ids = filtered[:table_search_k]
-            # Preserve Tab2Tab relevance order: iterate, dedupe by filename
-            seen_filenames = set()
-            retrieved_filenames = []
-            for tid in similar_table_ids:
-                if tid in tableid_to_filename:
-                    fname = tableid_to_filename[tid]
-                    if fname not in seen_filenames:
-                        seen_filenames.add(fname)
-                        retrieved_filenames.append(fname)
-            # Filter generic tables (carbon/country code - invalid for search)
-            n_before = len(retrieved_filenames)
-            retrieved_filenames = [f for f in retrieved_filenames if not _is_generic_table(f)]
-            if n_before > len(retrieved_filenames):
-                print(f"ℹ️  Filtered {n_before - len(retrieved_filenames)} generic tables (1910.09700_table, 204823751_table)")
-            print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
-            # Debug: print query_tables and searched_tables
-            print(f"📋 query_tables ({len(query_tables)}): {[os.path.basename(str(t)) for t in query_tables[:5]]}{'...' if len(query_tables) > 5 else ''}")
-            print(f"📋 searched_tables ({len(retrieved_filenames)}): {[os.path.basename(str(f)) for f in retrieved_filenames[:5]]}{'...' if len(retrieved_filenames) > 5 else ''}")
-        finally:
-            con.close()
-            
-    except Exception as e:
-        print(f"❌ Error in table search: {e}")
-        import traceback
-        traceback.print_exc()
+            else:
+                print(f"⚠️  No numeric column found for correlation search, skipping...")
+                similar_table_ids = []
+        else:
+            similar_table_ids = search_table2table_by_type(
+                query, search_type, table_search_k, db_path=db_path,
+                classification_json=classification_json,
+                classifications=classifications
+            )
+        print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs, filtered by classification)")
+    sys.stdout.flush()
+    
+    if not similar_table_ids:
+        print(f"⚠️  No tables retrieved, cannot proceed to Step 3")
         if output_json:
             result = {
                 "query_model": model_id,
                 "query_tables": query_tables,
                 "model_ids": [],
                 "intermediate": {
-                    "retrieved_table_ids": similar_table_ids if similar_table_ids else [],
-                    "retrieved_table_filenames": retrieved_filenames if retrieved_filenames else [],
-                    "table_id_to_filename": tableid_to_filename if tableid_to_filename else {},
-                    "table_to_models": {},
-                    "error": str(e)
+                    "retrieved_table_ids": [],
+                    "retrieved_table_filenames": [],
+                    "table_id_to_filename": {},
+                    "table_to_models": {}
                 }
             }
             os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
             with open(output_json, 'w', encoding='utf-8') as f:
                 import json
                 json.dump(result, f, ensure_ascii=False, indent=2)
-            print(f"✅ Results saved to {output_json} (with error)")
+            print(f"✅ Results saved to {output_json}")
         return []
     
+    # Get filenames for retrieved tables from database
+    import duckdb
+    con = duckdb.connect(db_path, read_only=True)
+    try:
+        table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
+        filename_query = f"""
+            SELECT DISTINCT tableid, filename 
+            FROM modellake_index 
+            WHERE tableid IN ({table_ids_str}) AND rowid = -1
+        """
+        filename_results = con.execute(filename_query).fetchall()
+        tableid_to_filename = {tid: filename for tid, filename in filename_results}
+        # Per-table path: already filtered+topk+merge in Step 2, no post-filter
+        if not (use_per_table_search and per_table_results):
+            seed_basenames = {os.path.basename(str(t)) for t in query_tables}
+            filtered = [tid for tid in similar_table_ids if tid in tableid_to_filename
+                and os.path.basename(str(tableid_to_filename[tid])) not in seed_basenames
+                and _classify_table_source_by_basename(os.path.basename(str(tableid_to_filename[tid]))) != "llm"
+                and not _is_generic_table(tableid_to_filename[tid])]
+            similar_table_ids = filtered[:table_search_k]
+        # Preserve Tab2Tab relevance order: iterate, dedupe by filename
+        seen_filenames = set()
+        retrieved_filenames = []
+        for tid in similar_table_ids:
+            if tid in tableid_to_filename:
+                fname = tableid_to_filename[tid]
+                if fname not in seen_filenames:
+                    seen_filenames.add(fname)
+                    retrieved_filenames.append(fname)
+        # Filter generic tables (carbon/country code - invalid for search)
+        n_before = len(retrieved_filenames)
+        retrieved_filenames = [f for f in retrieved_filenames if not _is_generic_table(f)]
+        if n_before > len(retrieved_filenames):
+            print(f"ℹ️  Filtered {n_before - len(retrieved_filenames)} generic tables (1910.09700_table, 204823751_table)")
+        print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
+        # Debug: print query_tables and searched_tables
+        print(f"📋 query_tables ({len(query_tables)}): {[os.path.basename(str(t)) for t in query_tables[:5]]}{'...' if len(query_tables) > 5 else ''}")
+        print(f"📋 searched_tables ({len(retrieved_filenames)}): {[os.path.basename(str(f)) for f in retrieved_filenames[:5]]}{'...' if len(retrieved_filenames) > 5 else ''}")
+    finally:
+            con.close()
+
     # Step 3: Retrieved Tables -> Corresponding ModelCards (same as search_card2tab2card)
     print(f"\n{'='*60}")
     print(f"🔄 Step 3: Retrieved Tables -> Corresponding ModelCards")
@@ -1523,42 +1203,17 @@ def search_card2tab2card_by_type(
     table_to_models = {}
     models_raw_count = 0
 
-    if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        print(f"📋 Using get_from-style mapping to map tables to model cards...")
-        for filename in retrieved_filenames:
-            model_ids = get_modelids_from_table(
-                table_path=filename,
-                schema_log_path=schema_log_path,
-                debug=False
-            )
-            models_raw_count += len(model_ids)
-            similar_model_ids.update(model_ids)
-            table_to_models[filename] = list(model_ids)
-    else:
-        # Fallback: use relationship_df
-        if relationship_parquet is None:
-            raise ValueError("relationship_parquet is required when use_citationlake=False")
-        table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
-        print(f"📋 Using relationship_parquet to map tables to model cards...")
-        try:
-            from src.modelsearch.compare_baselines import get_modelids_for_basenames_duckdb
-            basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
-        except Exception:
-            relationship_df = load_relationship_parquet(relationship_parquet)
-            basename_col = next((c for c in ["csv_basename", "basename", "filename"] if c in relationship_df.columns), None)
-            basename_to_models = {b: [] for b in table_basenames}
-            if basename_col:
-                for bn in table_basenames:
-                    mids = relationship_df.loc[relationship_df[basename_col] == bn, "modelId"].dropna().unique().tolist()
-                    basename_to_models[bn] = [str(m) for m in mids]
-        for filename in retrieved_filenames:
-            basename = os.path.basename(filename)
-            matched_models = basename_to_models.get(basename, [])
-            if matched_models:
-                models_raw_count += len(matched_models)
-                similar_model_ids.update(matched_models)
-                table_to_models[filename] = matched_models
-        print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
+    table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
+    print(f"📋 Using relationship_parquet to map tables to model cards...")
+    basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
+    for filename in retrieved_filenames:
+        basename = os.path.basename(filename)
+        matched_models = basename_to_models.get(basename, [])
+        if matched_models:
+            models_raw_count += len(matched_models)
+            similar_model_ids.update(matched_models)
+            table_to_models[filename] = matched_models
+    print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
     
     # Per-table model count (value_counts): which tables span how many models
     if table_to_models:

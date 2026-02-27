@@ -8,78 +8,36 @@ Provides various search functions:
 - card2tab2card: ModelCard to Table to ModelCard search
 """
 
-# Use relative imports to avoid issues
-# Note: tab2tab is NOT imported here to avoid initializing DBHandler on import
-# (Blend_internal's OperatorBase initializes DBHandler at class level)
-# Import tab2tab functions only when needed (lazy import via __getattr__)
+import os
+import sys
 
-try:
-    from .card2card import (
-        build_card_index,
-        search_card2card,
-        search_card2card_batch
-    )
-    
-    from .query2modelcard import (
-        search_query2modelcard
-    )
-    
-    from .card2tab2card import (
-        load_relationship_parquet,
-        get_tables_for_model,
-        search_card2tab2card,
-        search_card2tab2card_from_tables,
-        search_card2tab2card_by_type
-    )
-    
-    from .classification import (
-        classify_table,
-        classify_table_from_db,
-        classify_datalake_batch,
-        load_classifications,
-        get_known_classes,
-        infer_classification_method,
-    )
-    
-    from .tab2tab_by_type import (
-        search_table2table_by_type
-    )
-except ImportError:
-    # Fallback for direct script execution
-    import sys
-    import os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-    
-    from src.search.card2card import (
-        build_card_index,
-        search_card2card,
-        search_card2card_batch
-    )
-    
-    from src.search.query2modelcard import (
-        search_query2modelcard
-    )
-    
-    from src.search.card2tab2card import (
-        load_relationship_parquet,
-        get_tables_for_model,
-        search_card2tab2card,
-        search_card2tab2card_from_tables,
-        search_card2tab2card_by_type
-    )
-    
-    from src.search.classification import (
-        classify_table,
-        classify_table_from_db,
-        classify_datalake_batch,
-        load_classifications,
-        get_known_classes,
-        infer_classification_method,
-    )
-    
-    from src.search.tab2tab_by_type import (
-        search_table2table_by_type
-    )
+# Ensure repo root is on path so "from src.search.*" works (run as package or from repo root)
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from src.search.card2card import (
+    build_card_index,
+    search_card2card,
+    search_card2card_batch,
+)
+from src.search.query2modelcard import search_query2modelcard
+from src.search.card2tab2card import (
+    load_relationship_parquet,
+    get_tables_for_model,
+    search_card2tab2card,
+    search_card2tab2card_from_tables,
+    search_card2tab2card_by_type,
+)
+from src.search.classification import (
+    classify_table,
+    classify_table_from_db,
+    classify_datalake_batch,
+    load_classifications,
+    get_known_classes,
+    infer_classification_method,
+)
+from src.search.tab2tab_by_type import search_table2table_by_type
 
 # Lazy import for tab2tab functions to avoid DBHandler initialization
 _tab2tab_module = None
@@ -98,13 +56,8 @@ def __getattr__(name):
     
     if name in tab2tab_functions:
         if _tab2tab_module is None:
-            try:
-                from . import tab2tab as _tab2tab_module
-            except ImportError:
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-                from src.search import tab2tab as _tab2tab_module
+            # Repo root already in sys.path at top of this file; single import, no try/except
+            from src.search import tab2tab as _tab2tab_module
         return getattr(_tab2tab_module, name)
     
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

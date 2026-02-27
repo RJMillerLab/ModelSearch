@@ -45,27 +45,14 @@ def _get_tables_for_models_duckdb(
     path_abs = os.path.abspath(parquet_path).replace("\\", "/")
     conn = duckdb.connect(":memory:")
     ids_sql = ",".join(repr(m) for m in model_ids)
-    try:
-        df = conn.execute(f"""
-            SELECT modelId FROM read_parquet(?)
-            WHERE modelId IN ({ids_sql})
-        """, [path_abs]).fetchdf()
-    except Exception:
-        try:
-            df = conn.execute(f"""
-                SELECT modelId FROM read_parquet('{path_abs}')
-                WHERE modelId IN ({ids_sql})
-            """).fetchdf()
-        except Exception:
-            conn.close()
-            return {}
+    df = conn.execute(f"""
+        SELECT modelId FROM read_parquet('{path_abs}')
+        WHERE modelId IN ({ids_sql})
+    """).fetchdf()
     if df.empty:
         conn.close()
         return {}
-    try:
-        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
-    except Exception:
-        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
+    cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
     list_cols = [
         c[0] for c in cols
         if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
@@ -74,16 +61,10 @@ def _get_tables_for_models_duckdb(
         conn.close()
         return {}
     select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
-    try:
-        full_df = conn.execute(f"""
-            SELECT {select_cols} FROM read_parquet(?)
-            WHERE modelId IN ({ids_sql})
-        """, [path_abs]).fetchdf()
-    except Exception:
-        full_df = conn.execute(f"""
-            SELECT {select_cols} FROM read_parquet('{path_abs}')
-            WHERE modelId IN ({ids_sql})
-        """).fetchdf()
+    full_df = conn.execute(f"""
+        SELECT {select_cols} FROM read_parquet('{path_abs}')
+        WHERE modelId IN ({ids_sql})
+    """).fetchdf()
     conn.close()
     model_to_tables: Dict[str, List[str]] = {m: [] for m in model_ids}
     for _, row in full_df.iterrows():
@@ -111,13 +92,7 @@ if blend_path_abs and os.path.exists(blend_path_abs):
 
 # Blend_internal imports are optional and will be lazy-loaded if needed
 # We don't import them at module level to avoid DB initialization issues
-BLEND_AVAILABLE = False
-try:
-    # Check if Blend_internal exists
-    if blend_path_abs and os.path.exists(blend_path_abs):
-        BLEND_AVAILABLE = True
-except:
-    pass
+BLEND_AVAILABLE = bool(blend_path_abs and os.path.exists(blend_path_abs))
 
 
 def integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -137,30 +112,16 @@ def integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]
     if len(tables) == 1:
         return tables[0].copy()
     
-    try:
-        # Use pandas concat for union (combine all rows)
-        # Align columns first, but avoid repeated column insertion (fragmentation).
-        # Build a stable column order: in order of first appearance across tables.
-        all_columns: List[str] = []
-        for df in tables:
-            for col in df.columns:
-                if col not in all_columns:
-                    all_columns.append(col)
-        
-        # Align all tables to have the same columns in one shot per DataFrame
-        aligned_tables = [df.reindex(columns=all_columns) for df in tables]
-        
-        # Union (concatenate) all tables - return full result, no row cap
-        integrated = pd.concat(aligned_tables, axis=0, ignore_index=True)
-        
-        # Remove duplicates if needed
-        integrated = integrated.drop_duplicates()
-        
-        return integrated
-    
-    except Exception as e:
-        print(f"❌ Error in union integration: {e}")
-        return None
+    # Use pandas concat for union (combine all rows)
+    all_columns: List[str] = []
+    for df in tables:
+        for col in df.columns:
+            if col not in all_columns:
+                all_columns.append(col)
+    aligned_tables = [df.reindex(columns=all_columns) for df in tables]
+    integrated = pd.concat(aligned_tables, axis=0, ignore_index=True)
+    integrated = integrated.drop_duplicates()
+    return integrated
 
 
 def integrate_tables_intersection(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -179,43 +140,30 @@ def integrate_tables_intersection(tables: List[pd.DataFrame]) -> Optional[pd.Dat
     
     if len(tables) == 1:
         return tables[0].copy()
-    
-    try:
-        # Find common columns
-        common_columns = set(tables[0].columns)
-        for df in tables[1:]:
-            common_columns = common_columns.intersection(set(df.columns))
-        
-        if not common_columns:
-            print("⚠️  No common columns found for intersection")
-            # Return empty DataFrame with no columns instead of None
-            # This allows the caller to handle it gracefully
-            return pd.DataFrame()
-        
-        # Convert to string for comparison
-        common_columns = list(common_columns)
-        
-        # Find intersection (rows that appear in all tables)
-        # Start with first table
-        result = tables[0][common_columns].copy()
-        result['_temp_key'] = result.apply(lambda x: '|'.join(x.astype(str)), axis=1)
-        
-        # Find rows that exist in all other tables
-        for df in tables[1:]:
-            df_subset = df[common_columns].copy()
-            df_subset['_temp_key'] = df_subset.apply(lambda x: '|'.join(x.astype(str)), axis=1)
-            
-            # Keep only rows that exist in current table
-            result = result[result['_temp_key'].isin(df_subset['_temp_key'])]
-        
-        # Remove temp key
-        result = result[common_columns]
-        
-        return result
-    
-    except Exception as e:
-        print(f"❌ Error in intersection integration: {e}")
-        return None
+
+    # Find common columns
+    common_columns = set(tables[0].columns)
+    for df in tables[1:]:
+        common_columns = common_columns.intersection(set(df.columns))
+
+    if not common_columns:
+        print("⚠️  No common columns found for intersection")
+        return pd.DataFrame()
+
+    # Convert to string for comparison
+    common_columns = list(common_columns)
+
+    # Find intersection (rows that appear in all tables)
+    result = tables[0][common_columns].copy()
+    result['_temp_key'] = result.apply(lambda x: '|'.join(x.astype(str)), axis=1)
+
+    for df in tables[1:]:
+        df_subset = df[common_columns].copy()
+        df_subset['_temp_key'] = df_subset.apply(lambda x: '|'.join(x.astype(str)), axis=1)
+        result = result[result['_temp_key'].isin(df_subset['_temp_key'])]
+
+    result = result[common_columns]
+    return result
 
 
 def _find_dialite_internal() -> Optional[str]:
@@ -269,32 +217,20 @@ def integrate_tables_alite(
         print("   Set DIALITE_INTERNAL_REPO environment variable or ensure dialite_internal is in a standard location.")
         return None
     
-    try:
-        # Add dialite_internal to path
-        if dialite_repo not in sys.path:
-            sys.path.insert(0, dialite_repo)
-        
-        # Import alite module
-        import alite.alite_fd as alite_module
-        
-        # ALITE requires file paths, not DataFrames
-        # Use the provided table_paths
-        if not table_paths:
-            print("⚠️  ALITE requires file paths, not DataFrames")
-            return None
-        
-        # Run ALITE algorithm - return full result, no row cap
-        result_FD, stats_df, debug_dict = alite_module.FDAlgorithm(table_paths.copy())
-        
-        if result_FD is not None and len(result_FD) > 0:
-            return result_FD
-        return result_FD
-    
-    except Exception as e:
-        print(f"❌ Error in ALITE integration: {e}")
-        import traceback
-        traceback.print_exc()
+    # Add dialite_internal to path
+    if dialite_repo not in sys.path:
+        sys.path.insert(0, dialite_repo)
+
+    import alite.alite_fd as alite_module
+
+    if not table_paths:
+        print("⚠️  ALITE requires file paths, not DataFrames")
         return None
+
+    result_FD, stats_df, debug_dict = alite_module.FDAlgorithm(table_paths.copy())
+    if result_FD is not None and len(result_FD) > 0:
+        return result_FD
+    return result_FD
 
 
 def integrate_tables_outer_join(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -314,28 +250,13 @@ def integrate_tables_outer_join(tables: List[pd.DataFrame]) -> Optional[pd.DataF
     if len(tables) == 1:
         return tables[0].copy()
     
-    try:
-        # Start with first table
-        result = tables[0].copy()
-        
-        # Merge all other tables using outer join on index
-        # This combines all columns from all tables
-        for df in tables[1:]:
-            # Reset index for both to ensure proper merging
-            result_reset = result.reset_index(drop=True)
-            df_reset = df.reset_index(drop=True)
-            
-            # Outer join: keep all rows from both tables
-            # Use index as join key (implicit)
-            result = pd.concat([result_reset, df_reset], axis=1, join='outer')
-        
-        return result
-    
-    except Exception as e:
-        print(f"❌ Error in outer join integration: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+    # Start with first table; merge others with outer join on index
+    result = tables[0].copy()
+    for df in tables[1:]:
+        result_reset = result.reset_index(drop=True)
+        df_reset = df.reset_index(drop=True)
+        result = pd.concat([result_reset, df_reset], axis=1, join='outer')
+    return result
 
 
 def integrate_tables(
@@ -809,26 +730,7 @@ def integrate_tables_from_model_search_results(
     if parent_dir_abs not in sys.path:
         sys.path.insert(0, parent_dir_abs)
     
-    # Import directly from card2tab2card module (avoiding __init__.py which imports card2card)
-    try:
-        # Try direct import first (avoids triggering card2card imports)
-        import importlib.util
-        card2tab2card_path = os.path.join(os.path.dirname(__file__), '..', 'search', 'card2tab2card.py')
-        if os.path.exists(card2tab2card_path):
-            spec = importlib.util.spec_from_file_location("card2tab2card", card2tab2card_path)
-            card2tab2card_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(card2tab2card_module)
-            get_tables_for_model = card2tab2card_module.get_tables_for_model
-            load_relationship_parquet = card2tab2card_module.load_relationship_parquet
-        else:
-            # Fallback to regular import
-            from src.search.card2tab2card import get_tables_for_model, load_relationship_parquet
-    except Exception as e:
-        # Last resort: try importing from search module (may trigger torch requirement)
-        try:
-            from src.search.card2tab2card import get_tables_for_model, load_relationship_parquet
-        except ImportError:
-            raise ImportError(f"Could not import get_tables_for_model and load_relationship_parquet: {e}")
+    from src.search.card2tab2card import get_tables_for_model, load_relationship_parquet
     
     # Load relationship data only when DuckDB path is unavailable and we truly need a full DataFrame
     relationship_df = None
@@ -843,27 +745,11 @@ def integrate_tables_from_model_search_results(
             if os.path.exists(default_parquet):
                 parquet_for_df = default_parquet
         if parquet_for_df:
-            try:
-                relationship_df = load_relationship_parquet(parquet_for_df)
-                print(f"✅ Loaded relationship parquet for fallback DataFrame path: {parquet_for_df}")
-            except Exception as e:
-                print(f"⚠️  Failed to load relationship parquet {parquet_for_df}: {e}")
-                print(f"   Will try to use get_from-style approach instead...")
-                use_citationlake = True  # Fallback to get_from-style approach
-    
-    # Check if get_from-style mapping is actually available
-    try:
-        # Try to check if get_from-style mapping (via card2tab2card) is available
-        card2tab2card_path = os.path.join(os.path.dirname(__file__), '..', 'search', 'card2tab2card.py')
-        if os.path.exists(card2tab2card_path):
-            spec = importlib.util.spec_from_file_location("card2tab2card_check", card2tab2card_path)
-            card2tab2card_check_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(card2tab2card_check_module)
-            citationlake_available = getattr(card2tab2card_check_module, 'USE_CITATIONLAKE_GET_FROM', False)
-        else:
-            citationlake_available = False
-    except:
-        citationlake_available = False
+            relationship_df = load_relationship_parquet(parquet_for_df)
+            print(f"✅ Loaded relationship parquet for fallback DataFrame path: {parquet_for_df}")
+
+    # Table–model mapping uses relationship_parquet only (no optional get_from)
+    citationlake_available = False
     
     # Fallback: Try to extract table information from search_results JSON
     # This is useful for template/fake data when real data sources are unavailable
@@ -991,39 +877,35 @@ def integrate_tables_from_model_search_results(
         # Fallback: per-model get_tables_for_model (slower)
         for model_id in model_ids:
             model_to_table_paths[model_id] = []
-            try:
-                # Get tables for this model
-                if use_citationlake and citationlake_available:
-                    model_tables = get_tables_for_model(
-                        model_id=model_id,
-                        schema_log_path=schema_log_path,
-                        use_citationlake=True
-                    )
-                else:
-                    if relationship_df is None:
-                        raise ValueError("relationship_df is required when use_citationlake=False")
-                    model_tables = get_tables_for_model(
-                        model_id=model_id,
-                        relationship_df=relationship_df,
-                        use_citationlake=False
-                    )
-                
-                if model_tables:
-                    # Resolve basenames to path (utils.resolve_table_path) or keep basename for load_table later
-                    for table_basename in model_tables:
-                        table_path = resolve_table_path(table_basename) or table_basename
-                        if table_path not in all_table_paths:
-                            all_table_paths.append(table_path)
-                        model_to_table_paths[model_id].append(table_path)
-                    
-                    models_with_tables.append(model_id)
-                    print(f"  ✅ Model {model_id}: {len(model_tables)} tables")
-                else:
-                    models_without_tables.append(model_id)
-                    print(f"  ⚠️  Model {model_id}: No tables found")
-            except Exception as e:
-                print(f"  ❌ Error getting tables for model {model_id}: {str(e)}")
+            # Get tables for this model
+            if use_citationlake and citationlake_available:
+                model_tables = get_tables_for_model(
+                    model_id=model_id,
+                    schema_log_path=schema_log_path,
+                    use_citationlake=True
+                )
+            else:
+                if relationship_df is None:
+                    raise ValueError("relationship_df is required when use_citationlake=False")
+                model_tables = get_tables_for_model(
+                    model_id=model_id,
+                    relationship_df=relationship_df,
+                    use_citationlake=False
+                )
+
+            if model_tables:
+                # Resolve basenames to path (utils.resolve_table_path) or keep basename for load_table later
+                for table_basename in model_tables:
+                    table_path = resolve_table_path(table_basename) or table_basename
+                    if table_path not in all_table_paths:
+                        all_table_paths.append(table_path)
+                    model_to_table_paths[model_id].append(table_path)
+
+                models_with_tables.append(model_id)
+                print(f"  ✅ Model {model_id}: {len(model_tables)} tables")
+            else:
                 models_without_tables.append(model_id)
+                print(f"  ⚠️  Model {model_id}: No tables found")
     
     if not all_table_paths:
         return {
