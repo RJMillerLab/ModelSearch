@@ -904,29 +904,18 @@ To create modellake.db, use:
 
     # Update Blend_internal config with db_path BEFORE any imports
     # This must happen before _lazy_import_blend() is called
-    try:
-        _update_blend_config(args.db_path)
-        print(f"✅ Updated Blend_internal config to use db_path: {args.db_path}")
-    except Exception as e:
-        print(f"⚠️  Warning: Could not update config: {e}")
-        print("   Continuing with default config...")
-    
+    _update_blend_config(args.db_path)
+    print(f"✅ Updated Blend_internal config to use db_path: {args.db_path}")
+
     # List tables if requested
     if args.list_tables:
-        try:
-            tables = get_tables_from_modellake_db(db_path=args.db_path)
-            print(f"Found {len(tables)} tables in modellake.db:")
-            for i, table in enumerate(tables[:50], 1):  # Show first 50
-                print(f"  {i}. Table ID: {table['tableid']}, File: {table['filename']}, "
-                      f"Group: {table['table_group']}, Type: {table['table_type']}")
-            if len(tables) > 50:
-                print(f"  ... and {len(tables) - 50} more tables")
-        except Exception as e:
-            print(f"❌ Error listing tables: {e}")
-            print(f"\n💡 Tip: modellake.db needs to be created first. See --help for instructions.")
-            import traceback
-            traceback.print_exc()
-        return
+        tables = get_tables_from_modellake_db(db_path=args.db_path)
+        print(f"Found {len(tables)} tables in modellake.db:")
+        for i, table in enumerate(tables[:50], 1):  # Show first 50
+            print(f"  {i}. Table ID: {table['tableid']}, File: {table['filename']}, "
+                    f"Group: {table['table_group']}, Type: {table['table_type']}")
+        if len(tables) > 50:
+            print(f"  ... and {len(tables) - 50} more tables")
     
     # If no query provided, try to use test_table_id or require query
     if args.query is None and args.test_table_id is None:
@@ -949,37 +938,28 @@ To create modellake.db, use:
         args.search_type = 'keyword'
         print(f"Testing with table ID {args.test_table_id} as keyword")
     
-    # Perform search
-    try:
-        results = search_table2table(query, args.search_type, args.k, db_path=args.db_path)
-        print(f"Found {len(results)} tables:")
-        for i, table_id in enumerate(results, 1):
-            print(f"  {i}. Table ID: {table_id}")
-        
-        # Save results as JSON
-        os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
-        result_data = {
-            "query": query if isinstance(query, list) else str(query),
-            "search_type": args.search_type,
-            "k": args.k,
-            "results": [int(tid) for tid in results],
-            "num_results": len(results)
-        }
-        import json
-        with open(args.output, 'w', encoding='utf-8') as f:
-            json.dump(result_data, f, ensure_ascii=False, indent=2)
-        print(f"✅ Results saved to {args.output}")
-        try:
-            from src.utils import get_device
-            dev = get_device()
-        except Exception:
-            dev = "cpu"
-        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {dev})")
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    # Perform search    
+    results = search_table2table(query, args.search_type, args.k, db_path=args.db_path)
+    print(f"Found {len(results)} tables:")
+    for i, table_id in enumerate(results, 1):
+        print(f"  {i}. Table ID: {table_id}")
+    
+    # Save results as JSON
+    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
+    result_data = {
+        "query": query if isinstance(query, list) else str(query),
+        "search_type": args.search_type,
+        "k": args.k,
+        "results": [int(tid) for tid in results],
+        "num_results": len(results)
+    }
+    import json
+    with open(args.output, 'w', encoding='utf-8') as f:
+        json.dump(result_data, f, ensure_ascii=False, indent=2)
+    print(f"✅ Results saved to {args.output}")
+    from src.utils import get_device
+    dev = get_device()
+    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {dev})")
 
 
 if __name__ == '__main__':

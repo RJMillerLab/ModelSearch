@@ -50,10 +50,7 @@ def get_modelids_for_basenames_duckdb(parquet_path: str, basenames: List[str]) -
         return {b: [] for b in basenames}
     path_abs = os.path.abspath(parquet_path).replace("\\", "/")
     conn = duckdb.connect(":memory:")
-    try:
-        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
-    except Exception:
-        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
+    cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
     list_cols = [
         c[0] for c in cols
         if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
@@ -79,11 +76,7 @@ def get_modelids_for_basenames_duckdb(parquet_path: str, basenames: List[str]) -
     SELECT basename, modelId FROM with_basename
     WHERE basename IN ({basenames_sql})
     """
-    try:
-        df = conn.execute(query).fetchdf()
-    except Exception:
-        conn.close()
-        return {b: [] for b in basenames}
+    df = conn.execute(query).fetchdf()
     conn.close()
     out: Dict[str, List[str]] = {b: [] for b in basenames}
     for _, row in df.iterrows():
@@ -111,10 +104,7 @@ def _get_tables_for_models_duckdb_internal(parquet_path: str, model_ids: List[st
     path_abs = os.path.abspath(parquet_path).replace("\\", "/")
     conn = duckdb.connect(":memory:")
     ids_sql = ",".join(repr(m) for m in model_ids)
-    try:
-        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
-    except Exception:
-        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
+    cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
     list_cols = [
         c[0] for c in cols
         if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
@@ -123,16 +113,16 @@ def _get_tables_for_models_duckdb_internal(parquet_path: str, model_ids: List[st
         conn.close()
         return {m: [] for m in model_ids}
     select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
-    try:
-        full_df = conn.execute(f"""
-            SELECT {select_cols} FROM read_parquet(?)
-            WHERE modelId IN ({ids_sql})
-        """, [path_abs]).fetchdf()
-    except Exception:
-        full_df = conn.execute(f"""
-            SELECT {select_cols} FROM read_parquet('{path_abs}')
-            WHERE modelId IN ({ids_sql})
-        """).fetchdf()
+    # try:
+    full_df = conn.execute(f"""
+        SELECT {select_cols} FROM read_parquet(?)
+        WHERE modelId IN ({ids_sql})
+    """, [path_abs]).fetchdf()
+    # except Exception:
+    #     full_df = conn.execute(f"""
+    #         SELECT {select_cols} FROM read_parquet('{path_abs}')
+    #         WHERE modelId IN ({ids_sql})
+    #     """).fetchdf()
     conn.close()
     model_to_tables: Dict[str, List[str]] = {m: [] for m in model_ids}
     for _, row in full_df.iterrows():
@@ -186,10 +176,7 @@ def _read_relationships(parquet_path: str) -> pd.DataFrame:
         for c in list_cols:
             vals = _flatten_cell(row.get(c))
             for v in vals:
-                try:
-                    vstr = str(v)
-                except Exception:
-                    continue
+                vstr = str(v)
                 base = os.path.basename(vstr)
                 if base:
                     records.append((mid, base))

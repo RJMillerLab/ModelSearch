@@ -112,30 +112,23 @@ def main():
     args = parser.parse_args()
     start_time = time.time()
 
-    try:
-        # Auto-detect device if not specified
-        device = args.device if args.device else get_device()
-        
-        results = search_query2modelcard(
-            query=args.query,
-            emb_npz=args.emb_npz,
-            faiss_index=args.faiss_index,
-            model_name=args.model_name,
-            top_k=args.top_k,
-            device=device,
-            output_json=args.output_json
-        )
-        
-        print(f"Found {len(results)} model cards for query: '{args.query}'")
-        for i, model_id in enumerate(results, 1):
-            print(f"  {i}. {model_id}")
-        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
+    # Auto-detect device if not specified
+    device = args.device if args.device else get_device()
+    
+    results = search_query2modelcard(
+        query=args.query,
+        emb_npz=args.emb_npz,
+        faiss_index=args.faiss_index,
+        model_name=args.model_name,
+        top_k=args.top_k,
+        device=device,
+        output_json=args.output_json
+    )
+    
+    print(f"Found {len(results)} model cards for query: '{args.query}'")
+    for i, model_id in enumerate(results, 1):
+        print(f"  {i}. {model_id}")
+    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
 
 def _test():
     """Quick test when run with no args."""

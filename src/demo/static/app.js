@@ -1716,11 +1716,11 @@
             qaResultsModel.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
             [btn, evaluationBtn, qaBtn].forEach(b => { if (b) { b.disabled = true; } });
             try {
-                const evalBody = { job_id: jobId, use_fake: false };
+                const evalBody = { job_id: jobId };
                 if (window.__selectedIntegrationKey) evalBody.integration_run_key = window.__selectedIntegrationKey;
                 const evalPromise = sendEvaluationRequest(evalBody, evalResultsDiv, null);
-                const qaTablePromise = sendQARequest({ job_id: jobId, use_table_search: true, use_fake: false }, qaResultsTable, null);
-                const qaModelPromise = sendQARequest({ job_id: jobId, use_table_search: false, use_fake: false }, qaResultsModel, null);
+                const qaTablePromise = sendQARequest({ job_id: jobId, use_table_search: true }, qaResultsTable, null);
+                const qaModelPromise = sendQARequest({ job_id: jobId, use_table_search: false }, qaResultsModel, null);
                 const [, qaTableRes, qaModelRes] = await Promise.all([evalPromise, qaTablePromise, qaModelPromise]);
                 if (jobId && (qaTableRes || qaModelRes)) {
                     fetch('{{BACKEND_URL}}/api/save-qa', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ job_id: jobId, table_search: qaTableRes || null, model_search: qaModelRes || null }) }).catch(() => {});
@@ -1744,7 +1744,7 @@
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '<div style="padding: 15px; background: #fff; border-radius: 4px;">⏳ Running evaluation...</div>';
             try {
-                const body = { job_id: jobId, use_fake: false };
+                const body = { job_id: jobId };
                 if (window.__selectedIntegrationKey) body.integration_run_key = window.__selectedIntegrationKey;
                 await sendEvaluationRequest(body, resultsDiv, evaluationBtn);
             } catch (error) {
@@ -2049,8 +2049,8 @@
             resultsDivTable.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
             resultsDivModel.innerHTML = '<div style="padding: 12px;">⏳ Running QA...</div>';
             try {
-                const bodyTable = { job_id: jobId, use_table_search: true, use_fake: false };
-                const bodyModel = { job_id: jobId, use_table_search: false, use_fake: false };
+                const bodyTable = { job_id: jobId, use_table_search: true };
+                const bodyModel = { job_id: jobId, use_table_search: false };
                 const [tableRes, modelRes] = await Promise.all([
                     sendQARequest(bodyTable, resultsDivTable, null),
                     sendQARequest(bodyModel, resultsDivModel, null)

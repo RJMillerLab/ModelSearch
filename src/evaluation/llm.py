@@ -177,9 +177,6 @@ def evaluate_diversity_with_llm(
     table2: pd.DataFrame,
     table1_source: str = "Table Search Integration",
     table2_source: str = "Model Search Integration",
-    use_fake: bool = False,
-    fake_response_path: Optional[str] = None,
-    fake_response_content: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Evaluate diversity between two tables using LLM.
@@ -190,23 +187,10 @@ def evaluate_diversity_with_llm(
         table2: Second integrated table (DataFrame)
         table1_source: Description of table1 source
         table2_source: Description of table2 source
-        use_fake: Whether to use fake response instead of calling LLM
-        fake_response_path: Path to fake response JSON file
-        fake_response_content: Fake response content as dictionary (takes precedence over file)
     
     Returns:
         Dictionary with evaluation results including diversity_score and analysis
     """
-    if use_fake:
-        print("🎭 Using fake response (use_fake=True)")
-        if fake_response_content:
-            # Use provided fake content
-            result = fake_response_content.copy()
-            result["success"] = True
-            result["source"] = "fake_response_content"
-            return result
-        return load_fake_response(fake_response_path)
-    
     # Serialize tables
     print("📊 Serializing tables for LLM prompt...")
     table1_str = serialize_table_for_prompt(table1)
@@ -234,25 +218,13 @@ def evaluate_diversity_with_llm(
     except ValueError as ve:
         # This is the "LLM API not available" error from call_llm_api
         print(f"⚠️  LLM API ValueError: {ve}")
-        # If use_fake is False, raise error instead of falling back
-        if not use_fake:
-            raise ValueError(f"LLM API not available: {str(ve)}. Please set OPENAI_API_KEY or use fake response mode.")
-        print(f"   Falling back to fake response...")
-        fake_result = load_fake_response(fake_response_path)
-        fake_result["fallback_reason"] = f"LLM API not available: {str(ve)}"
-        return fake_result
+        raise ValueError(f"LLM API not available: {str(ve)}. Please set OPENAI_API_KEY.")
     except Exception as e:
         # If LLM API fails for any other reason
         print(f"⚠️  LLM API error: {e}")
         import traceback
         print(traceback.format_exc())
-        # If use_fake is False, raise error instead of falling back
-        if not use_fake:
-            raise Exception(f"LLM API error: {str(e)}. Please check your API configuration or use fake response mode.")
-        print(f"   Falling back to fake response...")
-        fake_result = load_fake_response(fake_response_path)
-        fake_result["fallback_reason"] = f"LLM API error: {str(e)}"
-        return fake_result
+        raise Exception(f"LLM API error: {str(e)}. Please check your API configuration.")
 
 
 def load_fake_response(fake_response_path: Optional[str] = None) -> Dict[str, Any]:
@@ -312,11 +284,11 @@ def load_fake_response(fake_response_path: Optional[str] = None) -> Dict[str, An
 
 
 if __name__ == "__main__":
-    # Quick test: serialize + fake eval
+    # Quick test: serialize + eval (requires valid OPENAI_API_KEY)
     table1 = pd.DataFrame({"model_id": ["codet5-base", "CodeGPT-small-py"], "steps": [500000, 300000]})
     table2 = pd.DataFrame({"model_id": ["gpt2", "bert-base"], "type": ["gen", "encoder"]})
     s1 = serialize_table_for_prompt(table1)
     s2 = serialize_table_for_prompt(table2)
     print("Test evaluation: serialize length", len(s1), len(s2))
-    result = evaluate_diversity_with_llm(query="code gen", table1=table1, table2=table2, use_fake=True)
-    print("Fake eval result keys:", list(result.keys()), "diversity_score:", result.get("diversity_score"))
+    result = evaluate_diversity_with_llm(query="code gen", table1=table1, table2=table2)
+    print("Eval result keys:", list(result.keys()), "diversity_score:", result.get("diversity_score"))

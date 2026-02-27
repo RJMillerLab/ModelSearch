@@ -103,15 +103,12 @@ def _search_restricted_to_tables_by_header_terms(
         ORDER BY cnt DESC
         {limit_clause}
     """
+    con = duckdb.connect(db_path, read_only=True)
     try:
-        con = duckdb.connect(db_path, read_only=True)
-        try:
-            rows = con.execute(query_sql).fetchall()
-            return [int(r[0]) for r in rows]
-        finally:
-            con.close()
-    except Exception:
-        return []
+        rows = con.execute(query_sql).fetchall()
+        return [int(r[0]) for r in rows]
+    finally:
+        con.close()
 
 
 def search_table2table_by_type(
@@ -371,91 +368,83 @@ Then use this tool for search:
                        help='Disable automatic classification of query table')
     
     args = parser.parse_args()
-    
-    try:
-        start_time = time.time()
-        # Parse query: table ID (from modellake) or path/values. Same source as rest: db -> filename -> resolve -> read.
-        query = None
-        def _query_as_tableid(s: str):
-            s = s.strip()
-            return int(s) if s.isdigit() else None
 
-        if args.search_type == 'single_column':
-            tid = _query_as_tableid(args.query)
-            if tid is not None:
-                query = _load_query_from_tableid(tid, args.db_path)
-            if query is None:
-                if os.path.exists(args.query):
-                    query = pd.read_csv(args.query)
-                else:
-                    query = [x.strip() for x in args.query.split(',')]
-        elif args.search_type == 'multi_column':
-            tid = _query_as_tableid(args.query)
-            if tid is not None:
-                query = _load_query_from_tableid(tid, args.db_path)
-            if query is None:
-                query = pd.read_csv(args.query)
-        elif args.search_type == 'unionable':
-            tid = _query_as_tableid(args.query)
-            if tid is not None:
-                query = _load_query_from_tableid(tid, args.db_path)
-            if query is None:
-                query = pd.read_csv(args.query)
-        elif args.search_type == 'keyword':
-            tid = _query_as_tableid(args.query)
-            if tid is not None:
-                df = _load_query_from_tableid(tid, args.db_path)
-                if df is not None:
-                    query = [str(col).lower().strip() for col in df.columns]
-            if query is None:
-                if os.path.exists(args.query):
-                    df = pd.read_csv(args.query, nrows=0)
-                    query = [str(col).lower().strip() for col in df.columns]
-                else:
-                    query = [x.strip() for x in args.query.split(',')]
-        else:
-            tid = _query_as_tableid(args.query)
-            if tid is not None:
-                query = _load_query_from_tableid(tid, args.db_path)
-            if query is None:
-                query = pd.read_csv(args.query)
-        
-        # Perform search
-        results = search_table2table_by_type(
-            query=query,
-            search_type=args.search_type,
-            k=args.k,
-            db_path=args.db_path,
-            classification_json=args.classification_json,
-            auto_classify=args.auto_classify
-        )
-        
-        print(f"Found {len(results)} tables:")
-        for i, table_id in enumerate(results, 1):
-            print(f"  {i}. Table ID: {table_id}")
-        
-        # Save results as JSON
-        os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
-        result_data = {
-            "query": str(query) if not isinstance(query, (list, pd.DataFrame)) else "DataFrame or list",
-            "search_type": args.search_type,
-            "k": args.k,
-            "results": [int(tid) for tid in results],
-            "num_results": len(results)
-        }
-        import json
-        with open(args.output, 'w', encoding='utf-8') as f:
-            json.dump(result_data, f, ensure_ascii=False, indent=2)
-        print(f"\n✅ Results saved to {args.output}")
-        from src.utils import get_device
-        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {get_device()})")
-    
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    start_time = time.time()
+    # Parse query: table ID (from modellake) or path/values. Same source as rest: db -> filename -> resolve -> read.
+    query = None
+    def _query_as_tableid(s: str):
+        s = s.strip()
+        return int(s) if s.isdigit() else None
 
+    if args.search_type == 'single_column':
+        tid = _query_as_tableid(args.query)
+        if tid is not None:
+            query = _load_query_from_tableid(tid, args.db_path)
+        if query is None:
+            if os.path.exists(args.query):
+                query = pd.read_csv(args.query)
+            else:
+                query = [x.strip() for x in args.query.split(',')]
+    elif args.search_type == 'multi_column':
+        tid = _query_as_tableid(args.query)
+        if tid is not None:
+            query = _load_query_from_tableid(tid, args.db_path)
+        if query is None:
+            query = pd.read_csv(args.query)
+    elif args.search_type == 'unionable':
+        tid = _query_as_tableid(args.query)
+        if tid is not None:
+            query = _load_query_from_tableid(tid, args.db_path)
+        if query is None:
+            query = pd.read_csv(args.query)
+    elif args.search_type == 'keyword':
+        tid = _query_as_tableid(args.query)
+        if tid is not None:
+            df = _load_query_from_tableid(tid, args.db_path)
+            if df is not None:
+                query = [str(col).lower().strip() for col in df.columns]
+        if query is None:
+            if os.path.exists(args.query):
+                df = pd.read_csv(args.query, nrows=0)
+                query = [str(col).lower().strip() for col in df.columns]
+            else:
+                query = [x.strip() for x in args.query.split(',')]
+    else:
+        tid = _query_as_tableid(args.query)
+        if tid is not None:
+            query = _load_query_from_tableid(tid, args.db_path)
+        if query is None:
+            query = pd.read_csv(args.query)
+    
+    # Perform search
+    results = search_table2table_by_type(
+        query=query,
+        search_type=args.search_type,
+        k=args.k,
+        db_path=args.db_path,
+        classification_json=args.classification_json,
+        auto_classify=args.auto_classify
+    )
+    
+    print(f"Found {len(results)} tables:")
+    for i, table_id in enumerate(results, 1):
+        print(f"  {i}. Table ID: {table_id}")
+    
+    # Save results as JSON
+    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
+    result_data = {
+        "query": str(query) if not isinstance(query, (list, pd.DataFrame)) else "DataFrame or list",
+        "search_type": args.search_type,
+        "k": args.k,
+        "results": [int(tid) for tid in results],
+        "num_results": len(results)
+    }
+    import json
+    with open(args.output, 'w', encoding='utf-8') as f:
+        json.dump(result_data, f, ensure_ascii=False, indent=2)
+    print(f"\n✅ Results saved to {args.output}")
+    from src.utils import get_device
+    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {get_device()})")
 
 if __name__ == '__main__':
     import sys

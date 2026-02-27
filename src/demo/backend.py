@@ -917,25 +917,19 @@ def list_saved_searches():
     for name, path, _ in candidates[:50]:
         json_path = os.path.join(path, "search_results.json")
         entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "use_by_type": False, "require_seed_has_tables": False, "card2card_retrieval_mode": None, "table_search_k": None}
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            entry["query"] = saved.get("query") or ""
-            entry["model_id"] = saved.get("model_id") or ""
-            ts = saved.get("timestamp")
-            if ts:
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    entry["timestamp_str"] = dt.strftime("%Y-%m-%d %H:%M")
-                except Exception:
-                    entry["timestamp_str"] = str(ts)[:16]
-            entry["top_k"] = saved.get("top_k")
-            entry["use_by_type"] = bool(saved.get("use_by_type", False))
-            entry["require_seed_has_tables"] = bool(saved.get("require_seed_has_tables", False))
-            entry["card2card_retrieval_mode"] = saved.get("card2card_retrieval_mode")
-            entry["table_search_k"] = saved.get("table_search_k")
-        except Exception:
-            pass
+        with open(json_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        entry["query"] = saved.get("query") or ""
+        entry["model_id"] = saved.get("model_id") or ""
+        ts = saved.get("timestamp")
+        if ts:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            entry["timestamp_str"] = dt.strftime("%Y-%m-%d %H:%M")
+        entry["top_k"] = saved.get("top_k")
+        entry["use_by_type"] = bool(saved.get("use_by_type", False))
+        entry["require_seed_has_tables"] = bool(saved.get("require_seed_has_tables", False))
+        entry["card2card_retrieval_mode"] = saved.get("card2card_retrieval_mode")
+        entry["table_search_k"] = saved.get("table_search_k")
         searches.append(entry)
     return jsonify({"status": "success", "searches": searches, "template_available": template_available})
 
@@ -984,12 +978,9 @@ def integrate():
                 "error": result.get("error", "Integration failed"),
                 "message": result.get("error", "Integration failed"),
             }
-            try:
-                json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
-                with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump(save_payload, f, ensure_ascii=False, indent=0)
-            except Exception:
-                pass
+            json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(save_payload, f, ensure_ascii=False, indent=0)
             return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
 
         # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
@@ -1001,35 +992,29 @@ def integrate():
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
-            try:
-                csv_name = f"integrated_table_search_{run_key}.csv"
-                save_path = os.path.join(job_dir, csv_name)
-                integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-                saved_path = os.path.join("data", "jobs", job_id, csv_name)
-            except Exception:
-                pass
+            csv_name = f"integrated_table_search_{run_key}.csv"
+            save_path = os.path.join(job_dir, csv_name)
+            integrated_df.to_csv(save_path, index=False, encoding="utf-8")
+            saved_path = os.path.join("data", "jobs", job_id, csv_name)
         if saved_path:
             result["saved_path"] = saved_path
         # Ensure models_with_tables is always present for Table Search (model IDs used in this integration; may differ from full retrieval list)
         if "models_with_tables" not in result:
             result["models_with_tables"] = []
-        try:
-            save_payload = {
+        save_payload = {
             "status": "success",
             "integration_type": integration_type,
-                "search_type": search_type,
-                "tables_source": tables_source,
+            "search_type": search_type,
+            "tables_source": tables_source,
             "k": k,
-                "max_models": max_models,
-                **result,
-            }
-            json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(save_payload, f, ensure_ascii=False, indent=0)
-            with open(os.path.join(job_dir, "integration_table_search.json"), "w", encoding="utf-8") as f:
-                json.dump(save_payload, f, ensure_ascii=False, indent=0)
-        except Exception:
-            pass
+            "max_models": max_models,
+            **result,
+        }
+        json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(save_payload, f, ensure_ascii=False, indent=0)
+        with open(os.path.join(job_dir, "integration_table_search.json"), "w", encoding="utf-8") as f:
+            json.dump(save_payload, f, ensure_ascii=False, indent=0)
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback
@@ -1083,12 +1068,9 @@ def integrate_model_search():
                 "error": result.get("error", "Integration failed"),
                 "message": result.get("error", "Integration failed"),
             }
-            try:
-                json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
-                with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump(save_payload, f, ensure_ascii=False, indent=0)
-            except Exception:
-                pass
+            json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(save_payload, f, ensure_ascii=False, indent=0)
             return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
 
         # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
@@ -1100,31 +1082,25 @@ def integrate_model_search():
                 "columns": list(integrated_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
-            try:
-                csv_name = f"integrated_model_search_{run_key}.csv"
-                save_path = os.path.join(job_dir, csv_name)
-                integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-                saved_path = os.path.join("data", "jobs", job_id, csv_name)
-            except Exception:
-                pass
+            csv_name = f"integrated_model_search_{run_key}.csv"
+            save_path = os.path.join(job_dir, csv_name)
+            integrated_df.to_csv(save_path, index=False, encoding="utf-8")
+            saved_path = os.path.join("data", "jobs", job_id, csv_name)
         if saved_path:
             result["saved_path"] = saved_path
-        try:
-            save_payload = {
+        save_payload = {
             "status": "success",
             "integration_type": integration_type,
-                "card2card_retrieval_mode": card2card_retrieval_mode or "dense",
-                "k": k,
-                "max_models": max_models,
-                **result,
-            }
-            json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(save_payload, f, ensure_ascii=False, indent=0)
-            with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
-                json.dump(save_payload, f, ensure_ascii=False, indent=0)
-        except Exception:
-            pass
+            "card2card_retrieval_mode": card2card_retrieval_mode or "dense",
+            "k": k,
+            "max_models": max_models,
+            **result,
+        }
+        json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(save_payload, f, ensure_ascii=False, indent=0)
+        with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
+            json.dump(save_payload, f, ensure_ascii=False, indent=0)
         return jsonify({"status": "success", **result})
     except Exception as e:
         import traceback
@@ -1137,19 +1113,16 @@ def _load_integrated_table_from_json(job_dir: str, json_name: str) -> Optional[p
     path = os.path.join(job_dir, json_name)
     if not os.path.exists(path):
         return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        tbl = data.get("integrated_table")
-        if not tbl:
-            return None
-        cols = tbl.get("columns") or []
-        rows = tbl.get("data") or []
-        if not cols and not rows:
-            return None
-        return pd.DataFrame(rows, columns=cols) if cols else pd.DataFrame(rows)
-    except Exception:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    tbl = data.get("integrated_table")
+    if not tbl:
         return None
+    cols = tbl.get("columns") or []
+    rows = tbl.get("data") or []
+    if not cols and not rows:
+        return None
+    return pd.DataFrame(rows, columns=cols) if cols else pd.DataFrame(rows)
 
 
 def _load_integrated_table_from_csv(job_dir: str, csv_name: str) -> Optional[pd.DataFrame]:
@@ -1157,10 +1130,7 @@ def _load_integrated_table_from_csv(job_dir: str, csv_name: str) -> Optional[pd.
     path = os.path.join(job_dir, csv_name)
     if not os.path.exists(path):
         return None
-    try:
-        return pd.read_csv(path)
-    except Exception:
-        return None
+    return pd.read_csv(path)
 
 
 def _load_tables_from_integration_run(job_dir: str, run_key: str):
@@ -1169,20 +1139,17 @@ def _load_tables_from_integration_run(job_dir: str, run_key: str):
     path = os.path.join(job_dir, f"integration_run_{safe_key}.json")
     if not os.path.isfile(path):
         return None, None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            run_data = json.load(f)
-        t_res = run_data.get("table_result") or {}
-        m_res = run_data.get("model_result") or {}
-        tbl1 = (t_res.get("integrated_table") or {})
-        tbl2 = (m_res.get("integrated_table") or {})
-        cols1, rows1 = tbl1.get("columns") or [], tbl1.get("data") or []
-        cols2, rows2 = tbl2.get("columns") or [], tbl2.get("data") or []
-        df1 = pd.DataFrame(rows1, columns=cols1) if cols1 or rows1 else pd.DataFrame()
-        df2 = pd.DataFrame(rows2, columns=cols2) if cols2 or rows2 else pd.DataFrame()
-        return (df1 if not df1.empty else None), (df2 if not df2.empty else None)
-    except Exception:
-        return None, None
+    with open(path, "r", encoding="utf-8") as f:
+        run_data = json.load(f)
+    t_res = run_data.get("table_result") or {}
+    m_res = run_data.get("model_result") or {}
+    tbl1 = (t_res.get("integrated_table") or {})
+    tbl2 = (m_res.get("integrated_table") or {})
+    cols1, rows1 = tbl1.get("columns") or [], tbl1.get("data") or []
+    cols2, rows2 = tbl2.get("columns") or [], tbl2.get("data") or []
+    df1 = pd.DataFrame(rows1, columns=cols1) if cols1 or rows1 else pd.DataFrame()
+    df2 = pd.DataFrame(rows2, columns=cols2) if cols2 or rows2 else pd.DataFrame()
+    return (df1 if not df1.empty else None), (df2 if not df2.empty else None)
 
 
 @app.route("/api/evaluate", methods=["POST"])
@@ -1191,7 +1158,6 @@ def evaluate():
     data = request.get_json() or {}
     job_id = data.get("job_id")
     integration_run_key = data.get("integration_run_key")
-    use_fake = bool(data.get("use_fake", False))
 
     if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
@@ -1221,12 +1187,9 @@ def evaluate():
     results_file = os.path.join(job_dir, "search_results.json")
     query = "model search query"
     if os.path.exists(results_file):
-        try:
-            with open(results_file, "r", encoding="utf-8") as f:
-                sr = json.load(f)
-            query = sr.get("query") or query
-        except Exception:
-            pass
+        with open(results_file, "r", encoding="utf-8") as f:
+            sr = json.load(f)
+        query = sr.get("query") or query
 
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
@@ -1238,31 +1201,9 @@ def evaluate():
             table2=table2_df,
             table1_source="Table Search Integration",
             table2_source="Model Search Integration",
-            use_fake=use_fake,
         )
     except ValueError as ve:
-        # LLM API unavailable - fallback to fake
-        print(f"[evaluate] ValueError (LLM unavailable): {ve}", flush=True)
-        try:
-            from evaluation.llm import evaluate_diversity_with_llm, load_fake_response
-            result = evaluate_diversity_with_llm(
-                query=query, table1=table1_df, table2=table2_df,
-                table1_source="Table Search Integration",
-                table2_source="Model Search Integration",
-                use_fake=True,
-            )
-            if "fallback_reason" not in result:
-                result["fallback_reason"] = str(ve)
-        except Exception as e2:
-            import traceback
-            print(f"[evaluate] Fallback failed: {e2}", flush=True)
-            traceback.print_exc()
-            return jsonify({"status": "error", "message": f"Evaluation failed: {str(ve)}"}), 500
-    except Exception as e:
-        import traceback
-        print(f"[evaluate] Exception: {e}", flush=True)
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": f"Evaluation failed: {str(e)}"}), 500
+        return jsonify({"status": "error", "message": f"Evaluation failed: {str(ve)}"}), 500
 
     result = _sanitize_for_js_template(result)
 
@@ -1286,7 +1227,6 @@ def qa():
     data = request.get_json() or {}
     job_id = data.get("job_id")
     use_table_search = bool(data.get("use_table_search", True))
-    use_fake = bool(data.get("use_fake", False))
 
     if not job_id:
         return jsonify({"status": "error", "message": "job_id required"}), 400
@@ -1319,45 +1259,42 @@ def qa():
     model_ids_to_rank = None
 
     if os.path.exists(results_file):
-        try:
-            with open(results_file, "r", encoding="utf-8") as f:
-                sr = json.load(f)
-            query = sr.get("query") or query
-            search_results_data = sr
+        with open(results_file, "r", encoding="utf-8") as f:
+            sr = json.load(f)
+        query = sr.get("query") or query
+        search_results_data = sr
 
-            # Extract model_ids for ranking
-            if use_table_search:
-                c2t2c = sr.get("card2tab2card_results") or {}
-                for stype, st_data in c2t2c.items():
-                    mids = st_data.get("model_ids") if isinstance(st_data, dict) else (st_data if isinstance(st_data, list) else [])
-                    if mids:
-                        model_ids_to_rank = list(mids)[:50]
+        # Extract model_ids for ranking
+        if use_table_search:
+            c2t2c = sr.get("card2tab2card_results") or {}
+            for stype, st_data in c2t2c.items():
+                mids = st_data.get("model_ids") if isinstance(st_data, dict) else (st_data if isinstance(st_data, list) else [])
+                if mids:
+                    model_ids_to_rank = list(mids)[:50]
+                    break
+        else:
+            modes = sr.get("card2card_all_modes") or {}
+            # Try retrieval_mode first (e.g. dense), then any non-empty mode
+            rmode = sr.get("card2card_retrieval_mode", "dense")
+            model_ids_to_rank = modes.get(rmode)
+            if isinstance(model_ids_to_rank, dict) and "error" in model_ids_to_rank:
+                model_ids_to_rank = None
+            elif model_ids_to_rank is not None and not isinstance(model_ids_to_rank, list):
+                model_ids_to_rank = list(model_ids_to_rank)[:50] if model_ids_to_rank else None
+            elif model_ids_to_rank:
+                model_ids_to_rank = list(model_ids_to_rank)[:50]
+            if not model_ids_to_rank:
+                for mode_key, mode_list in modes.items():
+                    if mode_list and isinstance(mode_list, list) and not (isinstance(mode_list, dict) and "error" in mode_list):
+                        model_ids_to_rank = list(mode_list)[:50]
                         break
-            else:
-                modes = sr.get("card2card_all_modes") or {}
-                # Try retrieval_mode first (e.g. dense), then any non-empty mode
-                rmode = sr.get("card2card_retrieval_mode", "dense")
-                model_ids_to_rank = modes.get(rmode)
-                if isinstance(model_ids_to_rank, dict) and "error" in model_ids_to_rank:
-                    model_ids_to_rank = None
-                elif model_ids_to_rank is not None and not isinstance(model_ids_to_rank, list):
-                    model_ids_to_rank = list(model_ids_to_rank)[:50] if model_ids_to_rank else None
-                elif model_ids_to_rank:
-                    model_ids_to_rank = list(model_ids_to_rank)[:50]
-                if not model_ids_to_rank:
-                    for mode_key, mode_list in modes.items():
-                        if mode_list and isinstance(mode_list, list) and not (isinstance(mode_list, dict) and "error" in mode_list):
-                            model_ids_to_rank = list(mode_list)[:50]
-                            break
 
-            # Fallback: extract model_id from integrated table
-            if not model_ids_to_rank and not table_df.empty:
-                for col in ["model_id", "modelId", "model"]:
-                    if col in table_df.columns:
-                        model_ids_to_rank = table_df[col].dropna().astype(str).unique().tolist()[:50]
-                        break
-        except Exception:
-            pass
+        # Fallback: extract model_id from integrated table
+        if not model_ids_to_rank and not table_df.empty:
+            for col in ["model_id", "modelId", "model"]:
+                if col in table_df.columns:
+                    model_ids_to_rank = table_df[col].dropna().astype(str).unique().tolist()[:50]
+                    break
 
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
@@ -1370,27 +1307,9 @@ def qa():
             qa_mode=qa_mode,
             model_ids_to_rank=model_ids_to_rank,
             search_results_data=search_results_data,
-            use_fake=use_fake,
         )
     except ValueError as ve:
-        # LLM API unavailable - fallback to fake
-        try:
-            from qa.llm import answer_question_with_llm, load_fake_response
-            result = answer_question_with_llm(
-                query=query,
-                table=table_df,
-                table_source=table_source,
-                qa_mode=qa_mode,
-                model_ids_to_rank=model_ids_to_rank,
-                search_results_data=search_results_data,
-                use_fake=True,
-            )
-        except Exception as e2:
-            return jsonify({"status": "error", "message": f"QA failed: {str(ve)}"}), 500
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": f"QA failed: {str(e)}"}), 500
+        return jsonify({"status": "error", "message": f"QA failed: {str(ve)}"}), 500
 
     qa_answer = result.get("answer")
     if isinstance(qa_answer, dict):

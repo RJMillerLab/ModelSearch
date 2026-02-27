@@ -311,9 +311,6 @@ def answer_question_with_llm(
     qa_mode: str = "card2tab2card",  # "card2card" or "card2tab2card"
     model_ids_to_rank: Optional[List[str]] = None,
     search_results_data: Optional[Dict] = None,  # Full search results for model card access
-    use_fake: bool = False,
-    fake_response_path: Optional[str] = None,
-    fake_response_content: Optional[Dict] = None,
     model: str = "gpt-4"
 ) -> Dict[str, Any]:
     """
@@ -323,22 +320,11 @@ def answer_question_with_llm(
         query: User's question or query
         table: Integrated DataFrame
         table_source: Description of where the table came from
-        use_fake: Whether to use fake response (for testing)
-        fake_response_path: Path to fake response JSON file
-        fake_response_content: Direct fake response content (dict)
         model: LLM model to use
     
     Returns:
         Dictionary with answer and metadata
     """
-    if use_fake:
-        print("📝 Using fake QA response for testing")
-        return {
-            "success": True,
-            "answer": load_fake_response(fake_response_path, fake_response_content),
-            "source": "fake"
-        }
-    
     # Check if API key is available
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -376,7 +362,7 @@ def answer_question_with_llm(
             "model": model
         }
     except ValueError as ve:
-        raise ValueError(f"LLM API not available: {str(ve)}. Please set OPENAI_API_KEY or use fake response mode.")
+        raise ValueError(f"LLM API not available: {str(ve)}. Please set OPENAI_API_KEY.")
     except Exception as e:
         import traceback
         error_traceback = traceback.format_exc()
@@ -386,8 +372,8 @@ def answer_question_with_llm(
 
 
 if __name__ == "__main__":
-    # Quick test: QA with fake
+    # Quick test: QA call (requires valid OPENAI_API_KEY)
     df = pd.DataFrame({"model": ["GPT-4", "BERT"], "type": ["LLM", "NLP"]})
-    result = answer_question_with_llm(query="What types?", table=df, table_source="Test", use_fake=True)
+    result = answer_question_with_llm(query="What types?", table=df, table_source="Test")
     print("Test QA: success", result.get("success"), "source", result.get("source"))
 
