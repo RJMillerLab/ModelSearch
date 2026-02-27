@@ -1009,39 +1009,12 @@ def integrate_tables_from_model_search_results(
                     )
                 
                 if model_tables:
-                    # Convert basenames to full paths
+                    # Resolve basenames to path (utils.resolve_table_path) or keep basename for load_table later
                     for table_basename in model_tables:
-                        # Try to find the full path
-                        table_path = None
-                        
-                        # Try common base directories
-                        possible_base_dirs = [
-                            "data_citationlake/processed/deduped_hugging_csvs",
-                            "data_citationlake/processed/deduped_github_csvs",
-                            "data_citationlake/processed/tables_output",
-                        ]
-                        
-                        for base_dir in possible_base_dirs:
-                            full_path = os.path.join(base_dir, table_basename)
-                            if os.path.exists(full_path):
-                                table_path = full_path
-                                break
-                        
-                        # If not found, try using load_table to find it
-                        if not table_path:
-                            test_df = load_table(table_basename)
-                            if test_df is not None:
-                                # Find which path worked
-                                for base_dir in possible_base_dirs:
-                                    full_path = os.path.join(base_dir, table_basename)
-                                    if os.path.exists(full_path):
-                                        table_path = full_path
-                                        break
-                        
-                        if table_path and table_path not in all_table_paths:
+                        table_path = resolve_table_path(table_basename) or table_basename
+                        if table_path not in all_table_paths:
                             all_table_paths.append(table_path)
-                        if table_path:
-                            model_to_table_paths[model_id].append(table_path)
+                        model_to_table_paths[model_id].append(table_path)
                     
                     models_with_tables.append(model_id)
                     print(f"  ✅ Model {model_id}: {len(model_tables)} tables")
