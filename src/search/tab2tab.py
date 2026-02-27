@@ -56,6 +56,7 @@ _NegativeExampleSearch = None
 import threading
 _import_lock = threading.Lock()
 _config_lock = threading.Lock()
+_blend_config_debug_printed = False
 
 def _update_blend_config(db_path: str):
     """Update Blend_internal config.ini with the correct db_path before importing."""
@@ -71,7 +72,7 @@ def _update_blend_config(db_path: str):
         
         # Read and update config
         config = configparser.ConfigParser()
-        config.read(config_path)
+        read_ok = config.read(config_path)
         
         # Convert relative path to absolute if needed
         if not os.path.isabs(db_path):
@@ -80,6 +81,34 @@ def _update_blend_config(db_path: str):
             db_path_abs = os.path.abspath(os.path.join(modelsearch_root, db_path))
         else:
             db_path_abs = os.path.abspath(db_path)
+
+        # DEBUG: print which config path is used and what it contains.
+        # Print only once per process to avoid log spam (card2tab2card runs per-table search in parallel).
+        global _blend_config_debug_printed
+        if not _blend_config_debug_printed:
+            try:
+                st = os.stat(config_path)
+                size = st.st_size
+                mtime = st.st_mtime
+            except Exception:
+                size = None
+                mtime = None
+            try:
+                sections = config.sections()
+            except Exception:
+                sections = []
+            print(f"[BLEND_CONFIG_DEBUG] blend_path={_BLEND_INTERNAL_PATH}", flush=True)
+            print(f"[BLEND_CONFIG_DEBUG] cwd={os.getcwd()}", flush=True)
+            print(f"[BLEND_CONFIG_DEBUG] config_path={config_path} exists={os.path.exists(config_path)} size={size} mtime={mtime}", flush=True)
+            print(f"[BLEND_CONFIG_DEBUG] config.read() returned={read_ok}", flush=True)
+            print(f"[BLEND_CONFIG_DEBUG] sections={sections}", flush=True)
+            if "Database" in config:
+                db_items = dict(config.items("Database"))
+                # Avoid extremely long prints; show only the keys we care about.
+                print(f"[BLEND_CONFIG_DEBUG] Database.dbms={db_items.get('dbms')} Database.path={db_items.get('path')} Database.index_table={db_items.get('index_table')}", flush=True)
+            else:
+                print(f"[BLEND_CONFIG_DEBUG] Database section MISSING in parsed config", flush=True)
+            _blend_config_debug_printed = True
         
         # Update config
         if 'Database' not in config:
@@ -89,8 +118,11 @@ def _update_blend_config(db_path: str):
         config['Database']['index_table'] = 'modellake_index'
         
         # Write back
-        with open(config_path, 'w') as f:
+        # Write atomically to avoid other processes reading partial file contents.
+        tmp_path = config_path + ".tmp"
+        with open(tmp_path, 'w') as f:
             config.write(f)
+        os.replace(tmp_path, config_path)
         
         return config_path
 
