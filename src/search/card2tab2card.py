@@ -6,7 +6,7 @@ This module provides a two-stage search:
 2. Search for similar tables using tab2tab
 3. Map similar tables back to model cards using relationship parquet
 
-Uses CitationLake's get_from.py approach for robust parquet schema handling.
+Uses a get_from.py-style approach (via ModelTables / data_citationlake) for robust parquet schema handling when available.
 """
 
 import math
@@ -23,10 +23,10 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils.table_loader import resolve_table_path
 
-# Add CitationLake to path for get_from functionality
-citationlake_path = os.path.join(os.path.dirname(__file__), '../../CitationLake')
-if os.path.exists(citationlake_path) and citationlake_path not in sys.path:
-    sys.path.insert(0, citationlake_path)
+# Add ModelTables to path for get_from-style functionality (if available)
+modeltables_path = os.path.join(os.path.dirname(__file__), '../../ModelTables')
+if os.path.exists(modeltables_path) and modeltables_path not in sys.path:
+    sys.path.insert(0, modeltables_path)
 
 # Lazy import tab2tab to avoid DBHandler initialization on import
 # tab2tab will only be imported when search_card2tab2card is actually called
@@ -59,7 +59,7 @@ def _get_search_table2table_by_type():
         _tab2tab_by_type_search_table2table_by_type = search_table2table_by_type
     return _tab2tab_by_type_search_table2table_by_type
 
-# Try to import from CitationLake, fallback to local implementation
+# Try to import get_from (e.g., from ModelTables), fallback to local implementation
 try:
     from src.data_analysis.get_from import generic_get_attr_from_attr
     USE_CITATIONLAKE_GET_FROM = True
@@ -76,7 +76,7 @@ def get_tables_for_model_from_citationlake(
     debug: bool = False
 ) -> List[str]:
     """
-    Get list of table CSV paths/basenames for a given model ID using CitationLake's get_from.
+    Get list of table CSV paths/basenames for a given model ID using a get_from-style function.
     
     This function uses the generic_get_attr_from_attr approach which automatically
     discovers the right parquet file from the schema log.
@@ -96,7 +96,10 @@ def get_tables_for_model_from_citationlake(
         List of CSV paths/basenames
     """
     if not USE_CITATIONLAKE_GET_FROM:
-        raise ImportError("CitationLake get_from module not available. Please ensure CitationLake is accessible.")
+        raise ImportError(
+            "get_from module not available. Please ensure ModelTables (or another compatible "
+            "get_from implementation) is accessible, or use relationship_parquet/data_citationlake instead."
+        )
     
     if table_attr:
         # Get specific table attribute
@@ -134,7 +137,7 @@ def get_modelids_from_table(
     debug: bool = False
 ) -> List[str]:
     """
-    Get model IDs that have a specific table, using CitationLake's get_from.
+    Get model IDs that have a specific table, using a get_from-style function when available.
     
     Args:
         table_path: CSV path or basename to search for
@@ -145,7 +148,10 @@ def get_modelids_from_table(
         List of model IDs
     """
     if not USE_CITATIONLAKE_GET_FROM:
-        raise ImportError("CitationLake get_from module not available.")
+        raise ImportError(
+            "get_from module not available. Please ensure ModelTables (or another compatible "
+            "get_from implementation) is accessible, or use relationship_parquet/data_citationlake instead."
+        )
     
     # Try different table attributes as source
     all_model_ids = []
@@ -214,7 +220,7 @@ def _filter_s2orc_tables(tables: List[str]) -> List[str]:
 def load_relationship_parquet(parquet_path: str) -> pd.DataFrame:
     """
     Load relationship parquet file that maps modelId to CSV basenames.
-    Fallback method when CitationLake get_from is not available.
+    Fallback method when a get_from-style approach is not available.
     
     Args:
         parquet_path: Path to relationship parquet file
@@ -239,13 +245,13 @@ def get_tables_for_model(
     """
     Get list of table CSV basenames for a given model ID.
     
-    Uses CitationLake's get_from if available, otherwise falls back to DataFrame lookup.
+    Uses a get_from-style function if available, otherwise falls back to DataFrame lookup.
     
     Args:
         model_id: Hugging Face model ID
         relationship_df: Optional DataFrame from load_relationship_parquet (fallback)
-        schema_log_path: Path to parquet_schema.log (for CitationLake approach)
-        use_citationlake: Whether to use CitationLake get_from (default: True)
+        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
+        use_citationlake: Whether to use get_from-style mapping (default: True)
     
     Returns:
         List of CSV basenames
@@ -288,20 +294,20 @@ def search_card2tab2card(
     Pipeline: Query -> ModelCard -> Tables -> Retrieved Tables -> Corresponding ModelCards
     
     Process:
-    1. Get tables for the query model using CitationLake's get_from (or relationship parquet)
+    1. Get tables for the query model using a get_from-style function (or relationship parquet)
     2. Use tab2tab to search for similar tables
-    3. Map retrieved tables back to model cards using CitationLake's get_from (or relationship)
+    3. Map retrieved tables back to model cards using a get_from-style function (or relationship)
     
     Args:
         model_id: Hugging Face model ID to search from
-        relationship_parquet: Optional path to relationship parquet file (fallback if CitationLake not available)
+        relationship_parquet: Optional path to relationship parquet file (fallback if get_from-based approach not available)
         query: Optional query data for table search. If None, uses tables from the model
         search_type: Type of table search - "single_column", "multi_column", "keyword", or "unionable"
         k: Legacy parameter for backward compatibility. If table_search_k or modelcard_k are None, uses k for both.
         table_search_k: Number of table results to retrieve (defaults to k if not provided)
         modelcard_k: Number of final model card results to return (defaults to k if not provided)
-        schema_log_path: Path to parquet_schema.log (for CitationLake approach)
-        use_citationlake: Whether to use CitationLake get_from (default: True)
+        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
+        use_citationlake: Whether to use get_from-style mapping (default: True)
         output_json: Optional path to save results as JSON
         db_path: Path to modellake.db (default: data_citationlake/modellake.db)
         global_table_topk: If True (default), when model has multiple tables: search each table as equivalent query,
@@ -333,7 +339,7 @@ def search_card2tab2card(
         )
         query_tables = _filter_s2orc_tables(query_tables)
     elif use_citationlake and not USE_CITATIONLAKE_GET_FROM:
-        # User wants CitationLake but it's not available, try to find default relationship_parquet
+        # User wants get_from-style mapping but it's not available, try to find default relationship_parquet
         if relationship_parquet is None:
             # Try to find default relationship parquet files
             default_paths = [
@@ -343,13 +349,13 @@ def search_card2tab2card(
             for default_path in default_paths:
                 if os.path.exists(default_path):
                     relationship_parquet = default_path
-                    print(f"⚠️  CitationLake not available, found default relationship_parquet: {relationship_parquet}")
+                    print(f"⚠️  get_from-based approach not available, found default relationship_parquet: {relationship_parquet}")
                     break
         
         if relationship_parquet is None:
             raise ValueError(
-                "CitationLake get_from is not available and no relationship_parquet found. Please either:\n"
-                "  1. Install/configure CitationLake (ensure CitationLake/src/data_analysis/get_from.py exists), or\n"
+                "get_from-style mapping is not available and no relationship_parquet found. Please either:\n"
+                "  1. Ensure ModelTables (or another compatible get_from implementation) is installed and on PYTHONPATH, or\n"
                 "  2. Use --relationship_parquet to specify the path to modelcard_step3_dedup.parquet, or\n"
                 "  3. Place modelcard_step3_dedup.parquet in data_citationlake/processed/"
             )
@@ -360,7 +366,7 @@ def search_card2tab2card(
                 "Please check the path or use --relationship_parquet to specify the correct path."
             )
         
-        print(f"⚠️  CitationLake not available, using relationship_parquet: {relationship_parquet}")
+        print(f"⚠️  get_from-based approach not available, using relationship_parquet: {relationship_parquet}")
         try:
             from src.modelsearch.compare_baselines import get_tables_for_model_duckdb
             query_tables = get_tables_for_model_duckdb(relationship_parquet, model_id)
@@ -854,9 +860,9 @@ def search_card2tab2card(
     table_to_models = {}  # Map table filename to list of model IDs
     models_raw_count = 0  # before dedup
 
-    # If using CitationLake get_from, we can map table paths to model IDs
+    # If using get_from-style mapping, we can map table paths to model IDs
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        print(f"📋 Using CitationLake get_from to map tables to model cards...")
+        print(f"📋 Using get_from-style mapping to map tables to model cards...")
         for filename in retrieved_filenames:
             model_ids = get_modelids_from_table(
                 table_path=filename,
@@ -986,8 +992,8 @@ def search_card2tab2card_from_tables(
         model_id: Hugging Face model ID to search from
         table_search_results: Dictionary mapping CSV basename/path to list of similar CSV basenames/paths
         relationship_parquet: Optional path to relationship parquet file (fallback)
-        schema_log_path: Path to parquet_schema.log (for CitationLake approach)
-        use_citationlake: Whether to use CitationLake get_from (default: True)
+        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
+        use_citationlake: Whether to use get_from-style mapping (default: True)
         k: Legacy parameter for backward compatibility. If modelcard_k is None, uses k.
         modelcard_k: Maximum number of model card results to return (defaults to k if not provided)
     
@@ -1038,7 +1044,7 @@ def search_card2tab2card_from_tables(
     similar_model_ids = set()
     
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        # Use CitationLake get_from to map tables to model IDs
+        # Use get_from-style mapping to map tables to model IDs
         for table_path in retrieved_tables:
             model_ids = get_modelids_from_table(
                 table_path=table_path,
@@ -1112,21 +1118,21 @@ def search_card2tab2card_by_type(
     Pipeline: Query -> ModelCard -> Tables -> Classify -> Retrieved Tables (filtered by type) -> Corresponding ModelCards
     
     Process:
-    1. Get tables for the query model using CitationLake's get_from (or relationship parquet)
+    1. Get tables for the query model using a get_from-style function (or relationship parquet)
     2. Classify the query table
     3. Use tab2tab_by_type to search for similar tables (filtered by classification)
-    4. Map retrieved tables back to model cards using CitationLake's get_from (or relationship)
+    4. Map retrieved tables back to model cards using a get_from-style function (or relationship)
     
     Args:
         model_id: Hugging Face model ID to search from
-        relationship_parquet: Optional path to relationship parquet file (fallback if CitationLake not available)
+        relationship_parquet: Optional path to relationship parquet file (fallback if get_from-style approach not available)
         query: Optional query data for table search. If None, uses tables from the model
         search_type: Type of table search - "single_column", "multi_column", "keyword", or "unionable"
         k: Legacy parameter for backward compatibility. If table_search_k or modelcard_k are None, uses k for both.
         table_search_k: Number of table results to retrieve (defaults to k if not provided)
         modelcard_k: Number of final model card results to return (defaults to k if not provided)
-        schema_log_path: Path to parquet_schema.log (for CitationLake approach)
-        use_citationlake: Whether to use CitationLake get_from (default: True)
+        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
+        use_citationlake: Whether to use get_from-style mapping (default: True)
         output_json: Optional path to save results as JSON
         db_path: Path to modellake.db (default: data_citationlake/modellake.db)
         classification_json: Path to JSON file with pre-computed classifications
@@ -1160,7 +1166,7 @@ def search_card2tab2card_by_type(
         )
         query_tables = _filter_s2orc_tables(query_tables)
     elif use_citationlake and not USE_CITATIONLAKE_GET_FROM:
-        # User wants CitationLake but it's not available, try to find default relationship_parquet
+        # User wants get_from-style mapping but it's not available, try to find default relationship_parquet
         if relationship_parquet is None:
             default_paths = [
                 "data_citationlake/processed/modelcard_step3_dedup.parquet",
@@ -1169,13 +1175,13 @@ def search_card2tab2card_by_type(
             for default_path in default_paths:
                 if os.path.exists(default_path):
                     relationship_parquet = default_path
-                    print(f"⚠️  CitationLake not available, found default relationship_parquet: {relationship_parquet}")
+                    print(f"⚠️  get_from-based approach not available, found default relationship_parquet: {relationship_parquet}")
                     break
         
         if relationship_parquet is None:
             raise ValueError(
-                "CitationLake get_from is not available and no relationship_parquet found. Please either:\n"
-                "  1. Install/configure CitationLake (ensure CitationLake/src/data_analysis/get_from.py exists), or\n"
+                "get_from-style mapping is not available and no relationship_parquet found. Please either:\n"
+                "  1. Ensure ModelTables (or another compatible get_from implementation) is installed and on PYTHONPATH, or\n"
                 "  2. Use --relationship_parquet to specify the path to modelcard_step3_dedup.parquet, or\n"
                 "  3. Place modelcard_step3_dedup.parquet in data_citationlake/processed/"
             )
@@ -1186,7 +1192,7 @@ def search_card2tab2card_by_type(
                 "Please check the path or use --relationship_parquet to specify the correct path."
             )
         
-        print(f"⚠️  CitationLake not available, using relationship_parquet: {relationship_parquet}")
+        print(f"⚠️  get_from-based approach not available, using relationship_parquet: {relationship_parquet}")
         relationship_df = load_relationship_parquet(relationship_parquet)
         query_tables = get_tables_for_model(
             model_id=model_id,
@@ -1518,7 +1524,7 @@ def search_card2tab2card_by_type(
     models_raw_count = 0
 
     if use_citationlake and USE_CITATIONLAKE_GET_FROM:
-        print(f"📋 Using CitationLake get_from to map tables to model cards...")
+        print(f"📋 Using get_from-style mapping to map tables to model cards...")
         for filename in retrieved_filenames:
             model_ids = get_modelids_from_table(
                 table_path=filename,
@@ -1630,7 +1636,7 @@ def main():
     parser.add_argument('--relationship_parquet', default='data_citationlake/processed/modelcard_step3_dedup.parquet',
                        help='Path to relationship parquet file (default: data_citationlake/processed/modelcard_step3_dedup.parquet)')
     parser.add_argument('--schema_log', default='data_citationlake/logs/parquet_schema.log',
-                       help='Path to parquet_schema.log (for CitationLake approach)')
+                       help='Path to parquet_schema.log (for get_from-style approach)')
     parser.add_argument('--query', default=None,
                        help='Query data for table search. For mode=single: comma-separated for single_column/keyword, CSV path for multi_column/unionable. For mode=all: CSV file path (required). If None, uses model tables.')
     parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'],
@@ -1643,9 +1649,9 @@ def main():
     parser.add_argument('--table_search_json', default=None,
                        help='Optional: Path to pre-computed table search results JSON')
     parser.add_argument('--use_citationlake', action='store_true', default=True,
-                       help='Use CitationLake get_from approach (default: True)')
+                       help='Use get_from-style mapping approach (default: True)')
     parser.add_argument('--no_citationlake', dest='use_citationlake', action='store_false',
-                       help='Disable CitationLake approach, use relationship_parquet instead')
+                       help='Disable get_from-style approach, use relationship_parquet instead')
     parser.add_argument('--output_json', default='data/card2tab2card_results.json',
                        help='Path to save results as JSON (default: data/card2tab2card_results.json)')
     parser.add_argument('--output_folder', default='data',

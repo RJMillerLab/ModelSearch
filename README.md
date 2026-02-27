@@ -39,7 +39,7 @@ A comprehensive model search system that combines multiple retrieval methods, ta
 ### LLM-Based Evaluation & QA
 
 **Evaluation Module** (`src/evaluation/`)
-- **LLM**: OpenAI API (via CitationLake wrapper)
+- **LLM**: OpenAI API (via internal wrapper)
 - **Retry**: tenacity for API retry handling
 - **Prompt**: Quality comparison between two integrated tables
 
@@ -104,7 +104,7 @@ Please provide your evaluation in the following JSON format:
 </details>
 
 **QA Module** (`src/qa/`)
-- **LLM**: OpenAI API (via CitationLake wrapper)
+- **LLM**: OpenAI API (via internal wrapper)
 - **Retry**: tenacity for API retry handling
 - **Prompt**: Model ID reranking based on integrated table cells and model card information
 

@@ -135,11 +135,11 @@ def load_table(
         except Exception as e:
             print(f"⚠️  Error loading {path_or_basename}: {e}")
             return None
-    # resolve_table_path already checked TABLE_BASE_DIRS; try CitationLake sibling dirs once
+    # resolve_table_path already checked TABLE_BASE_DIRS; try ModelTables sibling dirs once
     for base_dir in [
-        "../CitationLake/data/processed/deduped_hugging_csvs",
-        "../CitationLake/data/processed/deduped_github_csvs",
-        "../CitationLake/data/processed/tables_output",
+        "../ModelTables/data/processed/deduped_hugging_csvs",
+        "../ModelTables/data/processed/deduped_github_csvs",
+        "../ModelTables/data/processed/tables_output",
     ]:
         p = os.path.abspath(os.path.join(os.getcwd(), base_dir, basename))
         if os.path.exists(p):

@@ -16,11 +16,6 @@ import argparse
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
-# Add CitationLake to path for its utils
-citationlake_path = os.path.join(os.path.dirname(__file__), '../../CitationLake')
-if os.path.exists(citationlake_path) and citationlake_path not in sys.path:
-    sys.path.insert(0, citationlake_path)
-
 from src.baseline1.build_modelcard_jsonl import build_jsonl_from_raw, build_jsonl_from_parquet
 from src.baseline1.table_retrieval_pipeline import (
     encode_corpus,
@@ -28,7 +23,7 @@ from src.baseline1.table_retrieval_pipeline import (
     search_neighbors
 )
 
-# Try to import CitationLake's load_combined_data and get_device
+# Try to import load_combined_data and get_device (ported from CitationLake)
 try:
     from src.utils import load_combined_data as citationlake_load_combined_data, get_device
     USE_CITATIONLAKE_UTILS = True
@@ -48,7 +43,7 @@ except ImportError:
 
 def build_jsonl_from_citationlake_raw(raw_dir: str, field: str, output_jsonl: str) -> None:
     """
-    Build JSONL corpus from CitationLake raw data using CitationLake's load_combined_data.
+    Build JSONL corpus from data_citationlake raw data using load_combined_data.
     Specifically uses the 'card' field.
     
     Args:
@@ -63,10 +58,10 @@ def build_jsonl_from_citationlake_raw(raw_dir: str, field: str, output_jsonl: st
         raise ValueError("build_jsonl_from_citationlake_raw only supports field='card'")
     
     if not USE_CITATIONLAKE_UTILS or citationlake_load_combined_data is None:
-        raise ImportError("CitationLake utils not available. Please ensure CitationLake is accessible.")
+        raise ImportError("load_combined_data utils not available. Please ensure src.utils.load_combined_data is accessible.")
     
-    # Use CitationLake's load_combined_data to load the card field
-    print(f"Loading modelcard data from {raw_dir} using CitationLake's load_combined_data...")
+    # Use load_combined_data (ported from CitationLake) to load the card field
+    print(f"Loading modelcard data from {raw_dir} using load_combined_data...")
     df = citationlake_load_combined_data(
         data_type="modelcard",
         file_path=raw_dir,
@@ -97,7 +92,7 @@ def build_jsonl_from_citationlake_raw(raw_dir: str, field: str, output_jsonl: st
 
 def build_card_index(
     field: str = "card",
-    raw_dir: str = "data_citationlake/raw",  # Default to CitationLake, fallback to data/raw
+    raw_dir: str = "data_citationlake/raw",  # Default to data_citationlake/raw, with fallback to data/raw
     parquet: Optional[str] = None,
     output_jsonl: str = "data/card2card_corpus.jsonl",
     model_name: str = "all-MiniLM-L6-v2",
@@ -125,16 +120,16 @@ def build_card_index(
     # Build JSONL corpus
     if field == "card_readme":
         if parquet is None:
-            # Try CitationLake first, then fallback to local
+            # Try data_citationlake first, then fallback to local
             if os.path.exists("data_citationlake/processed/modelcard_step1.parquet"):
                 parquet = "data_citationlake/processed/modelcard_step1.parquet"
             else:
                 parquet = "data/processed/modelcard_step1.parquet"
         build_jsonl_from_parquet(parquet, field, output_jsonl)
     else:
-        # For "card" field, use CitationLake's load_combined_data if available and raw_dir points to CitationLake
+        # For "card" field, use load_combined_data if available and raw_dir points to data_citationlake
         if field == "card" and "data_citationlake" in raw_dir and USE_CITATIONLAKE_UTILS and citationlake_load_combined_data:
-            print(f"Using CitationLake's load_combined_data to load card field from {raw_dir}")
+            print(f"Using load_combined_data to load card field from {raw_dir}")
             build_jsonl_from_citationlake_raw(raw_dir, field, output_jsonl)
         else:
             # Check if raw_dir exists, if not try alternative

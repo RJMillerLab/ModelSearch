@@ -14,7 +14,7 @@ from src.search import (
 
 ## 1. Build Index (First Time Only)
 
-### Option 1: Using CitationLake raw data
+### Option 1: Using data_citationlake raw data
 
 ```python
 build_card_index(

@@ -45,7 +45,7 @@ def serialize_table_for_prompt(df: pd.DataFrame, max_rows: int = 100, max_cols: 
 
 def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = None) -> str:
     """
-    Call LLM API to get QA response using CitationLake's LLM module.
+    Call LLM API to get QA response using the internal LLM helper module.
     
     Args:
         prompt: The prompt to send
@@ -55,13 +55,13 @@ def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = Non
     Returns:
         LLM response text
     """
-    # Use CitationLake's LLM_response function (absolute import to avoid "beyond top-level package" when qa is top-level)
-    print(f"🔍 Importing CitationLake LLM module...")
+    # Use the internal LLM_response helper (absolute import to avoid "beyond top-level package" when qa is top-level)
+    print(f"🔍 Importing internal LLM helper module (llm_citationlake)...")
     try:
         from evaluation.llm_citationlake import LLM_response, setup_openai
-        print(f"✅ CitationLake LLM module imported successfully")
+        print(f"✅ Internal LLM helper module imported successfully")
     except ImportError as import_err:
-        print(f"⚠️  CitationLake LLM module import failed: {import_err}")
+        print(f"⚠️  Internal LLM helper module import failed: {import_err}")
         import traceback
         print(traceback.format_exc())
         # Fallback to direct OpenAI
@@ -86,10 +86,10 @@ def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = Non
             print(f"⚠️  Direct OpenAI API also failed: {e}")
             raise ValueError(f"LLM API not available: {str(e)}")
     
-    # CitationLake's LLM_response expects specific model names
-    # Map model names to compatible ones
+    # The wrapped LLM_response expects specific model names
+    # Map model names to backend-compatible ones
     if model.startswith("gpt-4") or model == "gpt-4":
-        llm_model = "gpt-4-turbo"  # CitationLake compatible name
+        llm_model = "gpt-4-turbo"  # wrapper-compatible name
     elif model.startswith("gpt-3.5") or model == "gpt-3.5-turbo":
         llm_model = "gpt-3.5-turbo-0125"
     else:
@@ -113,7 +113,7 @@ def call_llm_api(prompt: str, model: str = "gpt-4", api_key: Optional[str] = Non
     
     print(f"🔍 Calling LLM_response with model: {llm_model}")
     try:
-        # CitationLake's query_openai accepts kwargs and passes them to openai API
+        # The wrapped query_openai accepts kwargs and passes them to openai API
         # Note: Don't pass response_format as it's not supported by all models
         response, _ = LLM_response(
             chat_prompt=full_prompt,
@@ -351,7 +351,7 @@ def answer_question_with_llm(
     model_card_info = {}
     if search_results_data:
         # Try to extract model card information from search results
-        # This is a placeholder - actual model card extraction would need to access CitationLake or parquet files
+        # This is a placeholder - actual model card extraction would need to access model card storage (e.g., parquet files)
         model_card_info = {}  # Will be populated if model card access is implemented
     
     # Generate prompt with model IDs to rank and QA mode

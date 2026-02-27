@@ -12,7 +12,7 @@ def to_parquet(df, output_path, **kwargs):
 
 
 def _html_path_to_relative(html_path):
-    """Convert absolute html_path (e.g. /Users/.../CitationLake/data/arxiv_fulltext_html_251117/xxx.html) to relative so parquet is portable."""
+    """Convert absolute html_path (e.g. /Users/.../data_citationlake/data/arxiv_fulltext_html_251117/xxx.html) to relative so parquet is portable."""
     if pd.isna(html_path) or not isinstance(html_path, str):
         return html_path
     path = html_path.strip()

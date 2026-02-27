@@ -224,7 +224,7 @@ def _resolve_readme_path(readme_path):
         candidate = os.path.normpath(os.path.join(base, readme_path))
         if os.path.exists(candidate):
             return candidate
-    # Legacy absolute path (e.g. /Users/.../CitationLake/data/arxiv_fulltext_html_251117/xxx.html)
+    # Legacy absolute path (e.g. /Users/.../data_citationlake/data/arxiv_fulltext_html_251117/xxx.html)
     if 'data/' in str(readme_path):
         rel = str(readme_path).split('data/', 1)[-1].lstrip('/')
         for base in (data_base, repo_root):

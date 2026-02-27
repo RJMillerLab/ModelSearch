@@ -737,8 +737,8 @@ def integrate_tables_from_model_search_results(
         max_models: Maximum number of models to process (default: 10)
         db_path: Optional path to modellake.db (for Blend_internal integration)
         relationship_parquet: Optional path to relationship parquet file
-        schema_log_path: Path to parquet_schema.log (for CitationLake)
-        use_citationlake: Whether to use CitationLake get_from (default: True)
+        schema_log_path: Path to parquet_schema.log (for get_from-style approach, e.g., ModelTables)
+        use_citationlake: Whether to use get_from-style mapping (default: True)
         card2card_retrieval_mode: Optional retrieval mode: "dense", "sparse", or "hybrid"
         
     Returns:
@@ -848,12 +848,12 @@ def integrate_tables_from_model_search_results(
                 print(f"✅ Loaded relationship parquet for fallback DataFrame path: {parquet_for_df}")
             except Exception as e:
                 print(f"⚠️  Failed to load relationship parquet {parquet_for_df}: {e}")
-                print(f"   Will try to use CitationLake approach instead...")
-                use_citationlake = True  # Fallback to CitationLake
+                print(f"   Will try to use get_from-style approach instead...")
+                use_citationlake = True  # Fallback to get_from-style approach
     
-    # Check if CitationLake is actually available
+    # Check if get_from-style mapping is actually available
     try:
-        # Try to check if CitationLake get_from is available
+        # Try to check if get_from-style mapping (via card2tab2card) is available
         card2tab2card_path = os.path.join(os.path.dirname(__file__), '..', 'search', 'card2tab2card.py')
         if os.path.exists(card2tab2card_path):
             spec = importlib.util.spec_from_file_location("card2tab2card_check", card2tab2card_path)
@@ -932,11 +932,11 @@ def integrate_tables_from_model_search_results(
         else:
             return {
                 "success": False,
-                "error": "Cannot get tables: CitationLake not available, relationship parquet failed to load, and no fallback data found in search results",
+                "error": "Cannot get tables: get_from-style mapping not available, relationship parquet failed to load, and no fallback data found in search results",
                 "integrated_table": None
             }
     else:
-        # Use relationship_df approach if CitationLake is not available or if explicitly requested
+        # Use relationship_df approach if get_from-style mapping is not available or if explicitly requested
         if not citationlake_available or (relationship_df is not None and not use_citationlake):
             if relationship_df is None:
                 # Try fallback before giving up
@@ -945,7 +945,7 @@ def integrate_tables_from_model_search_results(
                 else:
                     return {
                         "success": False,
-                        "error": "relationship_df is required when CitationLake is not available, and no fallback data found",
+                        "error": "relationship_df is required when get_from-style mapping is not available, and no fallback data found",
                         "integrated_table": None
                     }
             else:
@@ -957,7 +957,7 @@ def integrate_tables_from_model_search_results(
     models_without_tables = []
     model_to_table_paths: Dict[str, List[str]] = {}
     
-    # Use fallback only when parquet/CitationLake unavailable (e.g. from card2tab2card_results)
+    # Use fallback only when parquet/get_from-style mapping is unavailable (e.g. from card2tab2card_results)
     if use_fallback:
         print(f"⚠️  Using {len(fallback_table_paths)} fallback tables from search results JSON (parquet unavailable)")
         all_table_paths = fallback_table_paths  # No table top-k cap
