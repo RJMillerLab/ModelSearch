@@ -233,8 +233,7 @@ def get_tables_from_modellake_db(
     if not os.path.exists(db_path):
         raise FileNotFoundError(f"modellake.db not found at {db_path}")
     
-    con = duckdb.connect(db_path, read_only=True)
-    try:
+    with duckdb.connect(db_path, read_only=True) as con:
         query = f"""
         SELECT DISTINCT tableid, filename, table_group, table_type 
         FROM {index_table} 
@@ -242,20 +241,11 @@ def get_tables_from_modellake_db(
         """
         if limit:
             query += f" LIMIT {limit}"
-        
         results = con.execute(query).fetchall()
-        tables = [
-            {
-                "tableid": row[0],
-                "filename": row[1],
-                "table_group": row[2],
-                "table_type": row[3]
-            }
+        return [
+            {"tableid": row[0], "filename": row[1], "table_group": row[2], "table_type": row[3]}
             for row in results
         ]
-        return tables
-    finally:
-        con.close()
 
 
 def search_single_column(

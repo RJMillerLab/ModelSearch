@@ -55,8 +55,7 @@ def _load_query_from_tableid(tableid: int, db_path: str, index_table: str = "mod
     """Load query table from modellake.db by table ID (same source as rest: db -> filename -> resolve path -> read CSV)."""
     if not os.path.exists(db_path):
         return None
-    con = duckdb.connect(db_path, read_only=True)
-    try:
+    with duckdb.connect(db_path, read_only=True) as con:
         row = con.execute(
             f"SELECT DISTINCT filename FROM {index_table} WHERE tableid = ? AND rowid = -1 LIMIT 1",
             [tableid]
@@ -67,8 +66,6 @@ def _load_query_from_tableid(tableid: int, db_path: str, index_table: str = "mod
         if not csv_path or not os.path.exists(csv_path):
             return None
         return pd.read_csv(csv_path)
-    finally:
-        con.close()
 
 
 def _search_restricted_to_tables_by_header_terms(
@@ -103,12 +100,9 @@ def _search_restricted_to_tables_by_header_terms(
         ORDER BY cnt DESC
         {limit_clause}
     """
-    con = duckdb.connect(db_path, read_only=True)
-    try:
+    with duckdb.connect(db_path, read_only=True) as con:
         rows = con.execute(query_sql).fetchall()
         return [int(r[0]) for r in rows]
-    finally:
-        con.close()
 
 
 def search_table2table_by_type(

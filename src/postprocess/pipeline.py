@@ -36,10 +36,7 @@ def csv_search_dirs() -> List[Path]:
 def find_csv_file(filename: str) -> Optional[str]:
     """Resolve CSV path: try utils.resolve_table_path first, then extra dirs (data/raw, ModelTables)."""
     basename = os.path.basename(filename)
-    try:
-        from src.utils.table_loader import resolve_table_path
-    except ImportError:
-        from utils.table_loader import resolve_table_path
+    from src.utils.table_loader import resolve_table_path
     p = resolve_table_path(basename)
     if p:
         return p

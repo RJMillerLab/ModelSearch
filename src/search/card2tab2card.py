@@ -450,8 +450,7 @@ def search_card2tab2card(
         tableid_to_filename: Dict[int, str] = {}
         if all_ids:
             import duckdb
-            con_filter = duckdb.connect(db_path, read_only=True)
-            try:
+            with duckdb.connect(db_path, read_only=True) as con_filter:
                 table_ids_str = ','.join(str(tid) for tid in all_ids)
                 filename_query = f"""
                     SELECT DISTINCT tableid, filename
@@ -460,8 +459,6 @@ def search_card2tab2card(
                 """
                 filename_results = con_filter.execute(filename_query).fetchall()
                 tableid_to_filename = {tid: filename for tid, filename in filename_results}
-            finally:
-                con_filter.close()
 
         per_table_filtered_topk: List[List[Tuple[int, str]]] = []
         n_self, n_s2orc, n_generic = 0, 0, 0
@@ -543,9 +540,7 @@ def search_card2tab2card(
     
     # Get filenames for retrieved tables from database
     import duckdb
-    con = duckdb.connect(db_path, read_only=True)
-    try:
-        # Get distinct filenames for the retrieved table IDs
+    with duckdb.connect(db_path, read_only=True) as con:
         table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
         filename_query = f"""
             SELECT DISTINCT tableid, filename 
@@ -559,8 +554,6 @@ def search_card2tab2card(
             print(f"   {i}. Table ID {tid}: {filename}")
         if len(retrieved_table_files) > 2:
             print(f"   ... and {len(retrieved_table_files) - 2} more retrieved tables")
-    finally:
-        con.close()
 
     # Step 3: Retrieved Tables -> Corresponding ModelCards
     print(f"\n{'='*60}")
@@ -570,9 +563,7 @@ def search_card2tab2card(
     
     # Get filenames for retrieved tables from database
     import duckdb
-    con = duckdb.connect(db_path, read_only=True)
-    try:
-        # Get distinct filenames for the retrieved table IDs
+    with duckdb.connect(db_path, read_only=True) as con:
         if not similar_table_ids:
             print(f"⚠️  No table IDs to map")
             # Still save intermediate results even if no tables found
@@ -663,9 +654,7 @@ def search_card2tab2card(
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 print(f"✅ Results saved to {output_json}")
             return []
-    finally:
-        con.close()
-    
+
     # Map similar tables back to model cards
     similar_model_ids = set()
     table_to_models = {}  # Map table filename to list of model IDs
@@ -1059,8 +1048,7 @@ def search_card2tab2card_by_type(
         all_ids = [tid for ids, _ in per_table_results for tid in ids]
         tableid_to_filename: Dict[int, str] = {}
         if all_ids:
-            con_filter = duckdb.connect(db_path, read_only=True)
-            try:
+            with duckdb.connect(db_path, read_only=True) as con_filter:
                 table_ids_str = ','.join(str(tid) for tid in all_ids)
                 filename_query = f"""
                     SELECT DISTINCT tableid, filename
@@ -1069,8 +1057,6 @@ def search_card2tab2card_by_type(
                 """
                 filename_results = con_filter.execute(filename_query).fetchall()
                 tableid_to_filename = {tid: filename for tid, filename in filename_results}
-            finally:
-                con_filter.close()
         per_table_filtered_topk: List[List[Tuple[int, str]]] = []
         n_self, n_s2orc, n_generic = 0, 0, 0
         for ids, src_basename in per_table_results:
@@ -1153,8 +1139,7 @@ def search_card2tab2card_by_type(
     
     # Get filenames for retrieved tables from database
     import duckdb
-    con = duckdb.connect(db_path, read_only=True)
-    try:
+    with duckdb.connect(db_path, read_only=True) as con:
         table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
         filename_query = f"""
             SELECT DISTINCT tableid, filename 
@@ -1163,7 +1148,6 @@ def search_card2tab2card_by_type(
         """
         filename_results = con.execute(filename_query).fetchall()
         tableid_to_filename = {tid: filename for tid, filename in filename_results}
-        # Per-table path: already filtered+topk+merge in Step 2, no post-filter
         if not (use_per_table_search and per_table_results):
             seed_basenames = {os.path.basename(str(t)) for t in query_tables}
             filtered = [tid for tid in similar_table_ids if tid in tableid_to_filename
@@ -1171,7 +1155,6 @@ def search_card2tab2card_by_type(
                 and _classify_table_source_by_basename(os.path.basename(str(tableid_to_filename[tid]))) != "llm"
                 and not _is_generic_table(tableid_to_filename[tid])]
             similar_table_ids = filtered[:table_search_k]
-        # Preserve Tab2Tab relevance order: iterate, dedupe by filename
         seen_filenames = set()
         retrieved_filenames = []
         for tid in similar_table_ids:
@@ -1180,17 +1163,13 @@ def search_card2tab2card_by_type(
                 if fname not in seen_filenames:
                     seen_filenames.add(fname)
                     retrieved_filenames.append(fname)
-        # Filter generic tables (carbon/country code - invalid for search)
         n_before = len(retrieved_filenames)
         retrieved_filenames = [f for f in retrieved_filenames if not _is_generic_table(f)]
         if n_before > len(retrieved_filenames):
             print(f"ℹ️  Filtered {n_before - len(retrieved_filenames)} generic tables (1910.09700_table, 204823751_table)")
         print(f"✅ Retrieved {len(retrieved_filenames)} unique filenames from database (ordered by Tab2Tab relevance)")
-        # Debug: print query_tables and searched_tables
         print(f"📋 query_tables ({len(query_tables)}): {[os.path.basename(str(t)) for t in query_tables[:5]]}{'...' if len(query_tables) > 5 else ''}")
         print(f"📋 searched_tables ({len(retrieved_filenames)}): {[os.path.basename(str(f)) for f in retrieved_filenames[:5]]}{'...' if len(retrieved_filenames) > 5 else ''}")
-    finally:
-            con.close()
 
     # Step 3: Retrieved Tables -> Corresponding ModelCards (same as search_card2tab2card)
     print(f"\n{'='*60}")
@@ -1521,12 +1500,8 @@ def main():
                 print(f"  {i}. {model_id}")
 
         elapsed = time.time() - start_time
-        try:
-            from src.utils import get_device
-            dev = get_device()
-        except Exception:
-            dev = "cpu"
-        print(f"\nTotal time: {elapsed:.2f}s (device: {dev})")
+        from src.utils import get_device
+        print(f"\nTotal time: {elapsed:.2f}s (device: {get_device()})")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

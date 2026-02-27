@@ -37,8 +37,7 @@ def build_jsonl_from_parquet(parquet_path: str, field: str, output_jsonl: str) -
         raise ValueError("field must be 'card' or 'card_readme'")
 
     os.makedirs(os.path.dirname(output_jsonl), exist_ok=True)
-    con = duckdb.connect()
-    try:
+    with duckdb.connect() as con:
         query = f"""
         SELECT CAST(modelId AS VARCHAR) AS id,
                {field} AS contents
@@ -46,7 +45,6 @@ def build_jsonl_from_parquet(parquet_path: str, field: str, output_jsonl: str) -
         WHERE {field} IS NOT NULL AND length(trim({field})) > 0
         """
         table = con.execute(query).fetch_arrow_table()
-
         written = 0
         with open(output_jsonl, "w", encoding="utf-8") as fout:
             for batch in table.to_batches():
@@ -60,8 +58,6 @@ def build_jsonl_from_parquet(parquet_path: str, field: str, output_jsonl: str) -
                     fout.write(json.dumps(doc, ensure_ascii=False) + "\n")
                     written += 1
         print(f"Wrote {written} documents to {output_jsonl}")
-    finally:
-        con.close()
 
 
 def build_jsonl_from_raw(raw_dir: str, field: str, output_jsonl: str) -> None:

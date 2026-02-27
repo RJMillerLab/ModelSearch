@@ -23,22 +23,9 @@ from src.baseline1.table_retrieval_pipeline import (
     search_neighbors
 )
 
-# Try to import load_combined_data and get_device (ported from CitationLake)
-try:
-    from src.utils import load_combined_data as citationlake_load_combined_data, get_device
-    USE_CITATIONLAKE_UTILS = True
-except ImportError:
-    from src.utils import load_combined_data
-    USE_CITATIONLAKE_UTILS = False
-    citationlake_load_combined_data = None
-    def get_device() -> str:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                return "cuda"
-        except Exception:
-            pass
-        return "cpu"
+from src.utils import load_combined_data as citationlake_load_combined_data, get_device
+
+USE_CITATIONLAKE_UTILS = True
 
 
 def build_jsonl_from_citationlake_raw(raw_dir: str, field: str, output_jsonl: str) -> None:
@@ -210,11 +197,8 @@ def _get_pyserini_searcher_and_reader(index_path: str) -> Tuple[object, object]:
     global _pyserini_cache
     if _pyserini_cache is not None and _pyserini_cache[2] == index_path:
         return _pyserini_cache[0], _pyserini_cache[1]
-    try:
-        from pyserini.search.lucene import LuceneSearcher
-        from pyserini.index.lucene import LuceneIndexReader
-    except ImportError:
-        raise ImportError("pyserini not installed. Install with: pip install pyserini")
+    from pyserini.search.lucene import LuceneSearcher
+    from pyserini.index.lucene import LuceneIndexReader
     t0 = time.time()
     searcher = LuceneSearcher(index_path)
     searcher.set_bm25()
@@ -229,11 +213,8 @@ def _get_query_text_from_index(index_reader, model_id: str) -> str:
     if hasattr(index_reader, "doc_raw"):
         raw = index_reader.doc_raw(model_id)
         if raw:
-            try:
-                doc = json.loads(raw)
-                return doc.get("contents", raw)
-            except Exception:
-                return raw
+            doc = json.loads(raw)
+            return doc.get("contents", raw)
     if hasattr(index_reader, "doc_contents"):
         contents = index_reader.doc_contents(model_id)
         if contents:
@@ -292,10 +273,7 @@ def _dense_search_faiss(
     ids = data['ids'].tolist()
     
     # Find the index of the query model
-    try:
-        query_idx = ids.index(query_model_id)
-    except ValueError:
-        raise ValueError(f"Model ID '{query_model_id}' not found in embeddings")
+    query_idx = ids.index(query_model_id)
     
     # Load FAISS index
     index = faiss.read_index(faiss_index)
@@ -397,10 +375,7 @@ def search_card2card(
         data = np.load(emb_npz)
         ids = data['ids'].tolist()
         print(f"  [timing] load npz (not inference): {time.time() - t0:.2f}s")
-        try:
-            query_idx = ids.index(model_id)
-        except ValueError:
-            raise ValueError(f"Model ID '{model_id}' not found in corpus")
+        query_idx = ids.index(model_id)
         t0 = time.time()
         index = faiss.read_index(faiss_index)
         print(f"  [timing] load FAISS (not inference): {time.time() - t0:.2f}s")
@@ -444,10 +419,7 @@ def search_card2card(
         data = np.load(emb_npz)
         ids = data['ids'].tolist()
         print(f"  [timing] load npz (not inference): {time.time() - t0:.2f}s")
-        try:
-            query_idx = ids.index(model_id)
-        except ValueError:
-            raise ValueError(f"Model ID '{model_id}' not found in embeddings")
+        query_idx = ids.index(model_id)
         t0 = time.time()
         index = faiss.read_index(faiss_index)
         print(f"  [timing] load FAISS (not inference): {time.time() - t0:.2f}s")

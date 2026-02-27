@@ -2,16 +2,14 @@
 """
 Generate markdown files from all log files in logs/ directory.
 
+**用途**：把搜索日志（card2card、tab2tab 等跑的 .log）转成 Markdown，从 log 里解析 "Results saved to xxx.json"，列出 models/tables，并可做 table integration。在 docs/build_index.md 里会用到。
+
 Outputs:
 - logs/ — input (search run logs).
-- md/<log_basename>.md — one md per log. Model-search (card2card, card2tab2card, query2modelcard): models first (primary), related tables second. Table-search (tab2tab*): tables only.
-- md/<log_basename>_materials/csv_integrated/integrated.csv — integrated table for that log (full path in the md).
+- md/<log_basename>.md — one md per log.
+- md/<log_basename>_materials/csv_integrated/integrated.csv — integrated table (full path in the md).
 
-Why some logs "fail" (no result JSON path in log):
-- card2card_* / query2modelcard: often run without --output_json, so no "Results saved to" line.
-- tab2tab_by_type_multi_column: may crash before save (e.g. to_bitstring). Optional fallback paths are tried if the file exists.
-
-Usage (run from repo root, e.g. on remote):
+Usage (run from repo root):
   python -m src.postprocess.generate_md_from_logs --logs_dir logs --output_dir md
   python -m src.postprocess.generate_md_from_logs --log_file logs/card2tab2card_by_type.log --output_dir md
 """
@@ -24,72 +22,16 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 import pandas as pd
-import duckdb
 
-from .pipeline import is_model_search_log, find_csv_file
-
-# Repo root (this file is in src/postprocess/)
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
-
-def _resolve(path: str) -> Path:
-    if os.path.isabs(path):
-        return Path(path)
-    return _REPO_ROOT / path
-
-
-def load_classifications(json_path: str) -> Dict[int, str]:
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return {int(k): v for k, v in data.items()}
-
-
-def _find_csv_file(filename: str) -> Optional[str]:
-    return find_csv_file(filename)
-
-
-def get_table_metadata(
-    tableid: int, db_path: str, index_table: str = "modellake_index"
-) -> Optional[Dict[str, Any]]:
-    path = _resolve(db_path)
-    if not path.exists():
-        return None
-    con = duckdb.connect(str(path), read_only=True)
-    try:
-        q = f"SELECT DISTINCT tableid, filename, table_group, table_type FROM {index_table} WHERE tableid = ? AND rowid = -1 LIMIT 1"
-        row = con.execute(q, [tableid]).fetchone()
-        if not row:
-            return None
-        return {"tableid": row[0], "filename": row[1], "table_group": row[2], "table_type": row[3]}
-    finally:
-        con.close()
-
-
-def load_table_csv(filename: str, max_rows: int = 50) -> Optional[pd.DataFrame]:
-    csv_path = _find_csv_file(filename)
-    if not csv_path:
-        return None
-    try:
-        return pd.read_csv(csv_path, nrows=max_rows)
-    except Exception:
-        return None
-
-
-def table_to_markdown(df: pd.DataFrame, max_rows: int = 50) -> str:
-    if df is None or df.empty:
-        return "*Empty table*"
-    df_display = df.head(max_rows)
-    try:
-        md = df_display.to_markdown(index=False, tablefmt="github")
-    except ImportError:
-        md = "```\n" + df_display.to_string(index=False) + "\n```"
-    if len(df) > max_rows:
-        md += f"\n\n*... and {len(df) - max_rows} more rows*"
-    return md
-
-
-def get_table_classification(tableid: int, classifications: Dict[int, str]) -> Optional[str]:
-    return classifications.get(tableid)
+from .pipeline import is_model_search_log
+from .table_md_common import (
+    resolve_path,
+    load_classifications,
+    find_csv_file,
+    get_table_metadata,
+    load_table_csv,
+    table_to_markdown,
+)
 
 
 def _run_integration_and_save(
@@ -103,17 +45,13 @@ def _run_integration_and_save(
     integration_k: int = 10,
 ) -> Optional[str]:
     """Run table integration when possible; save CSV to md/<log_name>_materials/csv_integrated/integrated.csv. Returns full path or None."""
-    try:
-        from src.integration.table_integration import integrate_tables
-    except Exception as e:
-        print(f"  (Integration skip: {e})")
-        return None
+    from src.integration.table_integration import integrate_tables
 
-    out_dir = _resolve(output_dir) / f"{log_name}_materials" / "csv_integrated"
+    out_dir = resolve_path(output_dir) / f"{log_name}_materials" / "csv_integrated"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_csv = out_dir / "integrated.csv"
 
-    db_abs = str(_resolve(db_path))
+    db_abs = str(resolve_path(db_path))
 
     # Card2tab2card-style: resolve filenames with same dirs as postprocess (avoids "Table not found" on server)
     intermediate = result_data.get("intermediate", {})
@@ -121,7 +59,7 @@ def _run_integration_and_save(
     if retrieved:
         paths = []
         for fname in retrieved[:integration_k]:
-            full = _find_csv_file(fname)
+            full = find_csv_file(fname)
             if full:
                 paths.append(full)
         if paths:
@@ -135,7 +73,7 @@ def _run_integration_and_save(
             meta = get_table_metadata(tid, db_abs)
             if not meta:
                 continue
-            full = _find_csv_file(meta["filename"])
+            full = find_csv_file(meta["filename"])
             if full:
                 paths.append(full)
         if not paths:
@@ -182,12 +120,12 @@ def extract_json_path_from_log(log_path: str) -> Optional[str]:
         matches = re.findall(pattern, content, re.IGNORECASE | re.MULTILINE)
         if matches:
             raw = matches[-1]
-            return str(_resolve(raw))
+            return str(resolve_path(raw))
     # Fallback: try default path for known log names (if file exists)
     log_name = Path(log_path).stem
     default_rel = _LOG_DEFAULT_JSON.get(log_name)
     if default_rel:
-        p = _resolve(default_rel)
+        p = resolve_path(default_rel)
         if p.exists():
             return str(p)
     return None
@@ -233,12 +171,8 @@ def extract_table_ids_from_log(log_path: str) -> List[int]:
 
 
 def load_result_json(json_path: str) -> Optional[Dict[str, Any]]:
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"  (JSON not found or invalid: {e})")
-        return None
+    with open(json_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def extract_table_ids_from_results(data: Dict[str, Any]) -> List[int]:
@@ -304,7 +238,7 @@ def generate_markdown_from_log(
 
     classifications = {}
     if classification_json:
-        p = _resolve(classification_json)
+        p = resolve_path(classification_json)
         if p.exists():
             classifications = load_classifications(str(p))
 
@@ -337,14 +271,14 @@ def generate_markdown_from_log(
     if table_ids:
         section_title = "\n## Related tables (secondary)\n\n" if is_model_search else "\n## Tables\n\n"
         lines.append(section_title)
-        db_abs = str(_resolve(db_path))
+        db_abs = str(resolve_path(db_path))
         for i, tableid in enumerate(table_ids[:50], 1):
             meta = get_table_metadata(tableid, db_abs)
             lines.append(f"\n### Table {i}: ID `{tableid}`\n")
             if not meta:
                 lines.append("⚠️  **Table not found in database**\n")
                 continue
-            full_csv_path = _find_csv_file(meta["filename"])
+            full_csv_path = find_csv_file(meta["filename"])
             lines.append(f"- **Filename:** `{meta['filename']}`")
             if full_csv_path:
                 lines.append(f"- **Full path:** `{os.path.abspath(full_csv_path)}`")
@@ -366,7 +300,7 @@ def generate_markdown_from_log(
         if len(table_ids) > 50:
             lines.append(f"\n*... and {len(table_ids) - 50} more tables*\n")
 
-    output_path = _resolve(output_dir) / f"{log_name}.md"
+    output_path = resolve_path(output_dir) / f"{log_name}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -408,7 +342,7 @@ def main():
     if args.log_file:
         log_files = [Path(args.log_file)]
     else:
-        logs_dir = _resolve(args.logs_dir)
+        logs_dir = resolve_path(args.logs_dir)
         if not logs_dir.exists():
             print(f"Logs directory not found: {logs_dir}")
             return
@@ -424,22 +358,16 @@ def main():
     generated = []
     failed = []
     for log_file in log_files:
-        try:
-            out = generate_markdown_from_log(
-                str(log_file),
-                output_dir=args.output_dir,
-                db_path=args.db_path,
-                classification_json=args.classification_json if _resolve(args.classification_json).exists() else None,
-                max_rows=args.max_rows,
-            )
-            if out:
-                generated.append(out)
-            else:
-                failed.append(str(log_file))
-        except Exception as e:
-            print(f"Error: {log_file}: {e}")
-            import traceback
-            traceback.print_exc()
+        out = generate_markdown_from_log(
+            str(log_file),
+            output_dir=args.output_dir,
+            db_path=args.db_path,
+            classification_json=args.classification_json if resolve_path(args.classification_json).exists() else None,
+            max_rows=args.max_rows,
+        )
+        if out:
+            generated.append(out)
+        else:
             failed.append(str(log_file))
 
     print(f"\nGenerated: {len(generated)} | Failed: {len(failed)}")

@@ -88,18 +88,10 @@ def main():
     # Resolve device: auto → cuda if available else cpu; cuda → fallback to cpu if not available
     device = args.device.lower()
     if device == "auto" or device == "cuda":
-        try:
-            import torch
-            if torch.cuda.is_available():
-                device = "cuda"
-            else:
-                if args.device.lower() == "cuda":
-                    print("Warning: --device cuda requested but CUDA not available, using cpu.")
-                device = "cpu"
-        except Exception:
-            if args.device.lower() == "cuda":
-                print("Warning: --device cuda requested but torch/CUDA check failed, using cpu.")
-            device = "cpu"
+        from src.utils import get_device
+        device = get_device()
+        if args.device.lower() == "cuda" and device != "cuda":
+            print("Warning: --device cuda requested but CUDA not available, using cpu.")
     args.device = device
     print(f"[init] device = {args.device}")
 

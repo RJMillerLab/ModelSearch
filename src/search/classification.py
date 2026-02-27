@@ -31,6 +31,7 @@ import duckdb
 import subprocess
 import tempfile
 import shutil
+from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
 import argparse
 
@@ -90,14 +91,11 @@ def _get_tab2know_valid_labels() -> List[str]:
         import re
         tabletypes_path = os.path.join(tab2know_repo, "tab2know", "tabletypes.py")
         if os.path.exists(tabletypes_path):
-            try:
-                with open(tabletypes_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                # Match patterns like: prefix + 'Observation' or + 'Input'
-                for m in re.finditer(r"\+\s*['\"]([A-Za-z][A-Za-z0-9_]*)['\"]", content):
-                    labels.add(m.group(1))
-            except Exception:
-                pass
+            with open(tabletypes_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            # Match patterns like: prefix + 'Observation' or + 'Input'
+            for m in re.finditer(r"\+\s*['\"]([A-Za-z][A-Za-z0-9_]*)['\"]", content):
+                labels.add(m.group(1))
     if not labels:
         # Fallback if tab2know missing or no matches (keep same as original default)
         labels = {"Observation", "Input", "Other", "Example"}
@@ -143,33 +141,24 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
             "or ensure TabKnow_internal is in a standard location."
         )
     
-    # Create a temporary directory with the CSV file
-    temp_dir = tempfile.mkdtemp()
-    temp_csv_dir = os.path.join(temp_dir, 'csv')
-    os.makedirs(temp_csv_dir, exist_ok=True)
-    
-    # Copy CSV to temp directory
-    csv_basename = os.path.basename(csv_path)
-    temp_csv_path = os.path.join(temp_csv_dir, csv_basename)
-    shutil.copy2(csv_path, temp_csv_path)
-    
-    # Create output file
-    output_jsonl = os.path.join(temp_dir, 'preds.jsonl')
-    
-    try:
+    # Use a temporary directory (auto-cleaned on exit)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_csv_dir = os.path.join(temp_dir, 'csv')
+        os.makedirs(temp_csv_dir, exist_ok=True)
+        # Copy CSV to temp directory
+        csv_basename = os.path.basename(csv_path)
+        temp_csv_path = os.path.join(temp_csv_dir, csv_basename)
+        shutil.copy2(csv_path, temp_csv_path)
+        output_jsonl = os.path.join(temp_dir, 'preds.jsonl')
         # Find models directory (try local first, then external repo)
         models_dir = os.path.join(tab2know_repo, 'models')
         if not os.path.exists(models_dir):
-            # Try external repo location for models
             external_repo = os.path.join(os.path.expanduser('~'), 'Repo', 'TabKnow_internal')
             external_models = os.path.join(external_repo, 'models')
             if os.path.exists(external_models):
                 models_dir = external_models
             else:
-                # Last resort: use default path (may fail, but let tab2know handle it)
                 models_dir = os.path.join(tab2know_repo, 'models')
-        
-        # Run tab2know inference
         cmd = [
             sys.executable,
             os.path.join(tab2know_repo, 'run_inference.py'),
@@ -180,31 +169,26 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
             '--no-caption',
             '--quiet'
         ]
-        
         env = os.environ.copy()
         env['PYTHONPATH'] = tab2know_repo
         env['TAB2KNOW_NO_CAPTION'] = '1'
-        
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             env=env,
-            timeout=60  # 60 second timeout
+            timeout=60,
         )
-        
         if result.returncode != 0:
             err_msg = result.stderr.strip() if result.stderr else result.stdout.strip() or "(no message)"
             raise RuntimeError(
                 f"tab2know inference failed (returncode={result.returncode}). "
                 f"Predict must return a label; fix the environment and retry. Stderr: {err_msg[:500]}"
             )
-        
         if not os.path.exists(output_jsonl):
             raise RuntimeError(
                 "tab2know produced no output file. Predict must return a label; check run_inference.py and modeldir."
             )
-        
         with open(output_jsonl, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.strip():
@@ -215,25 +199,30 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
                             return _extract_classification_from_rdf_type(rdf_type)
                     except json.JSONDecodeError:
                         continue
-        
         raise RuntimeError(
             "tab2know output had no valid rdf:type. Predict must return a label; check inference output."
         )
-    
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("tab2know inference timed out. Predict must return a label; increase timeout or simplify input.")
-    except RuntimeError:
-        raise
-    except Exception as e:
-        raise RuntimeError(
-            f"tab2know inference error: {e}. Predict must return a label; fix the environment and retry."
-        ) from e
+
+
+@contextmanager
+def _csv_path_for_table(table: Union[pd.DataFrame, str]):
+    """Yield a CSV path: use table as path if str, else write DataFrame to a temp file and yield it (deleted on exit)."""
+    if isinstance(table, str):
+        if not os.path.exists(table):
+            raise FileNotFoundError(f"Table file not found: {table}")
+        yield table
+        return
+    f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    table.to_csv(f.name, index=False)
+    f.close()
+    try:
+        yield f.name
     finally:
-        # Clean up temp directory
-        try:
-            shutil.rmtree(temp_dir)
-        except Exception:
-            pass
+        if os.path.exists(f.name):
+            try:
+                os.unlink(f.name)
+            except Exception:
+                pass
 
 
 def classify_table(
@@ -242,46 +231,17 @@ def classify_table(
 ) -> str:
     """
     Classify a single table based on its content and structure.
-    
-    Args:
-        table: Either a pandas DataFrame or a path to a CSV file
-        method: Classification method - "tab2know" (default), "heuristic", or "ml" (future)
-    
-    Returns:
-        Classification label (string):
-        - For tab2know: "Observation", "Input", "Other", "Example". On inference failure we raise (no silent fallback).
-        - For heuristic: "numerical", "categorical", "mixed", "id_like", "empty", etc.
     """
-    # Load table if path is provided
-    if isinstance(table, str):
-        if not os.path.exists(table):
-            raise FileNotFoundError(f"Table file not found: {table}")
-        csv_path = table
-    else:
-        # Save DataFrame to temporary CSV
-        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
-        table.to_csv(temp_file.name, index=False)
-        temp_file.close()
-        csv_path = temp_file.name
-    
-    try:
+    with _csv_path_for_table(table) as csv_path:
         if method == "tab2know":
             return _classify_with_tab2know(csv_path)
         elif method == "heuristic":
             df = pd.read_csv(csv_path)
             return _classify_heuristic(df)
         elif method == "ml":
-            # Future: ML-based classification
             raise NotImplementedError("ML-based classification not yet implemented")
         else:
             raise ValueError(f"Unknown classification method: {method}")
-    finally:
-        # Clean up temp file if we created it
-        if isinstance(table, pd.DataFrame) and os.path.exists(csv_path):
-            try:
-                os.unlink(csv_path)
-            except Exception:
-                pass
 
 
 def _classify_heuristic(df: pd.DataFrame) -> str:
@@ -359,9 +319,7 @@ def classify_table_from_db(
     if not os.path.exists(db_path):
         raise FileNotFoundError(f"Database not found: {db_path}")
     
-    con = duckdb.connect(db_path, read_only=True)
-    try:
-        # Get filename for this tableid
+    with duckdb.connect(db_path, read_only=True) as con:
         query = f"""
             SELECT DISTINCT filename 
             FROM {index_table} 
@@ -369,39 +327,27 @@ def classify_table_from_db(
             LIMIT 1
         """
         result = con.execute(query, [tableid]).fetchone()
-        
         if not result:
             return None
-        
         filename = result[0]
-        
-        # Try to find the actual CSV file
         csv_path = _find_csv_file(filename)
-        
         if csv_path and os.path.exists(csv_path):
             return classify_table(csv_path)
-        else:
-            # Fallback: use table_type from database if available
-            type_query = f"""
-                SELECT DISTINCT table_type 
-                FROM {index_table} 
-                WHERE tableid = ? AND rowid = -1
-                LIMIT 1
-            """
-            type_result = con.execute(type_query, [tableid]).fetchone()
-            if type_result:
-                return type_result[0]  # Use table_type as classification
-            return TAB2KNOW_UNK_LABEL
-    finally:
-        con.close()
+        type_query = f"""
+            SELECT DISTINCT table_type 
+            FROM {index_table} 
+            WHERE tableid = ? AND rowid = -1
+            LIMIT 1
+        """
+        type_result = con.execute(type_query, [tableid]).fetchone()
+        if type_result:
+            return type_result[0]
+        return TAB2KNOW_UNK_LABEL
 
 
 def _find_csv_file(filename: str) -> Optional[str]:
     """Find CSV by basename: use utils.resolve_table_path, then data/raw, then path as-is."""
-    try:
-        from src.utils.table_loader import resolve_table_path
-    except ImportError:
-        from utils.table_loader import resolve_table_path
+    from src.utils.table_loader import resolve_table_path
     basename = os.path.basename(filename)
     p = resolve_table_path(basename)
     if p:
@@ -448,11 +394,8 @@ def classify_datalake_batch(
         print(f"Limit: {limit} tables")
     print(f"{'='*60}\n")
     
-    con = duckdb.connect(db_path, read_only=True)
     classifications = {}
-    
-    try:
-        # Get all unique tableids
+    with duckdb.connect(db_path, read_only=True) as con:
         query = f"""
             SELECT DISTINCT tableid, filename, table_type 
             FROM {index_table} 
@@ -460,16 +403,12 @@ def classify_datalake_batch(
         """
         if limit:
             query += f" LIMIT {limit}"
-        
         results = con.execute(query).fetchall()
         total_tables = len(results)
-        
         print(f"📊 Found {total_tables} tables to classify\n")
-        
         for i, (tableid, filename, table_type) in enumerate(results, 1):
             if i % 100 == 0:
                 print(f"   Progress: {i}/{total_tables} tables classified...")
-            
             csv_path = _find_csv_file(filename)
             if not csv_path or not os.path.exists(csv_path):
                 msg = (
@@ -478,24 +417,14 @@ def classify_datalake_batch(
                 )
                 print(f"\n❌ {msg}")
                 raise FileNotFoundError(msg)
-            try:
-                classification = classify_table(csv_path, method=method)
-                classifications[tableid] = classification
-            except Exception as e:
-                print(f"\n❌ Error classifying tableid={tableid}, filename={filename}: {e}")
-                raise
-        
+            classification = classify_table(csv_path, method=method)
+            classifications[tableid] = classification
         print(f"\n✅ Classified {len(classifications)} tables")
-        
-        # Print classification distribution
         from collections import Counter
         dist = Counter(classifications.values())
         print(f"\n📊 Classification Distribution:")
         for label, count in dist.most_common():
             print(f"   {label}: {count}")
-        
-    finally:
-        con.close()
     
     # Save results if requested
     if output_json:
@@ -613,42 +542,36 @@ def main():
     
     args = parser.parse_args()
     
-    try:
-        if args.mode == 'single':
-            if args.table:
-                # Classify from CSV file
-                classification = classify_table(args.table, method=args.method)
-                print(f"\n✅ Classification: {classification}")
-            elif args.tableid:
-                # Classify from database tableid
-                classification = classify_table_from_db(
-                    args.tableid,
-                    args.db_path,
-                    args.index_table
-                )
-                if classification:
-                    print(f"\n✅ Table ID {args.tableid} classification: {classification}")
-                else:
-                    print(f"\n❌ Table ID {args.tableid} not found")
-            else:
-                parser.error("Either --table or --tableid must be provided for single mode")
-        
-        elif args.mode == 'batch':
-            # Batch classify all tables in datalake
-            classifications = classify_datalake_batch(
-                db_path=args.db_path,
-                index_table=args.index_table,
-                output_json=args.output_json,
-                limit=args.limit,
-                method=args.method
+    if args.mode == 'single':
+        if args.table:
+            # Classify from CSV file
+            classification = classify_table(args.table, method=args.method)
+            print(f"\n✅ Classification: {classification}")
+        elif args.tableid:
+            # Classify from database tableid
+            classification = classify_table_from_db(
+                args.tableid,
+                args.db_path,
+                args.index_table
             )
-            print(f"\n✅ Batch classification complete: {len(classifications)} tables")
+            if classification:
+                print(f"\n✅ Table ID {args.tableid} classification: {classification}")
+            else:
+                print(f"\n❌ Table ID {args.tableid} not found")
+        else:
+            parser.error("Either --table or --tableid must be provided for single mode")
     
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    elif args.mode == 'batch':
+        # Batch classify all tables in datalake
+        classifications = classify_datalake_batch(
+            db_path=args.db_path,
+            index_table=args.index_table,
+            output_json=args.output_json,
+            limit=args.limit,
+            method=args.method
+        )
+        print(f"\n✅ Batch classification complete: {len(classifications)} tables")
+
 
 
 if __name__ == '__main__':
@@ -725,14 +648,10 @@ if __name__ == '__main__':
                 'Accuracy': [0.95, 0.92, 0.88],
                 'F1': [0.94, 0.91, 0.87]
             })
-            try:
-                result = classify_table(test_df, method="tab2know")
-                print(f"✅ Result: {result}")
-                assert isinstance(result, str) and len(result) > 0, f"Expected tab2know label, got '{result}'"
-                assert result in _get_tab2know_valid_labels(), f"Expected label from tab2know set, got '{result}'"
-            except RuntimeError as e:
-                print(f"⚠️  tab2know inference failed (predict raises on failure): {e}")
-                print("   Fix environment (deps, models) so predict returns a label; skipping assert.")
+            result = classify_table(test_df, method="tab2know")
+            print(f"✅ Result: {result}")
+            assert isinstance(result, str) and len(result) > 0, f"Expected tab2know label, got '{result}'"
+            assert result in _get_tab2know_valid_labels(), f"Expected label from tab2know set, got '{result}'"
         else:
             print("⚠️  Tab2Know repository not found, skipping tab2know test")
             print("   Set TAB2KNOW_REPO environment variable to enable tab2know tests")

@@ -17,16 +17,7 @@ from sentence_transformers import SentenceTransformer
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
-
-def get_device():
-    """Auto-detect device: CUDA if available, otherwise CPU"""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return "cuda"
-    except:
-        pass
-    return "cpu"
+from src.utils import get_device
 
 
 def search_query2modelcard(
