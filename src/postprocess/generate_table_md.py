@@ -2,9 +2,6 @@
 """
 Generate markdown files for table comparison/viewing.
 
-**用途**：按 table_ids 或 model_id 直接生成「表对比 / 某模型关联表」的 Markdown（不依赖日志）。
-在 docs/build_index.md 里会用到，例如表格对比、按 model 看表。
-
 Usage:
   python -m src.postprocess.generate_table_md --table_ids 3690 46228 --output table_comparison.md
   python -m src.postprocess.generate_table_md --model_id google-bert/bert-base-uncased --output model_tables.md

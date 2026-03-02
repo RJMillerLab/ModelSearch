@@ -2,8 +2,6 @@
 """
 Generate markdown files from all log files in logs/ directory.
 
-**用途**：把搜索日志（card2card、tab2tab 等跑的 .log）转成 Markdown，从 log 里解析 "Results saved to xxx.json"，列出 models/tables，并可做 table integration。在 docs/build_index.md 里会用到。
-
 Outputs:
 - logs/ — input (search run logs).
 - md/<log_basename>.md — one md per log.
