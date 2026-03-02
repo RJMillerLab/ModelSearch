@@ -993,6 +993,7 @@
         
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         const DISPLAY_MAX_ROWS = 20;
+        const INTEGRATION_MAX_CELL_CHARS = 120;
         window.__integrationTables = window.__integrationTables || {};
         window.__modelSearchRuns = window.__modelSearchRuns || [];
         window.__tableSearchRuns = window.__tableSearchRuns || [];
@@ -1283,6 +1284,15 @@
                 return { col, nonNullPct, dtype };
             });
         }
+        function formatIntegrationCell(cell) {
+            if (cell == null || cell === '') return '';
+            const asStr = String(cell);
+            if (asStr.length > INTEGRATION_MAX_CELL_CHARS) {
+                return asStr.slice(0, INTEGRATION_MAX_CELL_CHARS - 1) + '…';
+            }
+            return asStr;
+        }
+
         function renderIntegrationTable(table, stats, options) {
             const { title = 'Integration', successColor = '#28a745', extraHtml = '', savedPath = '', downloadId = '' } = options || {};
             if (!table || (stats && stats.output_rows === 0)) {
@@ -1307,12 +1317,12 @@
                 ${extraHtml}
                 <div style="position: relative;">
                     <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Showing first ${displayRows.length} rows; download CSV for full table">
-                        <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
+                        <table style="width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px;">
                             <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
-                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap;">${col}</th>`).join('')}
+                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${col}</th>`).join('')}
                             </tr></thead>
                             <tbody>
-                                ${displayRows.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                                ${displayRows.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: normal; overflow: hidden; text-overflow: ellipsis;">${formatIntegrationCell(cell)}</td>`).join('')}</tr>`).join('')}
                             </tbody>
                         </table>
                     </div>

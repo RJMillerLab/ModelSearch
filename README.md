@@ -251,6 +251,20 @@ python -m src.demo.frontend
 
 Access the web interface at `http://localhost:5001`
 
+### Batch-run preset template queries (simulate frontend clicks)
+
+With the backend running (default `http://localhost:5002`), you can batch-run all preset queries from `config/preset_queries.json` — this simulates clicking “Start Search” (and integration, if enabled) for each template query:
+
+```bash
+# while running backend
+python -m src.demo.backend --port 5002
+# batch run preset queries
+python scripts/batch_run_preset_queries.py \
+  --backend_url http://localhost:5002 \
+  --preset_path config/preset_queries.json \
+  --run_integration
+```
+
 ## Key libraries & acknowledgments
 
 We use the following libraries and borrowed components (with install needs):
