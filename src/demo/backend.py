@@ -1209,8 +1209,19 @@ def _reorder_df_with_overlap(df: pd.DataFrame, other: Optional[pd.DataFrame]) ->
         kind="mergesort",  # stable sort for tie-breaking by orig_idx
     )
     ordered_cols = meta["col"].tolist()
-    return df[ordered_cols]
 
+    # Log before/after ordering to help inspect behavior during development.
+    if ordered_cols != cols:
+        ref_cols = list(other.columns) if other is not None and hasattr(other, "columns") else None
+        print(
+            "[reorder] columns changed.\n"
+            f"  before: {cols}\n"
+            f"  after:  {ordered_cols}\n"
+            f"  ref:    {ref_cols}"
+        )
+    else:
+        print("[reorder] columns unchanged; ordering already satisfied rules.")
+    return df[ordered_cols]
 
 def _test_reorder_df_with_overlap() -> None:
     """Basic tests for _reorder_df_with_overlap.
