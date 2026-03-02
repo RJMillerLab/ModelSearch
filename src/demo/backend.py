@@ -1191,17 +1191,21 @@ def _reorder_df_with_overlap(df: pd.DataFrame, other: Optional[pd.DataFrame]) ->
     else:
         is_overlap = [False] * len(cols)
 
+    rate_series = rates.reindex(cols).fillna(0.0)
+    is_all_null = (rate_series == 0.0).astype(int)
     meta = pd.DataFrame(
         {
             "col": cols,
             "is_overlap": pd.Series(is_overlap, index=cols).astype(int),
-            "rate": rates.reindex(cols).fillna(0.0).values,
+            "is_all_null": is_all_null.values,
+            "rate": rate_series.values,
             "orig_idx": list(range(len(cols))),
         }
     )
     meta = meta.sort_values(
-        by=["is_overlap", "rate", "orig_idx"],
-        ascending=[False, False, True],
+        # 1) overlap; 2) non-all-null columns; 3) non-null rate; 4) original index
+        by=["is_overlap", "is_all_null", "rate", "orig_idx"],
+        ascending=[False, True, False, True],
         kind="mergesort",  # stable sort for tie-breaking by orig_idx
     )
     ordered_cols = meta["col"].tolist()
@@ -1217,13 +1221,14 @@ def _test_reorder_df_with_overlap() -> None:
     # Single-table case: only non-null rate matters.
     df_single = pd.DataFrame(
         {
-            "A": [1, None, None],  # 1/3
-            "B": [1, 2, None],     # 2/3
-            "C": [1, 2, 3],        # 3/3
+            "A": [1, None, None],   # 1/3
+            "B": [1, 2, None],      # 2/3
+            "C": [1, 2, 3],         # 3/3
+            "D": [None, None, None] # 0/3 (all null, should always go last)
         }
     )
     out_single = _reorder_df_with_overlap(df_single, None)
-    assert list(out_single.columns) == ["C", "B", "A"], f"single: got {list(out_single.columns)}"
+    assert list(out_single.columns) == ["C", "B", "A", "D"], f"single: got {list(out_single.columns)}"
 
     # Overlap case: overlap columns first, then by non-null rate.
     table_search = pd.DataFrame(
