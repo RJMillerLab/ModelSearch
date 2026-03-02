@@ -1006,13 +1006,16 @@ def integrate():
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
             return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
 
-        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
+        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
+        # We do NOT change the DataFrame used for saving CSV; reordering is only for display.
         integrated_df = result.get("integrated_table")
         saved_path = None
         if integrated_df is not None:
-            raw_data = integrated_df.values.tolist()
+            # For single-table integration view, reorder only by non-null rate (no overlap info yet).
+            display_df = _reorder_df_with_overlap(integrated_df, None)
+            raw_data = display_df.values.tolist()
             result["integrated_table"] = {
-                "columns": list(integrated_df.columns),
+                "columns": list(display_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
             csv_name = f"integrated_table_search_{run_key}.csv"
@@ -1094,13 +1097,16 @@ def integrate_model_search():
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
             return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
 
-        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON)
+        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
+        # We do NOT change the DataFrame used for saving CSV; reordering is only for display.
         integrated_df = result.get("integrated_table")
         saved_path = None
         if integrated_df is not None:
-            raw_data = integrated_df.values.tolist()
+            # For single-table integration view, reorder only by non-null rate (no overlap info yet).
+            display_df = _reorder_df_with_overlap(integrated_df, None)
+            raw_data = display_df.values.tolist()
             result["integrated_table"] = {
-                "columns": list(integrated_df.columns),
+                "columns": list(display_df.columns),
                 "data": _sanitize_for_json(raw_data)
             }
             csv_name = f"integrated_model_search_{run_key}.csv"
@@ -1152,6 +1158,99 @@ def _load_integrated_table_from_csv(job_dir: str, csv_name: str) -> Optional[pd.
     if not os.path.exists(path):
         return None
     return pd.read_csv(path)
+
+
+def _compute_non_null_rates(df: pd.DataFrame) -> pd.Series:
+    """Compute per-column non-null rate (between 0 and 1).
+
+    For an empty DataFrame, returns an empty Series.
+    """
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    return df.notna().mean()
+
+
+def _reorder_df_with_overlap(df: pd.DataFrame, other: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """Return a new DataFrame whose columns are ordered by:
+
+    1) Overlap with `other` (overlap columns first, if other is provided).
+    2) Non-null rate (descending) within the same overlap group.
+    3) Original column index (ascending) as a stable tie-breaker.
+
+    If `other` is None or empty, only non-null rate and original index are used.
+    """
+    if df is None or df.empty or df.columns.size == 0:
+        return df
+
+    rates = _compute_non_null_rates(df)
+    cols = list(df.columns)
+    # Use overlap information only when we have a non-empty reference table.
+    if other is not None and not other.empty and other.columns.size > 0:
+        overlap_set = set(other.columns)
+        is_overlap = [col in overlap_set for col in cols]
+    else:
+        is_overlap = [False] * len(cols)
+
+    meta = pd.DataFrame(
+        {
+            "col": cols,
+            "is_overlap": pd.Series(is_overlap, index=cols).astype(int),
+            "rate": rates.reindex(cols).fillna(0.0).values,
+            "orig_idx": list(range(len(cols))),
+        }
+    )
+    meta = meta.sort_values(
+        by=["is_overlap", "rate", "orig_idx"],
+        ascending=[False, False, True],
+        kind="mergesort",  # stable sort for tie-breaking by orig_idx
+    )
+    ordered_cols = meta["col"].tolist()
+    return df[ordered_cols]
+
+
+def _test_reorder_df_with_overlap() -> None:
+    """Basic tests for _reorder_df_with_overlap.
+
+    This is a lightweight sanity check that can be invoked manually from
+    a REPL or a small one-off script; it is not wired into any framework.
+    """
+    # Single-table case: only non-null rate matters.
+    df_single = pd.DataFrame(
+        {
+            "A": [1, None, None],  # 1/3
+            "B": [1, 2, None],     # 2/3
+            "C": [1, 2, 3],        # 3/3
+        }
+    )
+    out_single = _reorder_df_with_overlap(df_single, None)
+    assert list(out_single.columns) == ["C", "B", "A"], f"single: got {list(out_single.columns)}"
+
+    # Overlap case: overlap columns first, then by non-null rate.
+    table_search = pd.DataFrame(
+        {
+            "A": ["a1", None, None],   # 1/3
+            "B": ["b1", "b2", "b3"],   # 3/3 (overlap)
+            "C": [None, "c2", None],   # 1/3 (overlap)
+            "D": ["d1", "d2", None],   # 2/3
+        }
+    )
+    model_search = pd.DataFrame(
+        {
+            "B": ["b1", None, "b3"],   # 2/3 (overlap)
+            "C": ["c1", "c2", None],   # 2/3 (overlap)
+            "E": ["e1", None, "e3"],   # 2/3
+        }
+    )
+    out_ts = _reorder_df_with_overlap(table_search, model_search)
+    out_ms = _reorder_df_with_overlap(model_search, table_search)
+
+    # For table_search view, B and C should come before any non-overlap columns.
+    ts_first_two = out_ts.columns[:2].tolist()
+    assert "B" in ts_first_two and "C" in ts_first_two, f"table_search: got {list(out_ts.columns)}"
+
+    # For model_search view, B and C should also come first.
+    ms_first_two = out_ms.columns[:2].tolist()
+    assert "B" in ms_first_two and "C" in ms_first_two, f"model_search: got {list(out_ms.columns)}"
 
 
 def _load_tables_from_integration_run(job_dir: str, run_key: str):
@@ -1232,11 +1331,16 @@ def evaluate():
             return None
         return {"columns": list(df.columns), "data": _sanitize_for_json(df.values.tolist())}
 
+    # For display purposes, reorder columns using overlap + non-null rate.
+    # The underlying saved CSV / JSON integration artifacts are not modified.
+    table1_for_display = _reorder_df_with_overlap(table1_df, table2_df)
+    table2_for_display = _reorder_df_with_overlap(table2_df, table1_df)
+
     return jsonify({
         "status": "success",
         "evaluation": result,
-        "table1": _df_to_dict(table1_df),
-        "table2": _df_to_dict(table2_df),
+        "table1": _df_to_dict(table1_for_display),
+        "table2": _df_to_dict(table2_for_display),
     })
 
 
