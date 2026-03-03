@@ -21,6 +21,55 @@ from collections import Counter
 from utils.table_loader import load_table, resolve_table_path
 
 
+def _reorder_columns_deterministic(df: pd.DataFrame) -> pd.DataFrame:
+    """Deterministically reorder columns for readability/comparability.
+
+    Rules (table-only; no external reference):
+    1) Columns that are not entirely null/empty first.
+    2) Within those, higher non-null rate first.
+    3) Columns that are entirely null/empty always go to the end.
+    4) Stable tie-breaker: original column order.
+    """
+    if df is None or df.empty or df.columns.size == 0:
+        return df
+
+    cols = list(df.columns)
+    # Treat NaN as null; empty-string stays non-null in pandas, so we handle it explicitly.
+    # We consider both NaN and '' as empty for the non-null rate.
+    not_empty = df.notna()
+    try:
+        not_empty = not_empty & (df.astype(str) != "")
+    except Exception:
+        # If dtype conversion fails for some exotic object columns, fall back to NaN-only.
+        pass
+    rates = not_empty.mean().reindex(cols).fillna(0.0)
+    is_all_null = (rates == 0.0).astype(int)
+
+    meta = pd.DataFrame(
+        {
+            "col": cols,
+            "is_all_null": is_all_null.values,
+            "rate": rates.values,
+            "orig_idx": list(range(len(cols))),
+        }
+    )
+    meta = meta.sort_values(
+        by=["is_all_null", "rate", "orig_idx"],
+        ascending=[True, False, True],
+        kind="mergesort",
+    )
+    ordered_cols = meta["col"].tolist()
+
+    if ordered_cols != cols:
+        print(
+            "[reorder] columns changed (deterministic, saved order).\n"
+            f"  before: {cols}\n"
+            f"  after:  {ordered_cols}"
+        )
+        return df[ordered_cols]
+    return df
+
+
 def _normalize_val_to_items(val: Any) -> List[Any]:
     """Unify iteration over parquet list cells: handle list, tuple, np.ndarray, scalar."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -368,7 +417,7 @@ def integrate_tables(
                 print(f"⚠️  {integration_type} returned no result; used union as fallback")
                 return {
                     "success": True,
-                    "integrated_table": fallback_df,
+                    "integrated_table": _reorder_columns_deterministic(fallback_df),
                     "stats": stats,
                     "table_paths": loaded_paths,
                     "fallback": True,
@@ -385,6 +434,7 @@ def integrate_tables(
     # Handle empty DataFrame with columns (valid result for intersection with no common rows)
     if isinstance(integrated_df, pd.DataFrame) and len(integrated_df) == 0 and len(integrated_df.columns) > 0:
         # This is a valid empty result (e.g., intersection with common columns but no common rows)
+        integrated_df = _reorder_columns_deterministic(integrated_df)
         stats = {
             "input_tables": len(tables),
             "input_rows": sum(len(df) for df in tables),
@@ -400,6 +450,7 @@ def integrate_tables(
         }
     
     # Calculate statistics
+    integrated_df = _reorder_columns_deterministic(integrated_df)
     stats = {
         "input_tables": len(tables),
         "input_rows": sum(len(df) for df in tables),

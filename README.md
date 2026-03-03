@@ -259,10 +259,7 @@ With the backend running (default `http://localhost:5002`), you can batch-run al
 # while running backend
 python -m src.demo.backend --port 5002
 # batch run preset queries
-python scripts/batch_run_preset_queries.py \
-  --backend_url http://localhost:5002 \
-  --preset_path config/preset_queries.json \
-  --run_integration
+python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 --preset_path config/preset_queries.json --run_integration 
 ```
 
 ## Key libraries & acknowledgments
