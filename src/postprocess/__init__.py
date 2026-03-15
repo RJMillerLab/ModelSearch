@@ -4,8 +4,6 @@ from .pipeline import (
     is_table_search_log,
     MODEL_SEARCH_LOG_KEYWORDS,
     TABLE_SEARCH_LOG_KEYWORDS,
-    csv_search_dirs,
-    find_csv_file,
     get_repo_root,
 )
 
@@ -14,7 +12,5 @@ __all__ = [
     "is_table_search_log",
     "MODEL_SEARCH_LOG_KEYWORDS",
     "TABLE_SEARCH_LOG_KEYWORDS",
-    "csv_search_dirs",
-    "find_csv_file",
     "get_repo_root",
 ]

@@ -15,6 +15,8 @@ import numpy as np
 import argparse
 import duckdb
 
+from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON
+
 # Add Blend_internal to path (now in src/)
 # Try src/Blend_internal first (if cloned into ModelSearchDemo)
 blend_path = os.path.join(os.path.dirname(__file__), '..', 'Blend_internal')
@@ -269,7 +271,7 @@ def search_single_column(
         _update_blend_config(db_path)
     else:
         # Use default path
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -299,7 +301,7 @@ def search_multi_column(
         _update_blend_config(db_path)
     else:
         # Use default path
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -329,7 +331,7 @@ def search_keyword(
         _update_blend_config(db_path)
     else:
         # Use default path
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -359,7 +361,7 @@ def search_unionable(
         _update_blend_config(db_path)
     else:
         # Use default path
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -393,7 +395,7 @@ def search_complex(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -444,7 +446,7 @@ def search_correlation(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -486,7 +488,7 @@ def search_imputation(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -541,7 +543,7 @@ def search_augmentation(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -596,7 +598,7 @@ def search_dependent_data(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -648,7 +650,7 @@ def search_feature_for_ml(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -700,7 +702,7 @@ def search_multi_column_collinearity(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -759,7 +761,7 @@ def search_negative_example(
     if db_path:
         _update_blend_config(db_path)
     else:
-        default_path = "data/modellake.db"
+        default_path = MODELLAKE_DB
         modelsearch_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         default_path_abs = os.path.abspath(os.path.join(modelsearch_root, default_path))
         _update_blend_config(default_path_abs)
@@ -912,26 +914,25 @@ To create modellake.db, use:
                             'For unionable: path to CSV file.')
     parser.add_argument('--k', type=int, default=10,
                        help='Number of results to return')
-    parser.add_argument('--db_path', default='data/modellake.db',
-                       help='Path to modellake.db for testing')
     parser.add_argument('--list_tables', action='store_true',
                        help='List all tables from modellake.db and exit')
     parser.add_argument('--test_table_id', type=int, default=None,
                        help='Test with a specific table ID from modellake.db')
-    parser.add_argument('--output', default='data/tab2tab_results.json',
-                       help='Output file to save results (JSON format)')
     
     args = parser.parse_args()
     start_time = time.time()
 
+    db_path = MODELLAKE_DB
+    output_path = TAB2TAB_OUTPUT_JSON
+
     # Update Blend_internal config with db_path BEFORE any imports
     # This must happen before _lazy_import_blend() is called
-    _update_blend_config(args.db_path)
-    print(f"✅ Updated Blend_internal config to use db_path: {args.db_path}")
+    _update_blend_config(db_path)
+    print(f"✅ Updated Blend_internal config to use db_path: {db_path}")
 
     # List tables if requested
     if args.list_tables:
-        tables = get_tables_from_modellake_db(db_path=args.db_path)
+        tables = get_tables_from_modellake_db(db_path=db_path)
         print(f"Found {len(tables)} tables in modellake.db:")
         for i, table in enumerate(tables[:50], 1):  # Show first 50
             print(f"  {i}. Table ID: {table['tableid']}, File: {table['filename']}, "
@@ -961,13 +962,13 @@ To create modellake.db, use:
         print(f"Testing with table ID {args.test_table_id} as keyword")
     
     # Perform search    
-    results = search_table2table(query, args.search_type, args.k, db_path=args.db_path)
+    results = search_table2table(query, args.search_type, args.k, db_path=db_path)
     print(f"Found {len(results)} tables:")
     for i, table_id in enumerate(results, 1):
         print(f"  {i}. Table ID: {table_id}")
     
     # Save results as JSON
-    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
     result_data = {
         "query": query if isinstance(query, list) else str(query),
         "search_type": args.search_type,
@@ -976,9 +977,9 @@ To create modellake.db, use:
         "num_results": len(results)
     }
     import json
-    with open(args.output, 'w', encoding='utf-8') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
-    print(f"✅ Results saved to {args.output}")
+    print(f"✅ Results saved to {output_path}")
     def _get_device():
         try:
             import torch

@@ -41,6 +41,7 @@ def _get_classification_module():
         spec.loader.exec_module(_classification_module)
     return _classification_module
 
+from src.config import MODELLAKE_DB, CLASSIFICATION_JSON, TAB2TAB_BY_TYPE_OUTPUT_JSON
 from src.search.classification import (
     classify_table,
     classify_table_from_db,
@@ -48,7 +49,7 @@ from src.search.classification import (
     get_tables_by_classification,
     infer_classification_method,
 )
-from src.postprocess.pipeline import find_csv_file
+from src.utils import resolve_table_path
 
 
 def _load_query_from_tableid(tableid: int, db_path: str, index_table: str = "modellake_index") -> Optional[pd.DataFrame]:
@@ -62,7 +63,7 @@ def _load_query_from_tableid(tableid: int, db_path: str, index_table: str = "mod
         ).fetchone()
         if not row:
             return None
-        csv_path = find_csv_file(row[0])
+        csv_path = resolve_table_path(row[0])
         if not csv_path or not os.path.exists(csv_path):
             return None
         return pd.read_csv(csv_path)
@@ -190,13 +191,13 @@ def search_table2table_by_type(
     # Step 2: Load classifications for all tables in datalake (inference: use precomputed JSON only)
     print(f"\n📊 Step 2: Loading table classifications...")
     if classification_json is None:
-        classification_json = "data/table_classifications.json"
+        classification_json = CLASSIFICATION_JSON
     if classifications is None:
         if not os.path.exists(classification_json):
             raise FileNotFoundError(
                 f"Classification file not found: {classification_json}\n"
                 "Run Part 1.4 (train / batch) first:\n"
-                "  python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json"
+                "  python -m src.search.classification --mode batch (defaults from src.config)"
             )
         print(f"   Loading from: {classification_json}")
         classifications = load_classifications(classification_json)
@@ -309,7 +310,7 @@ def search_table2table_by_type(
         if len(final_results) == 0 and has_string_list_query:
             print(f"   Fallback: search within {len(matching_set_int)} tables of type '{query_classification}' (from JSON), return all matches")
             final_results = _search_restricted_to_tables_by_header_terms(
-                db_path or "data/modellake.db",
+                db_path or MODELLAKE_DB,
                 search_query,
                 matching_set_int,
                 limit=None,
@@ -335,11 +336,9 @@ def main():
 This tool performs table-to-table search but filters results to only include
 tables with the same classification as the query table.
 
-First, classify all tables in your datalake:
-  python -m src.search.classification --mode batch --db_path data_citationlake/modellake.db --output_json data/table_classifications.json
-
-Then use this tool for search:
-  python -m src.search.tab2tab_by_type --query query.csv --classification_json data/table_classifications.json --search_type single_column --k 10
+First, classify all tables: python -m src.search.classification --mode batch
+Then run search: python -m src.search.tab2tab_by_type --query query.csv --search_type single_column --k 10
+Paths are read from src.config.
         """
     )
     parser.add_argument('--search_type', choices=[
@@ -352,17 +351,16 @@ Then use this tool for search:
                             'For multi_column/unionable: CSV file path. For keyword: comma-separated keywords.')
     parser.add_argument('--k', type=int, default=10,
                        help='Number of results to return')
-    parser.add_argument('--db_path', default='data_citationlake/modellake.db',
-                       help='Path to modellake.db')
-    parser.add_argument('--classification_json', default='data/table_classifications.json',
-                       help='Path to JSON file with pre-computed classifications')
-    parser.add_argument('--output', default='data/tab2tab_by_type_results.json',
-                       help='Output file to save results (JSON format)')
     parser.add_argument('--no_auto_classify', dest='auto_classify', action='store_false',
                        help='Disable automatic classification of query table')
+    parser.add_argument('--output_json', required=True,
+                       help='Output JSON path')
     
     args = parser.parse_args()
 
+    db_path = MODELLAKE_DB
+    classification_json = CLASSIFICATION_JSON
+    output_path = args.output_json
     start_time = time.time()
     # Parse query: table ID (from modellake) or path/values. Same source as rest: db -> filename -> resolve -> read.
     query = None
@@ -373,7 +371,7 @@ Then use this tool for search:
     if args.search_type == 'single_column':
         tid = _query_as_tableid(args.query)
         if tid is not None:
-            query = _load_query_from_tableid(tid, args.db_path)
+            query = _load_query_from_tableid(tid, db_path)
         if query is None:
             if os.path.exists(args.query):
                 query = pd.read_csv(args.query)
@@ -382,19 +380,19 @@ Then use this tool for search:
     elif args.search_type == 'multi_column':
         tid = _query_as_tableid(args.query)
         if tid is not None:
-            query = _load_query_from_tableid(tid, args.db_path)
+            query = _load_query_from_tableid(tid, db_path)
         if query is None:
             query = pd.read_csv(args.query)
     elif args.search_type == 'unionable':
         tid = _query_as_tableid(args.query)
         if tid is not None:
-            query = _load_query_from_tableid(tid, args.db_path)
+            query = _load_query_from_tableid(tid, db_path)
         if query is None:
             query = pd.read_csv(args.query)
     elif args.search_type == 'keyword':
         tid = _query_as_tableid(args.query)
         if tid is not None:
-            df = _load_query_from_tableid(tid, args.db_path)
+            df = _load_query_from_tableid(tid, db_path)
             if df is not None:
                 query = [str(col).lower().strip() for col in df.columns]
         if query is None:
@@ -406,7 +404,7 @@ Then use this tool for search:
     else:
         tid = _query_as_tableid(args.query)
         if tid is not None:
-            query = _load_query_from_tableid(tid, args.db_path)
+            query = _load_query_from_tableid(tid, db_path)
         if query is None:
             query = pd.read_csv(args.query)
     
@@ -415,8 +413,8 @@ Then use this tool for search:
         query=query,
         search_type=args.search_type,
         k=args.k,
-        db_path=args.db_path,
-        classification_json=args.classification_json,
+        db_path=db_path,
+        classification_json=classification_json,
         auto_classify=args.auto_classify
     )
     
@@ -425,7 +423,7 @@ Then use this tool for search:
         print(f"  {i}. Table ID: {table_id}")
     
     # Save results as JSON
-    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
     result_data = {
         "query": str(query) if not isinstance(query, (list, pd.DataFrame)) else "DataFrame or list",
         "search_type": args.search_type,
@@ -434,9 +432,9 @@ Then use this tool for search:
         "num_results": len(results)
     }
     import json
-    with open(args.output, 'w', encoding='utf-8') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
-    print(f"\n✅ Results saved to {args.output}")
+    print(f"\n✅ Results saved to {output_path}")
     def _get_device():
         try:
             import torch

@@ -26,13 +26,6 @@ def load_classifications(json_path: str) -> Dict[int, str]:
         data = json.load(f)
     return {int(k): v for k, v in data.items()}
 
-
-def find_csv_file(filename: str) -> Optional[str]:
-    """Resolve CSV path by basename (pipeline: data_citationlake, ModelTables, data/raw)."""
-    from .pipeline import find_csv_file as _pipeline_find_csv_file
-    return _pipeline_find_csv_file(filename)
-
-
 def load_relationship_parquet(parquet_path: str) -> pd.DataFrame:
     path = resolve_path(parquet_path)
     return pd.read_parquet(str(path))
@@ -51,15 +44,6 @@ def get_table_metadata(
         if not row:
             return None
         return {"tableid": row[0], "filename": row[1], "table_group": row[2], "table_type": row[3]}
-
-
-def load_table_csv(filename: str, max_rows: int = 50) -> Optional[pd.DataFrame]:
-    """Load CSV by filename (resolved via find_csv_file), up to max_rows."""
-    csv_path = find_csv_file(filename)
-    if not csv_path:
-        return None
-    return pd.read_csv(csv_path, nrows=max_rows)
-
 
 def table_to_markdown(df: pd.DataFrame, max_rows: int = 50) -> str:
     """Render DataFrame as markdown code block (first max_rows)."""

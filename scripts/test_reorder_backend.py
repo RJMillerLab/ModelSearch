@@ -1,11 +1,11 @@
 """
-Small helper script to run deterministic column-reordering tests.
+Small helper script to run backend column-reordering tests.
 
 Usage:
     python scripts/test_reorder_backend.py
 
-This test targets the single source of truth for column ordering:
-`src/integration/table_integration.py::_reorder_columns_deterministic`.
+It imports the test helper from `src/demo/backend.py` and executes it.
+If no assertion is raised, it prints a success message.
 """
 
 import os

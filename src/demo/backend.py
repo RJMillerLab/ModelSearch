@@ -43,19 +43,21 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 DEFAULT_EMB_NPZ = "data/card2card_embeddings.npz"
 DEFAULT_FAISS_INDEX = "data/card2card.faiss"
 DEFAULT_SPARSE_INDEX = "data/card2card_sparse_index"
-DEFAULT_DB_PATH = "data/modellake.db"
-# Card2Tab2Card needs this to map model_id -> tables (default from card2tab2card CLI)
-DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
+from src.config import (
+    MODELLAKE_DB as DEFAULT_DB_PATH,
+    RELATIONSHIP_PARQUET as DEFAULT_RELATIONSHIP_PARQUET,
+    CLASSIFICATION_JSON,
+    OUTPUT_DIR,
+)
 
 # All job outputs (search results, integration, evaluation, QA) live under data/jobs/<job_id>
-JOBS_DIR = os.path.join(REPO_ROOT, "data", "jobs")
+JOBS_DIR = os.path.join(REPO_ROOT, OUTPUT_DIR, "jobs")
 
 # Card2Tab2Card table search can be slow (Blend keyword/single_column over modellake.db; per-table search)
 CARD2TAB2CARD_TIMEOUT = int(os.environ.get("CARD2TAB2CARD_TIMEOUT", "600"))  # 10 min default
 
 # Table type classification (by_type): set via --use-by-type or env USE_BY_TYPE=1
 USE_BY_TYPE = False
-CLASSIFICATION_JSON = os.path.join(REPO_ROOT, "data", "table_classifications.json")
 
 
 def _generate_job_id() -> str:
@@ -493,9 +495,7 @@ def _run_pipeline_body(
             "--model_id", model_id,
             "--search_type", st,
             "--k", str(k_table),
-            "--modelcard_k", "0",  # 0 = no limit (was 50; comment: "50" to re-enable cap)
-            "--db_path", DEFAULT_DB_PATH,
-            "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
+            "--modelcard_k", "0",
             "--no_citationlake",
             "--output_json", out_path,
         ]
@@ -506,11 +506,10 @@ def _run_pipeline_body(
         return (st, rc, out_path, out, err, elapsed)
 
     def run_card2tab2card_by_type() -> tuple:
-        """Run card2tab2card with --mode by_type (table type classification). Uses CLASSIFICATION_JSON."""
+        """Run card2tab2card with --mode by_type (table type classification). Paths from src.config."""
         st = "by_type"
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
-        classification_path = CLASSIFICATION_JSON if os.path.isabs(CLASSIFICATION_JSON) else os.path.join(REPO_ROOT, CLASSIFICATION_JSON)
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         cmd = [
@@ -519,11 +518,8 @@ def _run_pipeline_body(
             "--mode", "by_type",
             "--search_type", "keyword",
             "--k", str(k_table),
-            "--modelcard_k", "0",  # 0 = no limit (was 50)
-            "--db_path", DEFAULT_DB_PATH,
-            "--relationship_parquet", DEFAULT_RELATIONSHIP_PARQUET,
+            "--modelcard_k", "0",
             "--no_citationlake",
-            "--classification_json", classification_path,
             "--output_json", out_path,
         ]
         t0 = time.time()
@@ -1425,8 +1421,6 @@ if __name__ == "__main__":
                         help="Run card2tab2card with table type classification (by_type mode)")
     parser.add_argument("--no-by-type", action="store_false", dest="use_by_type",
                         help="Do not run by_type (default)")
-    parser.add_argument("--classification-json", default=None,
-                        help="Path to table_classifications.json (for by_type). Default: data/table_classifications.json")
     parser.set_defaults(use_by_type=None)
     args, _ = parser.parse_known_args()
 
@@ -1434,13 +1428,9 @@ if __name__ == "__main__":
         USE_BY_TYPE = args.use_by_type
     else:
         USE_BY_TYPE = os.environ.get("USE_BY_TYPE", "").strip().lower() in ("1", "true", "yes")
-    if args.classification_json:
-        CLASSIFICATION_JSON = args.classification_json if os.path.isabs(args.classification_json) else os.path.join(REPO_ROOT, args.classification_json)
-    elif USE_BY_TYPE and os.environ.get("TABLE_CLASSIFICATIONS_JSON"):
-        CLASSIFICATION_JSON = os.path.join(REPO_ROOT, os.environ["TABLE_CLASSIFICATIONS_JSON"]) if not os.path.isabs(os.environ["TABLE_CLASSIFICATIONS_JSON"]) else os.environ["TABLE_CLASSIFICATIONS_JSON"]
 
     print("Backend (CLI-based) starting...", flush=True)
     if USE_BY_TYPE:
-        print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled, classification_json={CLASSIFICATION_JSON}", flush=True)
+        print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled", flush=True)
     port = args.port if args.port is not None else int(os.environ.get("PORT", "5002"))
     app.run(host="0.0.0.0", port=port, debug=False)

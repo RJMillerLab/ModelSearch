@@ -11,6 +11,7 @@ import json
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
+from src.config import TABLE_BASE_DIRS
 from src.integration.table_integration import integrate_tables, integrate_tables_from_search_results
 
 
@@ -20,12 +21,8 @@ def test_basic_integration():
     print("Test 1: Basic Union Integration")
     print("=" * 60)
     
-    # Find some sample tables
-    sample_dirs = [
-        "data_citationlake/processed/deduped_hugging_csvs",
-        "data_citationlake/processed/deduped_github_csvs",
-        "data_citationlake/processed/tables_output"
-    ]
+    # Find some sample tables (dirs from config)
+    sample_dirs = list(TABLE_BASE_DIRS)
     
     table_paths = []
     for dir_path in sample_dirs:
@@ -63,10 +60,10 @@ def test_intersection_integration():
     print("Test 2: Intersection Integration")
     print("=" * 60)
     
-    # Find sample tables
+    # Find sample tables (dirs from config)
     sample_dirs = [
-        "data_citationlake/processed/deduped_hugging_csvs",
-        "data_citationlake/processed/deduped_github_csvs",
+        TABLE_BASE_DIRS[0],
+        TABLE_BASE_DIRS[1],
     ]
     
     table_paths = []

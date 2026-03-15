@@ -35,13 +35,14 @@ fi
 echo "✅ Critical dependencies installed"
 echo ""
 
-# Check data directory
+# Check data directory (path matches src.config MODELTABLES_DATA default)
 echo "3. Checking data directory..."
-if [ ! -d "data_citationlake" ]; then
-    echo "⚠️  data_citationlake directory does not exist"
-    echo "   Some features may not be available"
+MODELTABLES_DATA_DIR="${MODELTABLES_DATA:-../ModelTables/data}"
+if [ ! -d "$MODELTABLES_DATA_DIR" ]; then
+    echo "⚠️  $MODELTABLES_DATA_DIR directory does not exist"
+    echo "   Some features may not be available (set MODELTABLES_DATA or DATA_ROOT if elsewhere)"
 else
-    echo "✅ data_citationlake directory exists"
+    echo "✅ $MODELTABLES_DATA_DIR directory exists"
 fi
 echo ""
 
@@ -87,7 +88,7 @@ else
     echo "To build index, run:"
     echo "  python -m src.search.card2card build-index \\"
     echo "    --field card \\"
-    echo "    --raw_dir data_citationlake/raw \\"
+    echo "    --raw_dir <raw_dir from src.config> \\"
     echo "    --output_jsonl data/card2card_corpus.jsonl \\"
     echo "    --output_npz data/card2card_embeddings.npz \\"
     echo "    --output_index data/card2card.faiss \\"

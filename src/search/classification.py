@@ -35,6 +35,9 @@ from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
 import argparse
 
+from src.config import MODELLAKE_DB, CLASSIFICATION_OUTPUT_JSON, INDEX_TABLE
+from src.utils import resolve_table_path
+
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
@@ -330,7 +333,7 @@ def classify_table_from_db(
         if not result:
             return None
         filename = result[0]
-        csv_path = _find_csv_file(filename)
+        csv_path = resolve_table_path(filename)
         if csv_path and os.path.exists(csv_path):
             return classify_table(csv_path)
         type_query = f"""
@@ -343,23 +346,6 @@ def classify_table_from_db(
         if type_result:
             return type_result[0]
         return TAB2KNOW_UNK_LABEL
-
-
-def _find_csv_file(filename: str) -> Optional[str]:
-    """Find CSV by basename: use utils.resolve_table_path, then data/raw, then path as-is."""
-    from src.utils.table_loader import resolve_table_path
-    basename = os.path.basename(filename)
-    p = resolve_table_path(basename)
-    if p:
-        return p
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-    data_raw = os.path.join(project_root, "data", "raw", basename)
-    if os.path.exists(data_raw):
-        return data_raw
-    if os.path.exists(filename):
-        return filename
-    return None
-
 
 def classify_datalake_batch(
     db_path: str,
@@ -409,7 +395,7 @@ def classify_datalake_batch(
         for i, (tableid, filename, table_type) in enumerate(results, 1):
             if i % 100 == 0:
                 print(f"   Progress: {i}/{total_tables} tables classified...")
-            csv_path = _find_csv_file(filename)
+            csv_path = resolve_table_path(filename)
             if not csv_path or not os.path.exists(csv_path):
                 msg = (
                     f"CSV not found for tableid={tableid}, filename={filename}. "
@@ -522,19 +508,13 @@ def get_tables_by_classification(
 
 def main():
     """CLI entry point for table classification"""
-    parser = argparse.ArgumentParser(description="Table Classification")
+    parser = argparse.ArgumentParser(description="Table Classification")    
     parser.add_argument('--mode', choices=['single', 'batch'], required=True,
                        help='Classification mode: single table or batch datalake')
     parser.add_argument('--table', default=None,
                        help='Path to CSV file (for single mode)')
     parser.add_argument('--tableid', type=int, default=None,
                        help='Table ID from database (for single mode with database)')
-    parser.add_argument('--db_path', default='data_citationlake/modellake.db',
-                       help='Path to modellake.db. Use the same path as create_index_duckdb (e.g. data/modellake.db).')
-    parser.add_argument('--index_table', default='modellake_index',
-                       help='Name of the index table')
-    parser.add_argument('--output_json', default='data/table_classifications.json',
-                       help='Output JSON file for classification results')
     parser.add_argument('--limit', type=int, default=None,
                        help='Limit number of tables to classify (batch mode only)')
     parser.add_argument('--method', choices=['tab2know', 'heuristic', 'ml'], default='tab2know',
@@ -551,8 +531,8 @@ def main():
             # Classify from database tableid
             classification = classify_table_from_db(
                 args.tableid,
-                args.db_path,
-                args.index_table
+                MODELLAKE_DB,
+                INDEX_TABLE
             )
             if classification:
                 print(f"\n✅ Table ID {args.tableid} classification: {classification}")
@@ -564,9 +544,9 @@ def main():
     elif args.mode == 'batch':
         # Batch classify all tables in datalake
         classifications = classify_datalake_batch(
-            db_path=args.db_path,
-            index_table=args.index_table,
-            output_json=args.output_json,
+            db_path=MODELLAKE_DB,
+            index_table=INDEX_TABLE,
+            output_json=CLASSIFICATION_OUTPUT_JSON,
             limit=args.limit,
             method=args.method
         )

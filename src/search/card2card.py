@@ -24,6 +24,7 @@ from src.baseline1.table_retrieval_pipeline import (
 )
 
 from src.utils import load_combined_data as citationlake_load_combined_data
+from src.config import RAW_DIR
 
 
 def _get_device() -> str:
@@ -125,17 +126,9 @@ def build_card_index(
         # For "card" field, use load_combined_data if available and raw_dir points to data_citationlake
         if field == "card" and "data_citationlake" in raw_dir and USE_CITATIONLAKE_UTILS and citationlake_load_combined_data:
             print(f"Using load_combined_data to load card field from {raw_dir}")
-            build_jsonl_from_citationlake_raw(raw_dir, field, output_jsonl)
+            build_jsonl_from_citationlake_raw(RAW_DIR, field, output_jsonl)
         else:
-            # Check if raw_dir exists, if not try alternative
-            if not os.path.exists(raw_dir):
-                if raw_dir == "data_citationlake/raw" and os.path.exists("data/raw"):
-                    print(f"Warning: {raw_dir} not found, using data/raw instead")
-                    raw_dir = "data/raw"
-                elif raw_dir == "data/raw" and os.path.exists("data_citationlake/raw"):
-                    print(f"Warning: {raw_dir} not found, using data_citationlake/raw instead")
-                    raw_dir = "data_citationlake/raw"
-            build_jsonl_from_raw(raw_dir, field, output_jsonl)
+            build_jsonl_from_raw(RAW_DIR, field, output_jsonl)
     
     # Encode corpus
     encode_corpus(output_jsonl, model_name, batch_size, output_npz, device)

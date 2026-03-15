@@ -9,7 +9,6 @@ Description: Compare two baselines for a given modelId (model card):
 Usage:
   python -m src.modelsearch.compare_baselines \
     --model_id Salesforce/codet5-base \
-    --relationship_parquet data/processed/modelcard_step3_dedup.parquet \
     --starmie_json results/table_search.json \
     --dense_neighbors output/modelsearch_neighbors.json \
     --output_md output/compare.md
@@ -24,165 +23,7 @@ import duckdb
 import pandas as pd
 import numpy as np
 
-
-def _flatten_cell(value: Any) -> List[Any]:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return []
-    if isinstance(value, list):
-        out: List[Any] = []
-        for v in value:
-            if isinstance(v, (list, np.ndarray)):
-                out.extend(_flatten_cell(v))
-            else:
-                out.append(v)
-        return out
-    if isinstance(value, np.ndarray):
-        return _flatten_cell(value.tolist())
-    return [value]
-
-
-def get_modelids_for_basenames_duckdb(parquet_path: str, basenames: List[str]) -> Dict[str, List[str]]:
-    """
-    Fast: use DuckDB SQL to get (basename -> modelIds) without loading full parquet.
-    Single SQL scan; returns subset for requested basenames only.
-    """
-    if not basenames or not os.path.exists(parquet_path):
-        return {b: [] for b in basenames}
-    path_abs = os.path.abspath(parquet_path).replace("\\", "/")
-    conn = duckdb.connect(":memory:")
-    cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
-    list_cols = [
-        c[0] for c in cols
-        if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
-    ][:4]
-    if not list_cols:
-        conn.close()
-        return {b: [] for b in basenames}
-    basenames_sql = ",".join(repr(b) for b in basenames)
-    union_parts = []
-    for c in list_cols:
-        union_parts.append(
-            f"SELECT modelId, unnest(COALESCE(\"{c}\", list_value())) as path "
-            f"FROM read_parquet('{path_abs}')"
-        )
-    query = f"""
-    WITH exploded AS (
-        {" UNION ALL ".join(union_parts)}
-    ),
-    with_basename AS (
-        SELECT modelId, COALESCE(regexp_extract(CAST(path AS VARCHAR), '([^/\\\\]+)$', 1), CAST(path AS VARCHAR)) as basename
-        FROM exploded WHERE path IS NOT NULL AND trim(CAST(path AS VARCHAR)) != ''
-    )
-    SELECT basename, modelId FROM with_basename
-    WHERE basename IN ({basenames_sql})
-    """
-    df = conn.execute(query).fetchdf()
-    conn.close()
-    out: Dict[str, List[str]] = {b: [] for b in basenames}
-    for _, row in df.iterrows():
-        bn = str(row["basename"]).strip()
-        mid = str(row["modelId"]).strip()
-        if bn and mid and bn in out:
-            out[bn].append(mid)
-    for b in out:
-        out[b] = list(dict.fromkeys(out[b]))
-    return out
-
-
-def get_tables_for_model_duckdb(parquet_path: str, model_id: str) -> List[str]:
-    """
-    Fast: use DuckDB SQL to get tables for one model without loading full parquet.
-    """
-    result = _get_tables_for_models_duckdb_internal(parquet_path, [model_id])
-    return result.get(model_id, [])
-
-
-def _get_tables_for_models_duckdb_internal(parquet_path: str, model_ids: List[str]) -> Dict[str, List[str]]:
-    """Internal: DuckDB batch query model_ids -> tables. Used by get_tables_for_model_duckdb and table_integration."""
-    if not model_ids or not os.path.exists(parquet_path):
-        return {m: [] for m in model_ids}
-    path_abs = os.path.abspath(parquet_path).replace("\\", "/")
-    conn = duckdb.connect(":memory:")
-    ids_sql = ",".join(repr(m) for m in model_ids)
-    cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
-    list_cols = [
-        c[0] for c in cols
-        if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
-    ][:4]
-    if not list_cols:
-        conn.close()
-        return {m: [] for m in model_ids}
-    select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
-    # try:
-    full_df = conn.execute(f"""
-        SELECT {select_cols} FROM read_parquet(?)
-        WHERE modelId IN ({ids_sql})
-    """, [path_abs]).fetchdf()
-    # except Exception:
-    #     full_df = conn.execute(f"""
-    #         SELECT {select_cols} FROM read_parquet('{path_abs}')
-    #         WHERE modelId IN ({ids_sql})
-    #     """).fetchdf()
-    conn.close()
-    model_to_tables: Dict[str, List[str]] = {m: [] for m in model_ids}
-    for _, row in full_df.iterrows():
-        mid = str(row["modelId"])
-        for col in list_cols:
-            vals = _flatten_cell(row.get(col))
-            for v in vals:
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s:
-                    base = os.path.basename(s)
-                    if base and base not in model_to_tables.get(mid, []):
-                        model_to_tables.setdefault(mid, []).append(base)
-    return model_to_tables
-
-
-def _read_relationships(parquet_path: str) -> pd.DataFrame:
-    if not os.path.exists(parquet_path):
-        raise FileNotFoundError(f"Relationship parquet not found: {parquet_path}")
-    # Load minimally needed columns; try a few options
-    df = pd.read_parquet(parquet_path)
-    cols = df.columns.tolist()
-    if "modelId" not in cols:
-        raise ValueError("relationship_parquet must contain column 'modelId'")
-
-    # Collect all potential CSV/list columns: prefer known keys, else any containing 'csv' or 'table_list'
-    preferred = [
-        "hugging_table_list_dedup",
-        "github_table_list_dedup",
-        "html_table_list_mapped_dedup",
-        "llm_table_list_mapped_dedup",
-        "hugging_table_list",
-        "github_table_list",
-        "html_table_list_mapped",
-        "llm_table_list_mapped",
-        "csvs",
-        "csv_paths",
-        "csv_path",
-    ]
-    list_cols = [c for c in preferred if c in cols]
-    if not list_cols:
-        list_cols = [c for c in cols if ("csv" in c.lower() or "table_list" in c.lower()) and c != "modelId"]
-    if not list_cols:
-        raise ValueError("No CSV/list-like columns found in relationship parquet.")
-
-    # Build long form: modelId, csv_basename (explode and normalize)
-    records: List[Tuple[str, str]] = []
-    for _, row in df.iterrows():
-        mid = row["modelId"]
-        for c in list_cols:
-            vals = _flatten_cell(row.get(c))
-            for v in vals:
-                vstr = str(v)
-                base = os.path.basename(vstr)
-                if base:
-                    records.append((mid, base))
-    rel = pd.DataFrame(records, columns=["modelId", "csv_basename"]).drop_duplicates()
-    return rel
-
+from src.utils import load_modelid_to_csvlist, load_csvs_to_modelids, _load_modelid_to_csv_expand
 
 def _read_starmie_results(path: str) -> Dict[str, List[str]]:
     if not os.path.exists(path):
@@ -228,28 +69,20 @@ def _link(model_id: str) -> str:
     return f"https://huggingface.co/{model_id}"
 
 
-def compare(model_id: str,
-            relationship_parquet: str,
-            starmie_json: str,
-            dense_neighbors: str) -> Tuple[List[str], List[str], List[str]]:
-    rel = _read_relationships(relationship_parquet)
+def compare(model_id: str, starmie_json: str, dense_neighbors: str) -> Tuple[List[str], List[str], List[str]]:
+    rel = _load_modelid_to_csv_expand()
     starmie = _read_starmie_results(starmie_json)
     dense = _read_dense_neighbors(dense_neighbors)
-
     # CSVs of the query model
-    q_csvs = rel.loc[rel["modelId"] == model_id, "csv_basename"].dropna().unique().tolist()
-
+    q_csvs = load_modelid_to_csvlist(model_id)
     # Retrieved CSVs via table search across all query CSVs
     retrieved_csvs: Set[str] = set()
     for q in q_csvs:
         retrieved_csvs.update(starmie.get(q, []))
-
     # Map retrieved CSVs -> modelIds using relationship parquet (smart membership over exploded list columns)
-    derived_modelids = rel.loc[rel["csv_basename"].isin(list(retrieved_csvs)), "modelId"].dropna().unique().tolist()
-
+    derived_modelids = load_csvs_to_modelids(list(retrieved_csvs))
     # Dense neighbors for the modelId
     dense_cands = dense.get(model_id, [])
-
     # Keep top-N reasonable length for display
     dense_top = dense_cands[:50]
     derived_top = derived_modelids[:50]
@@ -257,11 +90,7 @@ def compare(model_id: str,
     return dense_top, derived_top, inter
 
 
-def write_markdown(model_id: str,
-                   dense_top: List[str],
-                   derived_top: List[str],
-                   inter: List[str],
-                   out_path: str) -> None:
+def write_markdown(model_id: str, dense_top: List[str], derived_top: List[str], inter: List[str], out_path: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(f"# Baseline Comparison for {model_id}\n\n")
@@ -290,21 +119,16 @@ def write_markdown(model_id: str,
 def main():
     parser = argparse.ArgumentParser(description="Compare dense vs table-search baselines for a modelId")
     parser.add_argument("--model_id", required=True)
-    parser.add_argument("--relationship_parquet", required=True,
-                        help="Parquet mapping modelId to csvs (expects columns: modelId and csv_path or csvs)")
     # Support alternative flag names used in docs: --table_search_result, --modelsearch_base_result
-    parser.add_argument("--starmie_json", required=False,
-                        help="JSON with precomputed table search results")
-    parser.add_argument("--table_search_result", required=False,
-                        help="Alias for --starmie_json")
-    parser.add_argument("--dense_neighbors", required=False, default=None,
-                        help="JSON mapping modelId to neighbor modelIds (dense baseline)")
-    parser.add_argument("--modelsearch_base_result", required=False,
-                        help="Alias for --dense_neighbors")
-    parser.add_argument("--output_md", required=True,
-                        help="Output Markdown path for comparison")
+    parser.add_argument("--starmie_json", required=False, help="JSON with precomputed table search results")
+    parser.add_argument("--table_search_result", required=False, help="Alias for --starmie_json")
+    parser.add_argument("--dense_neighbors", required=False, default=None, help="JSON mapping modelId to neighbor modelIds (dense baseline)")
+    parser.add_argument("--modelsearch_base_result", required=False, help="Alias for --dense_neighbors")
+    parser.add_argument("--output_md", required=True, help="Output Markdown path for comparison")
 
     args = parser.parse_args()
+
+    # TODO: update logic here
 
     # Resolve aliases and defaults
     starmie_path = args.starmie_json or args.table_search_result
@@ -312,12 +136,7 @@ def main():
         raise ValueError("Please provide --starmie_json or --table_search_result")
     dense_path = args.dense_neighbors or args.modelsearch_base_result or "output/modelsearch/modelsearch_neighbors.json"
 
-    dense_top, derived_top, inter = compare(
-        model_id=args.model_id,
-        relationship_parquet=args.relationship_parquet,
-        starmie_json=starmie_path,
-        dense_neighbors=dense_path,
-    )
+    dense_top, derived_top, inter = compare(model_id=args.model_id, starmie_json=starmie_path, dense_neighbors=dense_path)
     write_markdown(args.model_id, dense_top, derived_top, inter, args.output_md)
     print(f"✅ Wrote comparison to {args.output_md}")
 

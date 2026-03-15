@@ -21,15 +21,16 @@ from typing import List, Dict, Optional, Any
 
 import pandas as pd
 
+from src.config import MODELLAKE_DB, CLASSIFICATION_JSON
 from .pipeline import is_model_search_log
 from .table_md_common import (
     resolve_path,
     load_classifications,
-    find_csv_file,
     get_table_metadata,
     load_table_csv,
     table_to_markdown,
 )
+from src.utils import resolve_table_path
 
 
 def _run_integration_and_save(
@@ -57,7 +58,7 @@ def _run_integration_and_save(
     if retrieved:
         paths = []
         for fname in retrieved[:integration_k]:
-            full = find_csv_file(fname)
+            full = resolve_table_path(fname)
             if full:
                 paths.append(full)
         if paths:
@@ -71,7 +72,7 @@ def _run_integration_and_save(
             meta = get_table_metadata(tid, db_abs)
             if not meta:
                 continue
-            full = find_csv_file(meta["filename"])
+            full = resolve_table_path(meta["filename"])
             if full:
                 paths.append(full)
         if not paths:
@@ -194,9 +195,9 @@ def extract_model_ids_from_results(data: Dict[str, Any]) -> List[str]:
 
 def generate_markdown_from_log(
     log_path: str,
+    db_path: str = MODELLAKE_DB,
+    classification_json: str = CLASSIFICATION_JSON,
     output_dir: str = "md",
-    db_path: str = "data/modellake.db",
-    classification_json: Optional[str] = "data/table_classifications.json",
     max_rows: int = 50,
 ) -> Optional[str]:
     log_name = Path(log_path).stem
@@ -276,7 +277,7 @@ def generate_markdown_from_log(
             if not meta:
                 lines.append("⚠️  **Table not found in database**\n")
                 continue
-            full_csv_path = find_csv_file(meta["filename"])
+            full_csv_path = resolve_table_path(meta["filename"])
             lines.append(f"- **Filename:** `{meta['filename']}`")
             if full_csv_path:
                 lines.append(f"- **Full path:** `{os.path.abspath(full_csv_path)}`")
@@ -331,8 +332,6 @@ def main():
     ap = argparse.ArgumentParser(description="Generate markdown from log files")
     ap.add_argument("--logs_dir", default="logs")
     ap.add_argument("--output_dir", default="md")
-    ap.add_argument("--db_path", default="data/modellake.db")
-    ap.add_argument("--classification_json", default="data/table_classifications.json")
     ap.add_argument("--max_rows", type=int, default=50)
     ap.add_argument("--log_file", default=None, help="Single log file (else process all in logs_dir)")
     args = ap.parse_args()
@@ -359,8 +358,8 @@ def main():
         out = generate_markdown_from_log(
             str(log_file),
             output_dir=args.output_dir,
-            db_path=args.db_path,
-            classification_json=args.classification_json if resolve_path(args.classification_json).exists() else None,
+            db_path=MODELLAKE_DB,
+            classification_json=CLASSIFICATION_JSON,
             max_rows=args.max_rows,
         )
         if out:

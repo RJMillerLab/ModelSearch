@@ -229,11 +229,9 @@ if __name__ == "__main__":
     # Example: Create a simple benchmark
     print("Creating sample benchmark...")
     
-    # Find some sample tables
-    sample_dirs = [
-        "data_citationlake/processed/deduped_hugging_csvs",
-        "data_citationlake/processed/deduped_github_csvs",
-    ]
+    # Find some sample tables (from config)
+    from src.config import DEDUPED_HUGGING_CSVS, DEDUPED_GITHUB_CSVS
+    sample_dirs = [DEDUPED_HUGGING_CSVS, DEDUPED_GITHUB_CSVS]
     
     sample_tables = []
     for dir_path in sample_dirs:

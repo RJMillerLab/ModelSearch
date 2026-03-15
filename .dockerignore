@@ -14,6 +14,5 @@ data/card2card_embeddings.npz
 data/card2card.faiss
 data/card2card_sparse_index
 data/modellake.db
-data_citationlake
 *.log
 .DS_Store

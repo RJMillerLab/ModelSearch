@@ -1,29 +1,31 @@
 """
-Single entry point for loading a table: from modellake.db (by tableid) or from CSV path.
-Try DB first when db_path + tableid are given; else resolve path and read CSV.
+Deprecated Scripts
 """
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from collections import defaultdict
 import duckdb
 import pandas as pd
 
-# Base dirs for CSV lookup (same as table_integration)
-TABLE_BASE_DIRS = [
-    "data_citationlake/processed/deduped_hugging_csvs",
-    "data_citationlake/processed/deduped_github_csvs",
-    "data_citationlake/processed/tables_output",
-]
+from src.config import TABLE_BASE_DIRS
 
 _CACHED_BASENAME_TO_PATH: Optional[Dict[str, str]] = None
 
 
-def _build_basename_index() -> Dict[str, str]:
+def _build_basename_index(table_base_dirs: List[str]) -> Dict[str, str]:
+    """
+    deprecated, used for building a cache of basename to path from local directories
+
+    Usage:
+    idx = _build_basename_index(dirs)
+    if base in idx:
+        return idx[base]
+    """
     global _CACHED_BASENAME_TO_PATH
     if _CACHED_BASENAME_TO_PATH is not None:
         return _CACHED_BASENAME_TO_PATH
     index: Dict[str, str] = {}
-    for base in TABLE_BASE_DIRS:
+    for base in table_base_dirs:
         abs_base = os.path.abspath(base)
         if not os.path.isdir(abs_base):
             continue
@@ -37,22 +39,7 @@ def _build_basename_index() -> Dict[str, str]:
     _CACHED_BASENAME_TO_PATH = index
     return index
 
-
-def resolve_table_path(basename: str) -> Optional[str]:
-    """Resolve CSV basename to full path. Used by integration when only filename is known."""
-    base = os.path.basename(basename)
-    idx = _build_basename_index()
-    if base in idx:
-        return idx[base]
-    for base_dir in TABLE_BASE_DIRS:
-        p = os.path.join(base_dir, base)
-        if os.path.exists(p):
-            return os.path.abspath(p)
-    return None
-
-
-def load_table_from_db(
-    db_path: str,
+def _load_table_from_db(
     tableid: int,
     index_table: str = "modellake_index",
 ) -> Optional[pd.DataFrame]:
@@ -60,7 +47,11 @@ def load_table_from_db(
     Load table content from modellake.db by tableid (no CSV).
     modellake_index: (tableid, rowid, colid, tokenized). rowid=-1 = header.
     Returns None if DB missing or schema not supported.
+
+    Deprecated, because column type can not be preserved.
     """
+    from src.config import MODELLAKE_DB
+    db_path = MODELLAKE_DB
     if not db_path or not os.path.isfile(db_path):
         return None
     con = duckdb.connect(db_path, read_only=True)
@@ -94,35 +85,3 @@ def load_table_from_db(
     row_ids = sorted(row_data.keys())
     data = [[row_data[rid].get(cid) for cid in [h[0] for h in headers]] for rid in row_ids]
     return pd.DataFrame(data, columns=col_names_list)
-
-
-def load_table(
-    path_or_basename: str,
-    db_path: Optional[str] = None,
-    tableid: Optional[int] = None,
-) -> Optional[pd.DataFrame]:
-    """
-    Load one table: try DB first (if db_path + tableid), else resolve path and read CSV.
-    Call this everywhere you need table content (integration, etc.).
-    """
-    if db_path and tableid is not None:
-        df = load_table_from_db(db_path, int(tableid))
-        if df is not None:
-            return df
-    basename = os.path.basename(path_or_basename)
-    resolved = resolve_table_path(basename)
-    if resolved and os.path.exists(resolved):
-        return pd.read_csv(resolved)
-    if os.path.exists(path_or_basename):
-        return pd.read_csv(path_or_basename)
-    # resolve_table_path already checked TABLE_BASE_DIRS; try ModelTables sibling dirs once
-    for base_dir in [
-        "../ModelTables/data/processed/deduped_hugging_csvs",
-        "../ModelTables/data/processed/deduped_github_csvs",
-        "../ModelTables/data/processed/tables_output",
-    ]:
-        p = os.path.abspath(os.path.join(os.getcwd(), base_dir, basename))
-        if os.path.exists(p):
-            return pd.read_csv(p)
-    print(f"⚠️  Table not found: {path_or_basename} (basename: {basename})")
-    return None

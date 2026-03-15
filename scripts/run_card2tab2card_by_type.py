@@ -11,16 +11,7 @@ Flow:
   6. Write JSON in the same shape as card2tab2card (so demo can load it as by_type).
 
 Usage:
-  python scripts/run_card2tab2card_by_type.py \
-    --model_id tdro-llm/s2-tdro-Qwen1.5-1.8B-top70 \
-    --search_type keyword \
-    --k 5 \
-    --db_path data/modellake.db \
-    --relationship_parquet data_citationlake/processed/modelcard_step3_dedup.parquet \
-    --classification_json data/table_classifications.json \
-    --output_json data/jobs/xxx/card2tab2card_by_type.json
-
-Safe to revert: this script is additive; existing card2tab2card and tab2tab_by_type are unchanged.
+  python scripts/run_card2tab2card_by_type.py --model_id <model_id> [--search_type keyword] [--k 5]
 """
 from __future__ import annotations
 
@@ -42,16 +33,12 @@ _REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from src.modelsearch.compare_baselines import (
-    get_modelids_for_basenames_duckdb,
-    get_tables_for_model_duckdb,
-)
+from src.config import CLASSIFICATION_JSON, CARD2TAB2CARD_BY_TYPE_STANDALONE_JSON
+from src.utils import load_csvs_to_modelids, load_modelid_to_csvlist, resolve_table_path
 from src.search.tab2tab_by_type import search_table2table_by_type
-from src.utils.table_loader import resolve_table_path
 
 # ----- Helpers (no import from card2tab2card) -----
 
-DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
 GENERIC_TABLE_PATTERNS = ["1910.09700_table", "204823751_table"]
 
 
@@ -80,14 +67,6 @@ def _filter_s2orc_tables(tables: List[str]) -> List[str]:
         print(f"   Filtered out {len(tables) - len(out)} s2orc/llm tables (remain: {len(out)})")
     return out
 
-
-def _resolve_csv_path(table_path: str) -> Optional[str]:
-    p = str(table_path)
-    if os.path.exists(p):
-        return p
-    return resolve_table_path(os.path.basename(p))
-
-
 def _get_csv_headers(csv_path: str) -> List[str]:
     df = pd.read_csv(csv_path, nrows=0)
     return [str(c).lower().strip() for c in df.columns if str(c).strip()]
@@ -107,49 +86,31 @@ def main() -> int:
         description="Card2Tab2Card by type (standalone): query model tables → classify → search same-type only → model cards",
     )
     parser.add_argument("--model_id", required=True, help="Hugging Face model ID (seed model)")
-    parser.add_argument("--relationship_parquet", default=DEFAULT_RELATIONSHIP_PARQUET, help="Model–table relationship parquet")
-    parser.add_argument("--db_path", default="data/modellake.db", help="modellake.db path")
-    parser.add_argument("--classification_json", default="data/table_classifications.json", help="Precomputed table classifications JSON")
     parser.add_argument("--search_type", choices=["keyword", "single_column", "multi_column", "unionable"], default="keyword")
     parser.add_argument("--k", type=int, default=5, help="Table search top-k per query table (then merge)")
     parser.add_argument("--modelcard_k", type=int, default=0, help="Max model cards to return (0 = no limit)")
     parser.add_argument("--max_query_tables", type=int, default=20, help="Max number of query tables to search (default 20)")
     parser.add_argument("--workers", type=int, default=1, help="Parallel workers for per-table search (1 = sequential, safe default)")
-    parser.add_argument("--output_json", default="data/card2tab2card_by_type_standalone.json", help="Output JSON path")
-    parser.add_argument("--no_citationlake", action="store_true", help="Ignored; kept for CLI compatibility")
     args = parser.parse_args()
 
     model_id = args.model_id
-    relationship_parquet = args.relationship_parquet
-    db_path = args.db_path
-    classification_json = args.classification_json
+    output_json = CARD2TAB2CARD_BY_TYPE_STANDALONE_JSON
     search_type = args.search_type
     table_search_k = args.k
     modelcard_k = args.modelcard_k
     max_query_tables = args.max_query_tables
     workers = max(1, args.workers)
-    output_json = args.output_json
-
-    if not os.path.exists(relationship_parquet):
-        print(f"Error: relationship_parquet not found: {relationship_parquet}", file=sys.stderr)
-        return 1
-    if not os.path.exists(db_path):
-        print(f"Error: db_path not found: {db_path}", file=sys.stderr)
-        return 1
-    if not os.path.exists(classification_json):
-        print(f"Error: classification_json not found: {classification_json}", file=sys.stderr)
-        return 1
 
     print(f"\n{'='*60}")
     print("Card2Tab2Card by type (standalone)")
     print(f"{'='*60}")
     print(f"  model_id={model_id}")
     print(f"  search_type={search_type}  table_search_k={table_search_k}  modelcard_k={modelcard_k}")
-    print(f"  classification_json={classification_json}")
+    print(f"  classification_json={CLASSIFICATION_JSON}")
     print(f"{'='*60}\n")
 
     # Step 1: Query model → tables
-    query_tables_raw = get_tables_for_model_duckdb(relationship_parquet, model_id)
+    query_tables_raw = load_modelid_to_csvlist(model_id)
     query_tables = _filter_s2orc_tables(query_tables_raw)
     query_tables = [t for t in query_tables if not _is_generic_table(t)]
     query_tables = query_tables[:max_query_tables]
@@ -172,7 +133,7 @@ def main() -> int:
     k_request = max(table_search_k + 4, table_search_k * 2)
 
     def search_one(ti: int, table_path: str) -> Optional[Tuple[List[int], str]]:
-        csv_path = _resolve_csv_path(table_path)
+        csv_path = resolve_table_path(table_path)
         if not csv_path:
             return None
         tquery = _get_table_query(csv_path, table_path, search_type)
@@ -183,8 +144,8 @@ def main() -> int:
             tquery,
             search_type,
             k_request,
-            db_path=db_path,
-            classification_json=classification_json,
+            db_path=MODELLAKE_DB,
+            classification_json=CLASSIFICATION_JSON,
         )
         elapsed = time.time() - t0
         bn = os.path.basename(str(table_path))
@@ -291,7 +252,7 @@ def main() -> int:
     # Step 3: Tables → model cards
     print(f"\nStep 3: Map {len(retrieved_filenames)} tables to model cards")
     table_basenames = [os.path.basename(f) for f in retrieved_filenames]
-    basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
+    basename_to_models = load_csvs_to_modelids(table_basenames)
     similar_model_ids = set()
     table_to_models: Dict[str, List[str]] = {}
     for filename in retrieved_filenames:

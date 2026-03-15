@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Detect storage usage for all ModelSearch data paths (see bak/DATA_AND_STORAGE.md).
-# Run from repo root, or pass root as first arg. Output can be pasted for review.
-# Usage: ./scripts/detect_data_storage.sh [REPO_ROOT]
+# Paths are read from src.config via scripts/get_config_paths.py --report.
+# Run from repo root, or pass root as first arg.
+#
+# Usage:
+#   ./scripts/detect_data_storage.sh
+#   ./scripts/detect_data_storage.sh [REPO_ROOT]
 
 set -e
 REPO_ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -12,22 +16,9 @@ echo "REPO_ROOT=$REPO_ROOT"
 echo "Date: $(date -Iseconds 2>/dev/null || date)"
 echo ""
 
-# Paths from bak/DATA_AND_STORAGE.md (minimum required + optional)
-PATHS=(
-  "data/card2card_embeddings.npz"
-  "data/card2card.faiss"
-  "data/modellake.db"
-  "data_citationlake/processed/modelcard_step3_dedup.parquet"
-  "data/valid_model_ids_with_tables.txt"
-  "data/card2card_sparse_index"
-  "data_citationlake/processed/deduped_hugging_csvs"
-  "data_citationlake/processed/deduped_github_csvs"
-  "data_citationlake/processed/tables_output"
-  "data/table_classifications.json"
-  "config/demo_template/search_results.json"
-  "fig"
-  "data/jobs"
-)
+# Paths from src.config (scripts/get_config_paths.py --report)
+PATHS=()
+while IFS= read -r p; do PATHS+=("$p"); done < <(cd "$REPO_ROOT" && python scripts/get_config_paths.py --report)
 
 printf "%-55s %-8s %s\n" "PATH" "EXISTS" "SIZE"
 printf "%-55s %-8s %s\n" "----" "-----" "----"

@@ -23,8 +23,7 @@ from src.search.card2card import (
 )
 from src.search.query2modelcard import search_query2modelcard
 from src.search.card2tab2card import (
-    load_relationship_parquet,
-    get_tables_for_model,
+    load_modelid_to_csvlist,
     search_card2tab2card,
     search_card2tab2card_from_tables,
     search_card2tab2card_by_type,
@@ -76,7 +75,6 @@ __all__ = [
     # query2modelcard
     'search_query2modelcard',
     # card2tab2card
-    'load_relationship_parquet',
     'get_tables_for_model',
     'search_card2tab2card',
     'search_card2tab2card_from_tables',

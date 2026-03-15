@@ -23,9 +23,9 @@ FILES=(
 
 # Optional files (if exist)
 OPTIONAL_FILES=(
-    "data_citationlake/modellake.db"
-    "data_citationlake/processed/modelcard_step3_dedup.parquet"
-    "data_citationlake/logs/parquet_schema.log"
+    "../ModelTables/data/modellake.db"
+    "../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet"
+    "../ModelTables/logs/parquet_schema.log"
 )
 
 echo "📥 Fetching required files..."

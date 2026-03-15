@@ -1,5 +1,7 @@
 # Python API Usage
 
+Data paths (raw dir, processed dirs, modellake.db, relationship parquet) are centralized in `src.config`; use `from src.config import RAW_DIR, MODELLAKE_DB, RELATIONSHIP_PARQUET` etc. in your code.
+
 All search functions can be imported and used programmatically:
 
 ```python
@@ -19,7 +21,7 @@ from src.search import (
 ```python
 build_card_index(
     field="card",
-    raw_dir="data_citationlake/raw",  # or "data/raw" for local data
+    raw_dir="...",  # use src.config.RAW_DIR (default ../ModelTables/data/raw)
     output_index="data/card2card.faiss"
 )
 ```
@@ -29,7 +31,7 @@ build_card_index(
 ```python
 build_card_index(
     field="card_readme",
-    parquet="data_citationlake/processed/modelcard_step1.parquet",
+    parquet="...",  # or src.config.RELATIONSHIP_PARQUET for model–table parquet
     output_index="data/card2card.faiss"
 )
 ```
@@ -69,7 +71,7 @@ table_ids = search_table2table(
 ```python
 similar_models = search_card2tab2card(
     model_id="Salesforce/codet5-base",
-    schema_log_path="data_citationlake/logs/parquet_schema.log",
+    schema_log_path="../ModelTables/logs/parquet_schema.log",
     query=["keyword1", "keyword2"],
     search_type="keyword",
     k=10

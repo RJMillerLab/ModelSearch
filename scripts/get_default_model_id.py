@@ -5,8 +5,8 @@ Script to get the model ID from the default CSV using duckdb to read parquet
 import sys
 import os
 
-default_csv = "data_citationlake/processed/deduped_github_csvs/0021c79d4e1a37579ca87328864d67a5_table_0.csv"
-parquet_path = "data_citationlake/processed/modelcard_step3_dedup.parquet"
+default_csv = "../ModelTables/data/processed/deduped_github_csvs_v2_251117/0021c79d4e1a37579ca87328864d67a5_table_0.csv"
+parquet_path = "../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet"
 basename = os.path.basename(default_csv)
 
 print(f"Checking CSV: {default_csv}")

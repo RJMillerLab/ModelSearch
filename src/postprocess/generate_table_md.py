@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 from typing import Optional, List
 
+from src.config import MODELLAKE_DB, RELATIONSHIP_PARQUET, CLASSIFICATION_JSON
 from .table_md_common import (
     REPO_ROOT,
     resolve_path,
@@ -26,12 +27,15 @@ from .table_md_common import (
 def generate_markdown(
     table_ids: Optional[List[int]] = None,
     model_id: Optional[str] = None,
-    db_path: str = "data/modellake.db",
-    classification_json: Optional[str] = "data/table_classifications.json",
-    relationship_parquet: str = "data_citationlake/processed/modelcard_step3_dedup.parquet",
+    db_path: str = None,
+    classification_json: Optional[str] = None,
+    relationship_parquet: str = None,
     output_path: str = "table_comparison.md",
     max_rows: int = 50,
 ) -> None:
+    db_path = db_path or MODELLAKE_DB
+    relationship_parquet = relationship_parquet or RELATIONSHIP_PARQUET
+    classification_json = classification_json or CLASSIFICATION_JSON
     classifications = {}
     if classification_json:
         p = resolve_path(classification_json)
@@ -96,26 +100,17 @@ def main():
     ap = argparse.ArgumentParser(description="Generate markdown for table(s) by ID or model ID")
     ap.add_argument("--table_ids", type=int, nargs="+", default=None)
     ap.add_argument("--model_id", type=str, default=None)
-    ap.add_argument("--db_path", default="data/modellake.db")
-    ap.add_argument("--classification_json", default="data/table_classifications.json")
-    ap.add_argument("--relationship_parquet", default="data_citationlake/processed/modelcard_step3_dedup.parquet")
-    ap.add_argument("--output", "-o", default="table_comparison.md")
     ap.add_argument("--max_rows", type=int, default=50)
     args = ap.parse_args()
     if not args.table_ids and not args.model_id:
         ap.error("Provide --table_ids or --model_id")
-    classification_json = None
-    if args.classification_json:
-        p = resolve_path(args.classification_json)
-        if p.exists():
-            classification_json = str(p)
     generate_markdown(
         table_ids=args.table_ids,
         model_id=args.model_id,
-        db_path=args.db_path,
-        classification_json=classification_json,
-        relationship_parquet=args.relationship_parquet,
-        output_path=args.output,
+        db_path=MODELLAKE_DB,
+        classification_json=CLASSIFICATION_JSON,
+        relationship_parquet=RELATIONSHIP_PARQUET,
+        output_path="table_comparison.md",
         max_rows=args.max_rows,
     )
 

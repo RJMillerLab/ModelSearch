@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Run Part 2 (Inference & downstream) commands from docs/build_index.md in parallel.
-# Each job logs to logs/<name>.log. Run from repo root.
+# Each job logs to LOG_DIR/<name>.log. All paths from src.config (no path args passed).
 #
 # Usage:
 #   ./scripts/run_part2_parallel.sh
 #   LOG_DIR=my_logs ./scripts/run_part2_parallel.sh
-#   DB_PATH=data_citationlake/modellake.db ./scripts/run_part2_parallel.sh
+#   ./scripts/run_part2_parallel.sh   # override sample CSV for mode=all
 
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 LOG_DIR="${LOG_DIR:-logs}"
-DB_PATH="${DB_PATH:-data/modellake.db}"
+QUERY_CSV="${QUERY_CSV:-$(python scripts/get_config_paths.py sample_csv)}"
 mkdir -p "$LOG_DIR"
 
 echo "=============================================="
@@ -48,26 +48,25 @@ python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --se
 PID_C2T2C_KW=$!
 
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all \
-  --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --output_folder data \
+  --query "$QUERY_CSV" \
   > "$LOG_DIR/card2tab2card_all.log" 2>&1 &
 PID_C2T2C_ALL=$!
 
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type \
-  --classification_json data/table_classifications.json \
   > "$LOG_DIR/card2tab2card_by_type.log" 2>&1 &
 PID_C2T2C_BT=$!
 
-# 2.4 tab2tab (keyword)
+# 2.4 tab2tab (keyword); paths from src.config
 python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 \
-  --db_path "$DB_PATH" --output data/tab2tab_results.json \
+  --output_json data/tab2tab_results.json \
   > "$LOG_DIR/tab2tab_keyword.log" 2>&1 &
 PID_T2T=$!
 
 # 2.5 tab2tab_by_type
 python -m src.search.tab2tab_by_type \
-  --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv \
+  --query "$QUERY_CSV" \
   --classification_json data/table_classifications.json --search_type single_column --k 10 \
-  --db_path "$DB_PATH" --output data/tab2tab_by_type_results.json \
+  --output_json data/tab2tab_by_type_results.json \
   > "$LOG_DIR/tab2tab_by_type.log" 2>&1 &
 PID_T2T_BT=$!
 

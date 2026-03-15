@@ -18,8 +18,7 @@ import json
 from typing import List, Dict, Optional, Any, Set, Tuple
 from collections import Counter
 
-from utils.table_loader import load_table, resolve_table_path
-
+from src.utils import resolve_table_path, load_table
 
 def _reorder_columns_deterministic(df: pd.DataFrame) -> pd.DataFrame:
     """Deterministically reorder columns for readability/comparability.
@@ -342,7 +341,7 @@ def integrate_tables(
     for table_path in table_paths:
         basename = os.path.basename(table_path)
         tid = filename_to_tableid.get(basename) if filename_to_tableid else None
-        df = load_table(table_path, db_path=db_path, tableid=tid)
+        df = load_table(table_path)
         if df is not None:
             tables.append(df)
             loaded_paths.append(table_path)
@@ -781,24 +780,9 @@ def integrate_tables_from_model_search_results(
     if parent_dir_abs not in sys.path:
         sys.path.insert(0, parent_dir_abs)
     
-    from src.search.card2tab2card import get_tables_for_model, load_relationship_parquet
-    
-    # Load relationship data only when DuckDB path is unavailable and we truly need a full DataFrame
-    relationship_df = None
-    if not use_citationlake:
-        # If we don't have a usable parquet path for DuckDB, fall back to loading via pandas
-        parquet_for_df = None
-        if relationship_parquet and os.path.exists(relationship_parquet):
-            # DuckDB branch below will handle this path directly; avoid full load here
-            parquet_for_df = None
-        else:
-            default_parquet = "data_citationlake/processed/modelcard_step3_dedup.parquet"
-            if os.path.exists(default_parquet):
-                parquet_for_df = default_parquet
-        if parquet_for_df:
-            relationship_df = load_relationship_parquet(parquet_for_df)
-            print(f"✅ Loaded relationship parquet for fallback DataFrame path: {parquet_for_df}")
-
+    from src.search.card2tab2card import load_modelid_to_csvlist
+    from src.modelsearch.compare_baselines import _load_modelid_to_csv_expand
+    relationship_df = _load_modelid_to_csv_expand()
     # Table–model mapping uses relationship_parquet only (no optional get_from)
     citationlake_available = False
     
@@ -929,23 +913,9 @@ def integrate_tables_from_model_search_results(
         for model_id in model_ids:
             model_to_table_paths[model_id] = []
             # Get tables for this model
-            if use_citationlake and citationlake_available:
-                model_tables = get_tables_for_model(
-                    model_id=model_id,
-                    schema_log_path=schema_log_path,
-                    use_citationlake=True
-                )
-            else:
-                if relationship_df is None:
-                    raise ValueError("relationship_df is required when use_citationlake=False")
-                model_tables = get_tables_for_model(
-                    model_id=model_id,
-                    relationship_df=relationship_df,
-                    use_citationlake=False
-                )
+            model_tables = load_modelid_to_csvlist(model_id=model_id)
 
             if model_tables:
-                # Resolve basenames to path (utils.resolve_table_path) or keep basename for load_table later
                 for table_basename in model_tables:
                     table_path = resolve_table_path(table_basename) or table_basename
                     if table_path not in all_table_paths:

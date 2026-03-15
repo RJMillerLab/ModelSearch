@@ -227,12 +227,14 @@ OPENAI_API_KEY=your_api_key_here
 
 ## Quick Start
 
+All data paths (raw dir, modellake.db, processed dirs, outputs) are in `src.config`. Override with env: `MODELTABLES_DATA`, `MODELLAKE_DB`, `OUTPUT_DIR`, `DATA_TAG`.
+
 ### Build Index
 
 ```bash
-python -m src.search.card2card build-index \
-  --field card \
-  --raw_dir data_citationlake/raw \
+# Raw dir and outputs from src.config (edit src/config.py or set MODELTABLES_DATA, OUTPUT_DIR)
+python -m src.search.card2card build-index --field card \
+  --raw_dir "$(python -c 'from src.config import RAW_DIR; print(RAW_DIR)')" \
   --output_npz data/card2card_embeddings.npz \
   --output_index data/card2card.faiss
 ```

@@ -1,5 +1,7 @@
 # Build Index
 
+**Paths:** Data paths (ModelTables/data, modellake.db, processed dirs, relationship parquet) are defined in `src.config`. Override with env: `MODELTABLES_DATA` or `DATA_ROOT`, `MODELLAKE_DB`, `DATA_TAG`. Examples below use config defaults.
+
 **Part 1** = index building (run once). **Part 2** = inference (retrieval, table search, demo). When a step has multiple modes, run all and save to separate log/json.
 
 ---
@@ -26,9 +28,11 @@
 
 ## 1.1 Modelcard index (dense)
 
+Paths from `src.config` (e.g. `RAW_DIR`). Override with env if needed.
+
 ```bash
 # one-step (recommended)
-python -m src.search.card2card build-index --field card --raw_dir data_citationlake/raw --output_npz data/card2card_embeddings.npz --output_index data/card2card.faiss
+python -m src.search.card2card build-index --field card --raw_dir ../ModelTables/data/raw --output_npz data/card2card_embeddings.npz --output_index data/card2card.faiss
 # optional: --output_jsonl data/card2card_corpus.jsonl --device cuda
 ```
 
@@ -53,7 +57,7 @@ This copies the JSONL into `corpus_dir` and runs `pyserini.index.lucene` (JsonCo
 ```bash
 # clone or symlink Blend_internal; symlink data if needed
 git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
-# ln -s /path/to/ModelTables/data data_citationlake
+# reuse data from ModelTables
 ```
 
 ## 1.2b Valid model IDs for Table Search (optional; for demo “Narrow down”)
@@ -61,15 +65,24 @@ git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
 Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
 
 ```bash
-python scripts/build_valid_model_ids_txt.py --parquet data_citationlake/processed/modelcard_step3_dedup.parquet --output data/valid_model_ids_with_tables.txt
+# Parquet and output from src.config (no path args required)
+python scripts/build_valid_model_ids_txt.py --output data/valid_model_ids_with_tables.txt
 ```
 
 Output: `data/valid_model_ids_with_tables.txt` (one model_id per line). Demo backend “Narrow down” reads this file only; it does not read parquet at request time.
 
 ## 1.3 DuckDB table index
 
+Paths from `src.config`. Use `scripts/get_config_paths.py` for shell:
+
 ```bash
-python -m src.Blend_internal.scripts.create_index_duckdb --db_path data/modellake.db --data_glob "data_citationlake/processed/deduped_github_csvs/*.csv" --data_glob "data_citationlake/processed/deduped_hugging_csvs/*.csv" --data_glob "data_citationlake/processed/tables_output/*.csv" --table modellake_index
+DB=$(python scripts/get_config_paths.py modellake_db)
+GITHUB=$(python scripts/get_config_paths.py deduped_github_csvs)
+HUGGING=$(python scripts/get_config_paths.py deduped_hugging_csvs)
+TABLES=$(python scripts/get_config_paths.py tables_output)
+python -m src.Blend_internal.scripts.create_index_duckdb --db_path "$DB" \
+  --data_glob "$GITHUB/*.csv" --data_glob "$HUGGING/*.csv" --data_glob "$TABLES/*.csv" \
+  --table modellake_index
 ```
 
 ## 1.4 Table classification (optional; for by_type flows)
@@ -78,9 +91,9 @@ Train vs inference = explicit arg only, no fallback. Train = run below with `--m
 
 ```bash
 # train (full datalake)
-python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json
+python -m src.search.classification --mode batch --output_json data/table_classifications.json
 # heuristic if tab2know fails
-python -m src.search.classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json --method heuristic
+python -m src.search.classification --mode batch --output_json data/table_classifications.json --method heuristic
 ```
 
 ---
@@ -108,45 +121,45 @@ python -m src.search.card2card search --model_id google-bert/bert-base-uncased -
 
 ## 2.3 card2tab2card (keyword, all, by_type)
 
-Use `--db_path` to point to modellake.db (default: `data_citationlake/modellake.db`). Example with `data/modellake.db`:
+Paths (db, relationship parquet, classification JSON, output) from `src.config`. Only `--model_id`, `--query` (for mode=all), `--search_type`, `--k`, `--mode` are passed.
 
 ```bash
 # single type: keyword
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 --db_path data/modellake.db > logs/card2tab2card_keyword.log 2>&1
-# all search types (single_column, keyword, unionable)
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --output_folder data --db_path data/modellake.db > logs/card2tab2card_all.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
+# all search types (--query required: CSV path; e.g. from scripts/get_config_paths.py sample_csv)
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all --query ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0000e35dae_table1.csv > logs/card2tab2card_all.log 2>&1
 # by table type (needs 1.4)
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type --classification_json data/table_classifications.json --db_path data/modellake.db > logs/card2tab2card_by_type.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type > logs/card2tab2card_by_type.log 2>&1
 ```
 
 ## 2.4 tab2tab (test all modes: keyword, single_column, multi_column, unionable)
 
-Keyword = match column names (headers). Single_column = match cell values in one column (often 0 results if values are unique). Multi_column/unionable = CSV path.
+Paths from `src.config`. Keyword = match column names; single_column = cell values; multi_column/unionable = CSV path.
 
 ```bash
-# keyword: comma-separated column names
-python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 --db_path data/modellake.db --output data/tab2tab_keyword_results.json > logs/tab2tab_keyword.log 2>&1
-# single_column: comma-separated cell values
-python -m src.search.tab2tab --search_type single_column --query "val1,val2,val3" --k 10 --db_path data/modellake.db --output data/tab2tab_single_column_results.json > logs/tab2tab_single_column.log 2>&1
-# multi_column: path to CSV
-python -m src.search.tab2tab --search_type multi_column --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --k 10 --db_path data/modellake.db --output data/tab2tab_multi_column_results.json > logs/tab2tab_multi_column.log 2>&1
-# unionable: path to CSV
-python -m src.search.tab2tab --search_type unionable --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv --k 10 --db_path data/modellake.db --output data/tab2tab_unionable_results.json > logs/tab2tab_unionable.log 2>&1
+# keyword
+python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 > logs/tab2tab_keyword.log 2>&1
+# single_column
+python -m src.search.tab2tab --search_type single_column --query "val1,val2,val3" --k 10 > logs/tab2tab_single_column.log 2>&1
+# multi_column (CSV path; use get_config_paths.py sample_csv for default)
+python -m src.search.tab2tab --search_type multi_column --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_multi_column.log 2>&1
+# unionable
+python -m src.search.tab2tab --search_type unionable --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_unionable.log 2>&1
 ```
 
 ## 2.5 tab2tab_by_type (test all modes; needs 1.4)
 
-Same modes as tab2tab, filtered by table type. **--query** = table ID (from modellake.db) or CSV path. Table ID: load from db (filename → same resolve as elsewhere) so one source, no local path needed.
+Same modes as tab2tab, filtered by table type. Paths from `src.config`. **--query** = table ID or CSV path.
 
 ```bash
 # keyword (table ID or path)
-python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type keyword --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_keyword_results.json > logs/tab2tab_by_type_keyword.log 2>&1
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type keyword --k 10 --output_json data/tab2tab_by_type_keyword_results.json > logs/tab2tab_by_type_keyword.log 2>&1
 # single_column
-python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type single_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_single_column_results.json > logs/tab2tab_by_type_single_column.log 2>&1
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type single_column --k 10 --output_json data/tab2tab_by_type_single_column_results.json > logs/tab2tab_by_type_single_column.log 2>&1
 # multi_column
-python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type multi_column --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type multi_column --k 10 --output_json data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
 # unionable
-python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --db_path data/modellake.db --output data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1 
+python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --output_json data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1 
 ```
 
 If **multi_column** fails with `Scalar Function with name to_bitstring does not exist`: DuckDB version mismatch. In **Blend_internal** edit `src/Blend_internal/src/Operators/Seekers/MultiColumnOverlap.py` and replace `TO_BITSTRING(super_key)` with `to_binary(super_key)` (or the bitstring function your DuckDB provides). Then re-run.
@@ -159,8 +172,8 @@ Generate markdown to view/compare tables by table ID or model ID; or from all lo
 # By table ID(s) or model ID
 python -m src.postprocess.generate_table_md --table_ids 3690 46228 26307 --output table_comparison.md
 python -m src.postprocess.generate_table_md --model_id google-bert/bert-base-uncased --output model_tables.md
-# From all logs → md/<log_basename>.md (run from repo root, e.g. on remote)
-python -m src.postprocess.generate_md_from_logs --logs_dir logs --output_dir md --db_path data/modellake.db
+# From all logs → md/<log_basename>.md (paths from src.config)
+python -m src.postprocess.generate_md_from_logs --logs_dir logs --output_dir md
 # Single log
 python -m src.postprocess.generate_md_from_logs --log_file logs/card2tab2card_by_type.log --output_dir md
 ```

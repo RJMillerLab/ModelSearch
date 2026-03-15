@@ -6,10 +6,9 @@ This module provides a two-stage search:
 2. Search for similar tables using tab2tab
 3. Map similar tables back to model cards using relationship parquet
 
-Uses a get_from.py-style approach (via ModelTables / data_citationlake) for robust parquet schema handling when available.
+Uses a get_from.py-style approach (via ModelTables) for robust parquet schema handling when available.
 """
 
-import math
 import os
 import re
 import sys
@@ -23,21 +22,15 @@ import pandas as pd
 _reporoot = os.path.join(os.path.dirname(__file__), '../..')
 if _reporoot not in sys.path:
     sys.path.insert(0, _reporoot)
-from src.utils.table_loader import resolve_table_path
-from src.modelsearch.compare_baselines import (
-    get_tables_for_model_duckdb,
-    get_modelids_for_basenames_duckdb,
-    _read_relationships,
+from src.utils import resolve_table_path, load_modelid_to_csvlist
+from src.config import (
+    RELATIONSHIP_PARQUET,
+    MODELLAKE_DB,
+    CLASSIFICATION_JSON,
+    CARD2TAB2CARD_OUTPUT_JSON,
+    SCHEMA_LOG,
+    OUTPUT_DIR,
 )
-
-
-def _resolve_csv_path(table_path) -> Optional[str]:
-    """Resolve table_path to CSV path: use as-is if exists, else resolve_table_path(basename)."""
-    p = str(table_path)
-    if os.path.exists(p):
-        return p
-    return resolve_table_path(os.path.basename(p))
-
 
 def _get_csv_headers(csv_path: str) -> List[str]:
     """Read CSV header row and return normalized column names (lower, stripped, non-empty)."""
@@ -86,32 +79,6 @@ def _get_search_table2table_by_type():
         _tab2tab_by_type_search_table2table_by_type = search_table2table_by_type
     return _tab2tab_by_type_search_table2table_by_type
 
-# Default path for model–table relationship (used when caller does not pass relationship_parquet)
-DEFAULT_RELATIONSHIP_PARQUET = "data_citationlake/processed/modelcard_step3_dedup.parquet"
-
-
-def get_modelids_from_table(
-    table_path: str,
-    relationship_parquet: Optional[str] = None,
-    debug: bool = False
-) -> List[str]:
-    """
-    Get model IDs that have a specific table (by CSV basename), using relationship parquet.
-    Uses DuckDB when parquet exists, else loads parquet and does DataFrame lookup.
-    """
-    parquet = relationship_parquet or DEFAULT_RELATIONSHIP_PARQUET
-    basename = os.path.basename(str(table_path))
-    if os.path.exists(parquet):
-        mapping = get_modelids_for_basenames_duckdb(parquet, [basename])
-        return list(mapping.get(basename, []))
-    df = _read_relationships(parquet)
-    basename_col = next((c for c in ["csv_basename", "basename", "filename"] if c in df.columns), None)
-    if basename_col is None:
-        return []
-    mids = df.loc[df[basename_col] == basename, "modelId"].dropna().unique().tolist()
-    return [str(m) for m in mids]
-
-
 def _classify_table_source_by_basename(basename: str) -> str:
     """
     Classify table source from filename (from ModelTables batch_process_tables / quick_retrieval).
@@ -155,36 +122,6 @@ def _filter_s2orc_tables(tables: List[str]) -> List[str]:
         print(f"ℹ️  Filtered out {len(tables) - len(out)} s2orc/llm tables (remain: {len(out)})")
     return out
 
-
-def load_relationship_parquet(parquet_path: str) -> pd.DataFrame:
-    """
-    Load relationship parquet file that maps modelId to CSV basenames.
-    Returns DataFrame with columns: modelId, csv_basename
-    """
-    return _read_relationships(parquet_path)
-
-
-def get_tables_for_model(
-    model_id: str,
-    relationship_df: Optional[pd.DataFrame] = None,
-    relationship_parquet: Optional[str] = None,
-) -> List[str]:
-    """
-    Get list of table CSV basenames for a given model ID.
-    Uses DuckDB when relationship_parquet exists, else DataFrame (given or loaded from parquet).
-    """
-    parquet = relationship_parquet or DEFAULT_RELATIONSHIP_PARQUET
-    if os.path.exists(parquet):
-        return get_tables_for_model_duckdb(parquet, model_id)
-    if relationship_df is None:
-        relationship_df = load_relationship_parquet(parquet)
-    csvs = relationship_df.loc[
-        relationship_df["modelId"] == model_id,
-        "csv_basename"
-    ].dropna().unique().tolist()
-    return csvs
-
-
 def search_card2tab2card(
     model_id: str,
     relationship_parquet: Optional[str] = None,
@@ -193,8 +130,7 @@ def search_card2tab2card(
     k: int = 10,
     table_search_k: Optional[int] = None,
     modelcard_k: Optional[int] = None,
-    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
-    use_citationlake: bool = True,
+    schema_log_path: str = "../ModelTables/logs/parquet_schema.log",
     output_json: str = "data/card2tab2card_results.json",
     db_path: Optional[str] = None,
     global_table_topk: bool = True,
@@ -218,9 +154,8 @@ def search_card2tab2card(
         table_search_k: Number of table results to retrieve (defaults to k if not provided)
         modelcard_k: Number of final model card results to return (defaults to k if not provided)
         schema_log_path: Path to parquet_schema.log (for get_from-style approach)
-        use_citationlake: Whether to use get_from-style mapping (default: True)
         output_json: Optional path to save results as JSON
-        db_path: Path to modellake.db (default: data_citationlake/modellake.db)
+        db_path: Path to modellake.db (default: ../ModelTables/data/modellake.db)
         global_table_topk: If True (default), when model has multiple tables: search each table as equivalent query,
             merge results round-robin, take global top-k. Ensures table_search_k limits total tables, not per-table.
     
@@ -243,19 +178,14 @@ def search_card2tab2card(
     sys.stdout.flush()
     # Resolve relationship parquet path (default or first existing)
     if relationship_parquet is None:
-        for p in (DEFAULT_RELATIONSHIP_PARQUET, "data_citationlake/processed/modelcard_step3.parquet"):
-            if os.path.exists(p):
-                relationship_parquet = p
-                break
-        if relationship_parquet is None:
-            relationship_parquet = DEFAULT_RELATIONSHIP_PARQUET
+        relationship_parquet = DEFAULT_RELATIONSHIP_PARQUET
     if not os.path.exists(relationship_parquet):
         raise FileNotFoundError(
             f"relationship_parquet not found: {relationship_parquet}\n"
-            "Use --relationship_parquet or place modelcard_step3_dedup.parquet in data_citationlake/processed/"
+            "Use --relationship_parquet or set path in src.config (RELATIONSHIP_PARQUET)."
         )
     # Get tables for the query model (DuckDB or full parquet load)
-    query_tables = get_tables_for_model(model_id=model_id, relationship_parquet=relationship_parquet)
+    query_tables = load_modelid_to_csvlist(model_id=model_id)
     query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"⚠️  Warning: No tables found for model {model_id}")
@@ -309,7 +239,7 @@ def search_card2tab2card(
         if search_type == "keyword":
             all_headers = []
             for table_path in query_tables[:10]:
-                csv_path = _resolve_csv_path(table_path)
+                csv_path = resolve_table_path(table_path)
                 if csv_path:
                     all_headers.extend(_get_csv_headers(csv_path))
             query = list(set(all_headers))
@@ -319,7 +249,7 @@ def search_card2tab2card(
             search_type = "keyword"
             all_headers = []
             for table_path in query_tables[:10]:
-                csv_path = _resolve_csv_path(table_path)
+                csv_path = resolve_table_path(table_path)
                 if csv_path:
                     all_headers.extend(_get_csv_headers(csv_path))
             query = list(set(all_headers))
@@ -364,9 +294,9 @@ def search_card2tab2card(
     print(f"✅ ModelCard Top K: {modelcard_k}")
     
     # Search for similar tables using tab2tab (lazy import)
-    # Default db_path to data_citationlake/modellake.db if not provided
+    # Default db_path from config if not provided
     if db_path is None:
-        db_path = "data_citationlake/modellake.db"
+        db_path = MODELLAKE_DB
     print(f"✅ Database: {db_path}")
     
     print(f"🔎 Getting search_table2table function...")
@@ -387,7 +317,7 @@ def search_card2tab2card(
         def _search_one_table(args: Tuple[int, str, str, str]) -> Optional[Tuple[List[int], str]]:
             """Run one table search. Returns (ids, query_basename) or None. Used for parallel. Fails fast on error."""
             ti, table_path, st, db = args
-            csv_path = _resolve_csv_path(table_path)
+            csv_path = resolve_table_path(table_path)
             if not csv_path:
                 return None
             df_required_types = {
@@ -737,9 +667,7 @@ def search_card2tab2card(
 def search_card2tab2card_from_tables(
     model_id: str,
     table_search_results: Dict[str, List[str]],
-    relationship_parquet: Optional[str] = None,
-    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
-    use_citationlake: bool = True,
+    schema_log_path: str = "../ModelTables/logs/parquet_schema.log",
     k: int = 10,
     modelcard_k: Optional[int] = None
 ) -> List[str]:
@@ -751,9 +679,7 @@ def search_card2tab2card_from_tables(
     Args:
         model_id: Hugging Face model ID to search from
         table_search_results: Dictionary mapping CSV basename/path to list of similar CSV basenames/paths
-        relationship_parquet: Optional path to relationship parquet file (fallback)
         schema_log_path: Path to parquet_schema.log (for get_from-style approach)
-        use_citationlake: Whether to use get_from-style mapping (default: True)
         k: Legacy parameter for backward compatibility. If modelcard_k is None, uses k.
         modelcard_k: Maximum number of model card results to return (defaults to k if not provided)
     
@@ -763,10 +689,7 @@ def search_card2tab2card_from_tables(
     # Handle backward compatibility
     if modelcard_k is None:
         modelcard_k = k
-    parquet = relationship_parquet or DEFAULT_RELATIONSHIP_PARQUET
-    if not os.path.exists(parquet):
-        raise FileNotFoundError(f"relationship_parquet not found: {parquet}")
-    query_tables = get_tables_for_model(model_id=model_id, relationship_parquet=parquet)
+    query_tables = load_modelid_to_csvlist(model_id=model_id)
     query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"Warning: No tables found for model {model_id}")
@@ -790,7 +713,7 @@ def search_card2tab2card_from_tables(
     # Map retrieved tables to model IDs via relationship parquet
     similar_model_ids = set()
     table_basenames = [os.path.basename(str(t)) for t in retrieved_tables]
-    basename_to_models = get_modelids_for_basenames_duckdb(parquet, table_basenames)
+    basename_to_models = get_modelids_for_basenames_duckdb(RELATIONSHIP_PARQUET, table_basenames)
     for bn in table_basenames:
         similar_model_ids.update(basename_to_models.get(bn, []))
 
@@ -822,19 +745,15 @@ def search_card2tab2card_from_tables(
 
 def search_card2tab2card_by_type(
     model_id: str,
-    relationship_parquet: Optional[str] = None,
     query: Optional[Any] = None,
     search_type: str = "single_column",
     k: int = 10,
     table_search_k: Optional[int] = None,
     modelcard_k: Optional[int] = None,
-    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
-    use_citationlake: bool = True,
-    output_json: str = "data/card2tab2card_by_type_results.json",
-    db_path: Optional[str] = None,
-    classification_json: Optional[str] = None,
+    schema_log_path: str = SCHEMA_LOG,
+    output_json: str = TAB2TAB_BY_TYPE_OUTPUT_JSON,
+    classification_json: Optional[str] = CLASSIFICATION_JSON,
     classifications: Optional[Dict[int, str]] = None,
-    global_table_topk: bool = True,
 ) -> List[str]:
     """
     Search for model cards via table search with classification filtering.
@@ -852,16 +771,14 @@ def search_card2tab2card_by_type(
     
     Args:
         model_id: Hugging Face model ID to search from
-        relationship_parquet: Optional path to relationship parquet file (fallback if get_from-style approach not available)
         query: Optional query data for table search. If None, uses tables from the model
         search_type: Type of table search - "single_column", "multi_column", "keyword", or "unionable"
         k: Legacy parameter for backward compatibility. If table_search_k or modelcard_k are None, uses k for both.
         table_search_k: Number of table results to retrieve (defaults to k if not provided)
         modelcard_k: Number of final model card results to return (defaults to k if not provided)
         schema_log_path: Path to parquet_schema.log (for get_from-style approach)
-        use_citationlake: Whether to use get_from-style mapping (default: True)
         output_json: Optional path to save results as JSON
-        db_path: Path to modellake.db (default: data_citationlake/modellake.db)
+        db_path: Path to modellake.db (default: ../ModelTables/data/modellake.db)
         classification_json: Path to JSON file with pre-computed classifications
         classifications: Optional pre-loaded classifications dictionary (tableid -> label)
     
@@ -885,16 +802,7 @@ def search_card2tab2card_by_type(
     sys.stdout.flush()
     
     # Resolve relationship parquet and get tables for the query model
-    if relationship_parquet is None:
-        for p in (DEFAULT_RELATIONSHIP_PARQUET, "data_citationlake/processed/modelcard_step3.parquet"):
-            if os.path.exists(p):
-                relationship_parquet = p
-                break
-        if relationship_parquet is None:
-            relationship_parquet = DEFAULT_RELATIONSHIP_PARQUET
-    if not os.path.exists(relationship_parquet):
-        raise FileNotFoundError(f"relationship_parquet not found: {relationship_parquet}")
-    query_tables = get_tables_for_model(model_id=model_id, relationship_parquet=relationship_parquet)
+    query_tables = load_modelid_to_csvlist(model_id=model_id)
     query_tables = _filter_s2orc_tables(query_tables)
     if not query_tables:
         print(f"⚠️  Warning: No tables found for model {model_id}")
@@ -938,7 +846,7 @@ def search_card2tab2card_by_type(
         if search_type == "keyword":
             all_headers = []
             for table_path in query_tables[:10]:
-                csv_path = _resolve_csv_path(table_path)
+                csv_path = resolve_table_path(table_path)
                 if csv_path:
                     all_headers.extend(_get_csv_headers(csv_path))
             query = list(set(all_headers))
@@ -956,14 +864,12 @@ def search_card2tab2card_by_type(
     print(f"✅ Table Search Top K: {table_search_k}")
     print(f"✅ ModelCard Top K: {modelcard_k}")
     
-    # Default db_path
-    if db_path is None:
-        db_path = "data_citationlake/modellake.db"
+    db_path = MODELLAKE_DB
     print(f"✅ Database: {db_path}")
     
     # Default classification_json
     if classification_json is None:
-        classification_json = "data/table_classifications.json"
+        classification_json = CLASSIFICATION_JSON
     
     # Initialize variables
     similar_table_ids = []
@@ -985,7 +891,7 @@ def search_card2tab2card_by_type(
 
         def _search_one_by_type(args):
             ti, table_path, st, db, cj, cl = args
-            csv_path = _resolve_csv_path(table_path)
+            csv_path = resolve_table_path(table_path)
             if not csv_path:
                 return None
             tquery = _get_table_query(csv_path, table_path, st)
@@ -1236,37 +1142,30 @@ def main():
     parser = argparse.ArgumentParser(description="Card to Tab to Card Search")
     parser.add_argument('--model_id', required=True,
                        help='Hugging Face model ID to search from')
-    parser.add_argument('--relationship_parquet', default='data_citationlake/processed/modelcard_step3_dedup.parquet',
-                       help='Path to relationship parquet file (default: data_citationlake/processed/modelcard_step3_dedup.parquet)')
-    parser.add_argument('--schema_log', default='data_citationlake/logs/parquet_schema.log',
-                       help='Path to parquet_schema.log (for get_from-style approach)')
     parser.add_argument('--query', default=None,
-                       help='Query data for table search. For mode=single: comma-separated for single_column/keyword, CSV path for multi_column/unionable. For mode=all: CSV file path (required). If None, uses model tables.')
+                       help='Table search query: for mode=all a CSV path (required); for mode=single comma-separated values or CSV path')
     parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'],
                        default='keyword',
                        help='Type of table search')
     parser.add_argument('--k', type=int, default=10,
                        help='Number of table results to retrieve (table_search_k)')
     parser.add_argument('--modelcard_k', type=int, default=0,
-                       help='Max model cards to return (0 = no limit: all models that contain the retrieved tables)')
+                       help='Max model cards to return (0 = no limit)')
     parser.add_argument('--table_search_json', default=None,
                        help='Optional: Path to pre-computed table search results JSON')
-    parser.add_argument('--use_citationlake', action='store_true', default=True,
-                       help='Use get_from-style mapping approach (default: True)')
-    parser.add_argument('--no_citationlake', dest='use_citationlake', action='store_false',
-                       help='Disable get_from-style approach, use relationship_parquet instead')
-    parser.add_argument('--output_json', default='data/card2tab2card_results.json',
-                       help='Path to save results as JSON (default: data/card2tab2card_results.json)')
-    parser.add_argument('--output_folder', default='data',
-                       help='Output folder for results when mode=all (default: data)')
     parser.add_argument('--mode', choices=['single', 'all', 'by_type'], default='single',
-                       help='Search mode: single (one search type), all (run all three: single_column, keyword, unionable), or by_type (with classification filtering)')
-    parser.add_argument('--db_path', default='data_citationlake/modellake.db',
-                       help='Path to modellake.db (default: data_citationlake/modellake.db)')
-    parser.add_argument('--classification_json', default='data/table_classifications.json',
-                       help='Path to JSON file with pre-computed classifications (required for by_type mode)')
-    
+                       help='Search mode: single / all / by_type')
+    parser.add_argument('--output_json', default=CARD2TAB2CARD_OUTPUT_JSON,
+                       help='Output JSON path (default from src.config; demo overrides for job dir)')
     args = parser.parse_args()
+
+    # Paths from src.config (only --output_json can override for job-specific output)
+    relationship_parquet = RELATIONSHIP_PARQUET
+    schema_log = SCHEMA_LOG
+    output_json = args.output_json
+    output_folder = OUTPUT_DIR
+    db_path = MODELLAKE_DB
+    classification_json = CLASSIFICATION_JSON
     
     try:
         start_time = time.time()
@@ -1275,14 +1174,14 @@ def main():
             print(f"\n{'='*60}")
             print(f"🚀 Running ALL search modes")
             print(f"{'='*60}")
-            print(f"Output folder: {args.output_folder}")
+            print(f"Output folder: {output_folder}")
             print(f"Will run: single_column, keyword, unionable")
             print(f"{'='*60}\n")
             
             # For mode=all, query must be a CSV file path
             if not args.query:
                 print(f"❌ Error: --query is required when --mode=all")
-                print(f"   Please provide a CSV file path, e.g., --query data_citationlake/processed/deduped_hugging_csvs/0000e35dae_table1.csv")
+                print(f"   Please provide a CSV file path, e.g., --query {os.path.join(DEDUPED_HUGGING_CSVS, '0000e35dae_table1.csv')}")
                 sys.exit(1)
             
             if not os.path.exists(args.query):
@@ -1296,21 +1195,21 @@ def main():
             print(f"✅ Loaded CSV with {len(query_df)} rows and {len(query_df.columns)} columns")
             
             # Ensure output folder exists
-            os.makedirs(args.output_folder, exist_ok=True)
+            os.makedirs(output_folder, exist_ok=True)
             
             # Define search configurations
             search_configs = [
                 {
                     'type': 'single_column',
-                    'output': os.path.join(args.output_folder, 'card2tab2card_singlecol_results.json')
+                    'output': os.path.join(output_folder, 'card2tab2card_singlecol_results.json')
                 },
                 {
                     'type': 'keyword',
-                    'output': os.path.join(args.output_folder, 'card2tab2card_keyword_results.json')
+                    'output': os.path.join(output_folder, 'card2tab2card_keyword_results.json')
                 },
                 {
                     'type': 'unionable',
-                    'output': os.path.join(args.output_folder, 'card2tab2card_unionable_results.json')
+                    'output': os.path.join(output_folder, 'card2tab2card_unionable_results.json')
                 }
             ]
             
@@ -1349,14 +1248,13 @@ def main():
                 try:
                     results = search_card2tab2card(
                         model_id=args.model_id,
-                        relationship_parquet=args.relationship_parquet,
+                        relationship_parquet=relationship_parquet,
                         query=query,
                         search_type=search_type,
                         k=args.k,
-                        schema_log_path=args.schema_log,
-                        use_citationlake=args.use_citationlake,
+                        schema_log_path=schema_log,
                         output_json=output_path,
-                        db_path=args.db_path
+                        db_path=db_path
                     )
                     all_results[search_type] = {
                         'count': len(results),
@@ -1390,7 +1288,7 @@ def main():
             print(f"🚀 Running Card2Tab2Card Search (by Type)")
             print(f"{'='*60}")
             print(f"Mode: Classification-filtered search")
-            print(f"Classification JSON: {args.classification_json}")
+            print(f"Classification JSON: {classification_json}")
             print(f"{'='*60}\n")
             
             # Parse query based on search type (if provided)
@@ -1407,15 +1305,14 @@ def main():
             
             results = search_card2tab2card_by_type(
                 model_id=args.model_id,
-                relationship_parquet=args.relationship_parquet,
+                relationship_parquet=relationship_parquet,
                 query=query,
                 search_type=args.search_type,
                 k=args.k,
-                schema_log_path=args.schema_log,
-                use_citationlake=args.use_citationlake,
-                output_json=args.output_json or "data/card2tab2card_by_type_results.json",
-                db_path=args.db_path,
-                classification_json=args.classification_json
+                schema_log_path=schema_log,
+                output_json=output_json,
+                db_path=db_path,
+                classification_json=classification_json
             )
             
             print(f"Found {len(results)} similar model cards for {args.model_id} (filtered by classification):")
@@ -1432,9 +1329,8 @@ def main():
                 results = search_card2tab2card_from_tables(
                     model_id=args.model_id,
                     table_search_results=table_search_results,
-                    relationship_parquet=args.relationship_parquet,
-                    schema_log_path=args.schema_log,
-                    use_citationlake=args.use_citationlake,
+                    relationship_parquet=relationship_parquet,
+                    schema_log_path=schema_log,
                     k=args.k
                 )
             else:
@@ -1452,16 +1348,15 @@ def main():
                 
                 results = search_card2tab2card(
                     model_id=args.model_id,
-                    relationship_parquet=args.relationship_parquet,
+                    relationship_parquet=relationship_parquet,
                     query=query,
                     search_type=args.search_type,
                     k=args.k,
                     table_search_k=args.k,
                     modelcard_k=args.modelcard_k,
-                    schema_log_path=args.schema_log,
-                    use_citationlake=args.use_citationlake,
-                    output_json=args.output_json or "data/card2tab2card_results.json",
-                    db_path=args.db_path
+                    schema_log_path=schema_log,
+                    output_json=output_json,
+                    db_path=db_path
                 )
             
             print(f"Found {len(results)} similar model cards for {args.model_id}:")
