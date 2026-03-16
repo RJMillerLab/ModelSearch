@@ -17,47 +17,26 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 from src.baseline1.build_modelcard_jsonl import build_jsonl_from_raw, build_jsonl_from_parquet
-from src.baseline1.table_retrieval_pipeline import (
-    encode_corpus,
-    build_faiss,
-    search_neighbors
-)
+from src.baseline1.table_retrieval_pipeline import encode_corpus, build_faiss, search_neighbors
+from src.utils import load_combined_data, get_device
+from src.config import RAW_DIR, PROCESSED_DIR, EMB_NPZ, FAISS_INDEX, SPARSE_INDEX, CARD2CARD_CORPUS_JSONL, CARD2CARD_SPARSE_CORPUS, CARD2CARD_NEIGHBORS_JSON
 
-from src.utils import load_combined_data
-from src.config import RAW_DIR, PROCESSED_DIR
-from src.utils import get_device
-
-def build_card_index(
-    field: str = "card",
-    output_jsonl: str = "data/card2card_corpus.jsonl",
-    model_name: str = "all-MiniLM-L6-v2",
-    batch_size: int = 256,
-    output_npz: str = "data/card2card_embeddings.npz",
-    output_index: str = "data/card2card.faiss",
-    device: str = "cuda"
-) -> None:
+def build_card_index(field: str = "card", output_jsonl: str = CARD2CARD_CORPUS_JSONL, model_name: str = "all-MiniLM-L6-v2", batch_size: int = 256, output_npz: str = EMB_NPZ, output_index: str = FAISS_INDEX, device: str = "cuda") -> None:
     """
     Build FAISS index for model card search.
     """
-    # Build JSONL corpus
     if field == "card_readme":
         build_jsonl_from_parquet(f"{PROCESSED_DIR}/modelcard_step1.parquet", field, output_jsonl)
     else:
         build_jsonl_from_raw(RAW_DIR, field, output_jsonl)
-    
-    # Encode corpus
     encode_corpus(output_jsonl, model_name, batch_size, output_npz, device)
-    
-    # Build FAISS index
     build_faiss(output_npz, output_index)
-    
     print(f"✅ Card index built: {output_index}")
 
 
 # Pyserini sparse: same logic as ModelTables baseline2 (Lucene BM25, top-k retrieval).
 # Train = build Lucene index once. Inference = load index + search only.
 MAX_QUERY_TERMS = 1024  # Lucene BooleanQuery maxClauseCount; long query truncation
-
 
 def _truncate_query_pyserini(text: str, max_terms: int = MAX_QUERY_TERMS) -> str:
     """Truncate query to at most max_terms to avoid TooManyClauses in Lucene (same as ModelTables)."""
@@ -69,12 +48,7 @@ def _truncate_query_pyserini(text: str, max_terms: int = MAX_QUERY_TERMS) -> str
     return " ".join(terms[:max_terms])
 
 
-def build_sparse_index(
-    jsonl_path: str = "data/card2card_corpus.jsonl",
-    corpus_dir: str = "data/card2card_sparse_corpus",
-    output_index: str = "data/card2card_sparse_index",
-    threads: int = 1,
-) -> None:
+def build_sparse_index(jsonl_path: str = CARD2CARD_CORPUS_JSONL, corpus_dir: str = CARD2CARD_SPARSE_CORPUS, output_index: str = SPARSE_INDEX, threads: int = 1) -> None:
     """
     Train: build Pyserini Lucene index from corpus JSONL (same as ModelTables baseline2).
     Writes corpus into corpus_dir and runs pyserini.index.lucene. Inference then uses output_index only.
@@ -89,15 +63,7 @@ def build_sparse_index(
     shutil.copy2(jsonl_path, corpus_jsonl)
     print("Building Lucene index (BM25, same as ModelTables baseline2)...")
     t0 = time.time()
-    cmd = [
-        sys.executable, "-m", "pyserini.index.lucene",
-        "--collection", "JsonCollection",
-        "--input", os.path.abspath(corpus_dir),
-        "--index", os.path.abspath(output_index),
-        "--generator", "DefaultLuceneDocumentGenerator",
-        "--threads", str(threads),
-        "--storePositions", "--storeDocvectors", "--storeRaw",
-    ]
+    cmd = [sys.executable, "-m", "pyserini.index.lucene", "--collection", "JsonCollection", "--input", os.path.abspath(corpus_dir), "--index", os.path.abspath(output_index), "--generator", "DefaultLuceneDocumentGenerator", "--threads", str(threads), "--storePositions", "--storeDocvectors", "--storeRaw"]
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"pyserini.index.lucene failed: {out.stderr or out.stdout}")
@@ -146,12 +112,7 @@ def _get_query_text_from_index(index_reader, model_id: str) -> str:
     raise ValueError(f"Model ID '{model_id}' not found in sparse index (build with --storeRaw)")
 
 
-def _sparse_search_pyserini(
-    query_model_id: str,
-    searcher,
-    index_reader,
-    top_k: int = 20,
-) -> List[Tuple[str, float]]:
+def _sparse_search_pyserini(query_model_id: str, searcher: object, index_reader: object, top_k: int = 20) -> List[Tuple[str, float]]:
     """
     Inference: get query text from index, run BM25 search (top-k only), return (docid, score) list.
     Same logic as ModelTables search_with_pyserini.py.
@@ -167,13 +128,7 @@ def _sparse_search_pyserini(
     return results
 
 
-def _dense_search_faiss(
-    query_model_id: str,
-    model_ids: List[str],
-    emb_npz: str,
-    faiss_index: str,
-    top_k: int = 20
-) -> List[Tuple[str, float]]:
+def _dense_search_faiss(query_model_id: str, model_ids: List[str], emb_npz: str = EMB_NPZ, faiss_index: str = FAISS_INDEX, top_k: int = 20) -> List[Tuple[str, float]]:
     """
     Perform dense retrieval using FAISS.
     
@@ -202,8 +157,6 @@ def _dense_search_faiss(
     results = []
     for i, score in zip(I[0], D[0]):
         if ids[i] != query_model_id:
-            # Convert distance to similarity (higher is better)
-            # FAISS returns L2 distance, so we use negative distance as score
             results.append((ids[i], float(-score)))
     
     # Sort by score descending
@@ -212,11 +165,7 @@ def _dense_search_faiss(
     return results[:top_k]
 
 
-def _reciprocal_rank_fusion(
-    sparse_results: List[Tuple[str, float]],
-    dense_results: List[Tuple[str, float]],
-    k: int = 60
-) -> List[Tuple[str, float]]:
+def _reciprocal_rank_fusion(sparse_results: List[Tuple[str, float]], dense_results: List[Tuple[str, float]], k: int = 60) -> List[Tuple[str, float]]:
     """
     Combine sparse and dense results using Reciprocal Rank Fusion (RRF).
     
@@ -245,33 +194,10 @@ def _reciprocal_rank_fusion(
     return results
 
 
-def search_card2card(
-    model_id: str,
-    emb_npz: str = "data/card2card_embeddings.npz",
-    faiss_index: str = "data/card2card.faiss",
-    top_k: int = 20,
-    output_json: Optional[str] = None,
-    retrieval_mode: str = "dense",
-    sparse_index_path: Optional[str] = None,
-    hybrid_method: str = "rrf",
-    sparse_weight: float = 0.5,
-    dense_weight: float = 0.5
-) -> List[str]:
+def search_card2card(model_id: str, emb_npz: str = EMB_NPZ, faiss_index: str = FAISS_INDEX, top_k: int = 20, output_json: Optional[str] = None, retrieval_mode: str = "dense", sparse_index_path: Optional[str] = None, hybrid_method: str = "rrf", sparse_weight: float = 0.5, dense_weight: float = 0.5) -> List[str]:
     """
     Search for similar model cards given a model ID.
-    
-    Args:
-        model_id: Hugging Face model ID to search for
-        emb_npz: Path to embeddings NPZ file
-        faiss_index: Path to FAISS index
-        top_k: Number of neighbors to return
-        output_json: Optional path to save results as JSON
-        retrieval_mode: Retrieval mode - "sparse", "dense", or "hybrid"
-        sparse_index_path: Path to Pyserini Lucene index (Part 1 build-sparse-index); inference only loads it
-        hybrid_method: Hybrid combination method - "rrf" or "weighted"
-        sparse_weight: Weight for sparse scores (for weighted method)
-        dense_weight: Weight for dense scores (for weighted method)
-    
+
     Returns:
         List of similar model IDs
     """
@@ -307,10 +233,7 @@ def search_card2card(
     elif retrieval_mode == "sparse":
         print(f"  [sparse] sparse_index_path={sparse_index_path}", flush=True)
         if not sparse_index_path or not os.path.isdir(sparse_index_path):
-            raise ValueError(
-                "Sparse mode requires --sparse_index_path to a Pyserini Lucene index directory (run build-sparse-index first). "
-                f"Got: {sparse_index_path!r}"
-            )
+            raise ValueError(f"Sparse mode requires --sparse_index_path to a Pyserini Lucene index directory (run build-sparse-index first). Got: {sparse_index_path!r}")
         print("  [timing] sparse retrieval (per-step):", flush=True)
         t0 = time.time()
         searcher, index_reader = _get_pyserini_searcher_and_reader(sparse_index_path)
@@ -391,35 +314,19 @@ def search_card2card(
 
     # Save if requested
     if output_json:
-        result = {
-            "query": model_id,
-            "neighbors": results,
-            "retrieval_mode": retrieval_mode
-        }
+        result = {"query": model_id, "neighbors": results, "retrieval_mode": retrieval_mode}
         if retrieval_mode == "hybrid":
             result["hybrid_method"] = hybrid_method
         os.makedirs(os.path.dirname(output_json), exist_ok=True)
         with open(output_json, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {output_json}")
-    
     return results
 
 
-def search_card2card_batch(
-    emb_npz: str = "data/card2card_embeddings.npz",
-    faiss_index: str = "data/card2card.faiss",
-    top_k: int = 20,
-    output_json: str = "data/card2card_neighbors.json"
-) -> Dict[str, List[str]]:
+def search_card2card_batch(emb_npz: str = EMB_NPZ, faiss_index: str = FAISS_INDEX, top_k: int = 20, output_json: str = CARD2CARD_NEIGHBORS_JSON) -> Dict[str, List[str]]:
     """
     Search for similar model cards for all models in the corpus.
-    
-    Args:
-        emb_npz: Path to embeddings NPZ file
-        faiss_index: Path to FAISS index
-        top_k: Number of neighbors to return per model
-        output_json: Path to save results as JSON
     
     Returns:
         Dictionary mapping model_id to list of neighbor model_ids
@@ -433,10 +340,7 @@ def search_card2card_batch(
     embs = data['embeddings']
     ids = data['ids'].tolist()
     
-    # Load FAISS index
     index = faiss.read_index(faiss_index)
-    
-    # Search all
     D, I = index.search(embs, top_k + 1)
     
     # Build neighbor mapping
@@ -447,14 +351,11 @@ def search_card2card_batch(
         nb = [ids[j] for j in neigh_indices if j != i][:top_k]
         neighbors[model_id] = nb
     
-    # Save results
     os.makedirs(os.path.dirname(output_json), exist_ok=True)
     with open(output_json, 'w', encoding='utf-8') as f:
         json.dump(neighbors, f, ensure_ascii=False, indent=2)
     print(f"✅ Results saved to {output_json}")
-    
     return neighbors
-
 
 def main():
     """CLI entry point for card2card search"""
@@ -464,73 +365,40 @@ def main():
     # Build index command
     build_parser = subparsers.add_parser('build-index', help='Build FAISS index')
     build_parser.add_argument('--field', choices=['card', 'card_readme'], default='card')
-    build_parser.add_argument('--output_jsonl', default='data/card2card_corpus.jsonl')
     build_parser.add_argument('--model_name', default='all-MiniLM-L6-v2')
     build_parser.add_argument('--batch_size', type=int, default=256)
-    build_parser.add_argument('--output_npz', default='data/card2card_embeddings.npz')
-    build_parser.add_argument('--output_index', default='data/card2card.faiss')
 
     # Build sparse index (Part 1, train): Pyserini Lucene index (same as ModelTables baseline2)
     sparse_build_parser = subparsers.add_parser('build-sparse-index', help='Train: build Pyserini Lucene BM25 index from jsonl (Part 1)')
-    sparse_build_parser.add_argument('--jsonl_path', default='data/card2card_corpus.jsonl', help='Corpus JSONL')
-    sparse_build_parser.add_argument('--corpus_dir', default='data/card2card_sparse_corpus', help='Dir for Pyserini JsonCollection input')
-    sparse_build_parser.add_argument('--output_index', default='data/card2card_sparse_index', help='Output Lucene index directory')
     sparse_build_parser.add_argument('--threads', type=int, default=1)
     
     # Search (inference)
     search_parser = subparsers.add_parser('search', help='Search for similar model cards')
     search_parser.add_argument('--model_id', help='Single query model ID')
     search_parser.add_argument('--model_ids_file', help='File with one model_id per line: load index once, then inference per query')
-    search_parser.add_argument('--emb_npz', default='data/card2card_embeddings.npz')
-    search_parser.add_argument('--faiss_index', default='data/card2card.faiss')
     search_parser.add_argument('--top_k', type=int, default=20)
-    search_parser.add_argument('--output_json', default=None)
-    search_parser.add_argument('--retrieval_mode', choices=['sparse', 'dense', 'hybrid'], default='dense',
-                              help='Retrieval mode: sparse (Pyserini BM25), dense (FAISS), or hybrid')
-    search_parser.add_argument('--sparse_index_path', default='data/card2card_sparse_index',
-                              help='Pyserini Lucene index dir from Part 1; inference only loads (no rebuild)')
-    search_parser.add_argument('--hybrid_method', choices=['rrf', 'weighted'], default='rrf',
-                              help='Hybrid combination method: rrf or weighted')
-    search_parser.add_argument('--sparse_weight', type=float, default=0.5,
-                              help='Weight for sparse scores (for weighted method)')
-    search_parser.add_argument('--dense_weight', type=float, default=0.5,
-                              help='Weight for dense scores (for weighted method)')
+    search_parser.add_argument('--retrieval_mode', choices=['sparse', 'dense', 'hybrid'], default='dense', help='Retrieval mode: sparse (Pyserini BM25), dense (FAISS), or hybrid')
+    search_parser.add_argument('--hybrid_method', choices=['rrf', 'weighted'], default='rrf', help='Hybrid combination method: rrf or weighted')
+    search_parser.add_argument('--sparse_weight', type=float, default=0.5, help='Weight for sparse scores (for weighted method)')
+    search_parser.add_argument('--dense_weight', type=float, default=0.5, help='Weight for dense scores (for weighted method)')
     
     # Search batch command
     batch_parser = subparsers.add_parser('search-batch', help='Search for all models')
-    batch_parser.add_argument('--emb_npz', default='data/card2card_embeddings.npz')
-    batch_parser.add_argument('--faiss_index', default='data/card2card.faiss')
     batch_parser.add_argument('--top_k', type=int, default=20)
-    batch_parser.add_argument('--output_json', default='data/card2card_neighbors.json')
     
     args = parser.parse_args()
     start_time = time.time()
 
     if args.command == 'build-index':
-        build_card_index(
-            field=args.field,
-            output_jsonl=args.output_jsonl,
-            model_name=args.model_name,
-            batch_size=args.batch_size,
-            output_npz=args.output_npz,
-            output_index=args.output_index,
-            device=get_device()
-        )
+        build_card_index(field=args.field, output_jsonl=CARD2CARD_CORPUS_JSONL, model_name=args.model_name, batch_size=args.batch_size, output_npz=EMB_NPZ, output_index=FAISS_INDEX, device=get_device())
         print(f"\nTotal time: {time.time() - start_time:.2f}s")
     elif args.command == 'build-sparse-index':
-        build_sparse_index(
-            jsonl_path=args.jsonl_path,
-            corpus_dir=args.corpus_dir,
-            output_index=args.output_index,
-            threads=getattr(args, 'threads', 1),
-        )
+        build_sparse_index(jsonl_path=CARD2CARD_CORPUS_JSONL, corpus_dir=CARD2CARD_SPARSE_CORPUS, output_index=SPARSE_INDEX, threads=args.threads)
         print(f"\nTotal time: {time.time() - start_time:.2f}s")
     elif args.command == 'search':
-        # Log mode and sparse path so redirects always capture something
-        rm = getattr(args, 'retrieval_mode', 'dense')
-        sip = getattr(args, 'sparse_index_path', None)
-        print(f"card2card search retrieval_mode={rm} sparse_index_path={sip}", flush=True)
-        model_ids_file = getattr(args, 'model_ids_file', None)
+        rm = args.retrieval_mode
+        print(f"card2card search retrieval_mode={rm} sparse_index_path={SPARSE_INDEX}", flush=True)
+        model_ids_file = args.model_ids_file
         if model_ids_file:
             with open(model_ids_file, 'r', encoding='utf-8') as f:
                 model_ids_list = [line.strip() for line in f if line.strip()]
@@ -541,46 +409,19 @@ def main():
                 for i, mid in enumerate(model_ids_list):
                     if i > 0:
                         print(f"\n--- Query {i + 1} (inference only, index already loaded) ---")
-                    neighbors = search_card2card(
-                        model_id=mid,
-                        emb_npz=args.emb_npz,
-                        faiss_index=args.faiss_index,
-                        top_k=args.top_k,
-                        output_json=args.output_json if i == 0 else None,
-                        retrieval_mode=args.retrieval_mode,
-                        sparse_index_path=getattr(args, 'sparse_index_path', None),
-                        hybrid_method=args.hybrid_method,
-                        sparse_weight=args.sparse_weight,
-                        dense_weight=args.dense_weight
-                    )
+                    neighbors = search_card2card(model_id=mid, emb_npz=EMB_NPZ, faiss_index=FAISS_INDEX, top_k=args.top_k, output_json=CARD2CARD_NEIGHBORS_JSON if i == 0 else None, retrieval_mode=args.retrieval_mode, sparse_index_path=SPARSE_INDEX, hybrid_method=args.hybrid_method, sparse_weight=args.sparse_weight, dense_weight=args.dense_weight)
                     print(f"Found {len(neighbors)} neighbors for {mid}")
                 print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
         else:
             if not args.model_id:
                 parser.error("--model_id or --model_ids_file required")
-            neighbors = search_card2card(
-                model_id=args.model_id,
-                emb_npz=args.emb_npz,
-                faiss_index=args.faiss_index,
-                top_k=args.top_k,
-                output_json=args.output_json,
-                retrieval_mode=args.retrieval_mode,
-                sparse_index_path=getattr(args, 'sparse_index_path', None),
-                hybrid_method=args.hybrid_method,
-                sparse_weight=args.sparse_weight,
-                dense_weight=args.dense_weight
-            )
+            neighbors = search_card2card(model_id=args.model_id, emb_npz=EMB_NPZ, faiss_index=FAISS_INDEX, top_k=args.top_k, output_json=CARD2CARD_NEIGHBORS_JSON, retrieval_mode=args.retrieval_mode, sparse_index_path=SPARSE_INDEX, hybrid_method=args.hybrid_method, sparse_weight=args.sparse_weight, dense_weight=args.dense_weight)
             print(f"Found {len(neighbors)} neighbors for {args.model_id} (mode: {args.retrieval_mode})")
             for i, neighbor in enumerate(neighbors, 1):
                 print(f"  {i}. {neighbor}")
             print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
     elif args.command == 'search-batch':
-        neighbors = search_card2card_batch(
-            emb_npz=args.emb_npz,
-            faiss_index=args.faiss_index,
-            top_k=args.top_k,
-            output_json=args.output_json
-        )
+        neighbors = search_card2card_batch(emb_npz=EMB_NPZ, faiss_index=FAISS_INDEX, top_k=args.top_k, output_json=CARD2CARD_NEIGHBORS_JSON)
         print(f"✅ Generated neighbors for {len(neighbors)} models")
         print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
     else:
@@ -589,8 +430,8 @@ def main():
 
 def _test():
     """Quick test when run with no args."""
-    emb_npz = "data/card2card_embeddings.npz"
-    faiss_index = "data/card2card.faiss"
+    emb_npz = EMB_NPZ
+    faiss_index = FAISS_INDEX
     if not os.path.isfile(emb_npz) or not os.path.isfile(faiss_index):
         print("Test skip: index missing (need card2card_embeddings.npz, card2card.faiss)")
         return

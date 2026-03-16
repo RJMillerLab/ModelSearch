@@ -9,28 +9,17 @@ This module provides a two-stage search:
 Uses a get_from.py-style approach (via ModelTables) for robust parquet schema handling when available.
 """
 
-import os
-import re
-import sys
-import time
+import os, json, sys, time, re, argparse, pandas as pd
+import duckdb, traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Set, Dict, Optional, Any, Tuple
-import argparse
-import pandas as pd
 
 # Add parent directory to path for imports (so "from src.*" works when run as script or from demo)
 _reporoot = os.path.join(os.path.dirname(__file__), '../..')
 if _reporoot not in sys.path:
     sys.path.insert(0, _reporoot)
-from src.utils import resolve_table_path, load_modelid_to_csvlist, load_csvs_to_modelids
-from src.config import (
-    RELATIONSHIP_PARQUET,
-    MODELLAKE_DB,
-    CLASSIFICATION_JSON,
-    CARD2TAB2CARD_OUTPUT_JSON,
-    SCHEMA_LOG,
-    OUTPUT_DIR,
-)
+from src.utils import resolve_table_path, load_modelid_to_csvlist, load_csvs_to_modelids, get_device
+from src.config import MODELLAKE_DB, CARD2TAB2CARD_OUTPUT_JSON, OUTPUT_DIR, DEDUPED_HUGGING_CSVS
 
 def _get_csv_headers(csv_path: str) -> List[str]:
     """Read CSV header row and return normalized column names (lower, stripped, non-empty)."""
@@ -57,7 +46,6 @@ def _get_search_table2table():
     """Lazy import search_table2table from tab2tab."""
     global _tab2tab_search_table2table
     if _tab2tab_search_table2table is None:
-        import sys
         print(f"   [DEBUG] Importing search_table2table from tab2tab...")
         sys.stdout.flush()
         from src.search.tab2tab import search_table2table
@@ -70,7 +58,6 @@ def _get_search_table2table_by_type():
     """Lazy import search_table2table_by_type from tab2tab_by_type."""
     global _tab2tab_by_type_search_table2table_by_type
     if _tab2tab_by_type_search_table2table_by_type is None:
-        import sys
         print(f"   [DEBUG] Importing search_table2table_by_type from tab2tab_by_type...")
         sys.stdout.flush()
         from src.search.tab2tab_by_type import search_table2table_by_type
@@ -122,19 +109,7 @@ def _filter_s2orc_tables(tables: List[str]) -> List[str]:
         print(f"ℹ️  Filtered out {len(tables) - len(out)} s2orc/llm tables (remain: {len(out)})")
     return out
 
-def search_card2tab2card(
-    model_id: str,
-    relationship_parquet: Optional[str] = None,
-    query: Optional[Any] = None,
-    search_type: str = "single_column",
-    k: int = 10,
-    table_search_k: Optional[int] = None,
-    modelcard_k: Optional[int] = None,
-    schema_log_path: str = "../ModelTables/logs/parquet_schema.log",
-    output_json: str = "data/card2tab2card_results.json",
-    db_path: Optional[str] = None,
-    global_table_topk: bool = True,
-) -> List[str]:
+def search_card2tab2card(model_id: str, query: Optional[Any] = None, search_type: str = "single_column", k: int = 10, table_search_k: Optional[int] = None, modelcard_k: Optional[int] = None, output_json: str = CARD2TAB2CARD_OUTPUT_JSON, global_table_topk: bool = True) -> List[str]:
     """
     Search for model cards via table search.
     
@@ -145,20 +120,6 @@ def search_card2tab2card(
     2. Use tab2tab to search for similar tables
     3. Map retrieved tables back to model cards using a get_from-style function (or relationship)
     
-    Args:
-        model_id: Hugging Face model ID to search from
-        relationship_parquet: Optional path to relationship parquet file (fallback if get_from-based approach not available)
-        query: Optional query data for table search. If None, uses tables from the model
-        search_type: Type of table search - "single_column", "multi_column", "keyword", or "unionable"
-        k: Legacy parameter for backward compatibility. If table_search_k or modelcard_k are None, uses k for both.
-        table_search_k: Number of table results to retrieve (defaults to k if not provided)
-        modelcard_k: Number of final model card results to return (defaults to k if not provided)
-        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
-        output_json: Optional path to save results as JSON
-        db_path: Path to modellake.db (default: ../ModelTables/data/modellake.db)
-        global_table_topk: If True (default), when model has multiple tables: search each table as equivalent query,
-            merge results round-robin, take global top-k. Ensures table_search_k limits total tables, not per-table.
-    
     Returns:
         List of model IDs that have similar tables
     """
@@ -168,7 +129,6 @@ def search_card2tab2card(
     if modelcard_k is None:
         modelcard_k = k
     # Print pipeline overview
-    import sys
     sys.stdout.flush()  # Ensure output is flushed
     print(f"\n{'='*60}")
     print(f"🔍 Card2Tab2Card Search Pipeline")
@@ -177,13 +137,6 @@ def search_card2tab2card(
     print(f"{'='*60}\n")
     sys.stdout.flush()
     # Resolve relationship parquet path (default or first existing)
-    if relationship_parquet is None:
-        relationship_parquet = DEFAULT_RELATIONSHIP_PARQUET
-    if not os.path.exists(relationship_parquet):
-        raise FileNotFoundError(
-            f"relationship_parquet not found: {relationship_parquet}\n"
-            "Use --relationship_parquet or set path in src.config (RELATIONSHIP_PARQUET)."
-        )
     # Get tables for the query model (DuckDB or full parquet load)
     query_tables = load_modelid_to_csvlist(model_id=model_id)
     query_tables = _filter_s2orc_tables(query_tables)
@@ -204,7 +157,6 @@ def search_card2tab2card(
             }
             os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
             with open(output_json, 'w', encoding='utf-8') as f:
-                import json
                 json.dump(result, f, ensure_ascii=False, indent=2)
             print(f"✅ Results saved to {output_json}")
         return []
@@ -293,12 +245,6 @@ def search_card2tab2card(
     print(f"✅ Table Search Top K: {table_search_k}")
     print(f"✅ ModelCard Top K: {modelcard_k}")
     
-    # Search for similar tables using tab2tab (lazy import)
-    # Default db_path from config if not provided
-    if db_path is None:
-        db_path = MODELLAKE_DB
-    print(f"✅ Database: {db_path}")
-    
     print(f"🔎 Getting search_table2table function...")
     sys.stdout.flush()
     search_table2table = _get_search_table2table()
@@ -333,7 +279,7 @@ def search_card2tab2card(
                 if not tquery:
                     return None
             t0 = time.time()
-            ids = search_table2table(tquery, st, k_request, db_path=db)
+            ids = search_table2table(tquery, st, k_request)
             elapsed = time.time() - t0
             bn = os.path.basename(str(table_path))
             ts = time.strftime("%H:%M:%S")
@@ -347,7 +293,7 @@ def search_card2tab2card(
             sys.stdout.flush()
             return (ids, bn) if ids else None
 
-        tables_to_search = [(ti, tp, search_type, db_path) for ti, tp in enumerate(query_tables[:20])]
+        tables_to_search = [(ti, tp, search_type) for ti, tp in enumerate(query_tables[:20])]
         max_workers = min(8, len(tables_to_search))  # Parallel table search
         results_by_ti: Dict[int, Tuple[List[int], str]] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -364,8 +310,7 @@ def search_card2tab2card(
         all_ids = [tid for ids, _ in per_table_results for tid in ids]
         tableid_to_filename: Dict[int, str] = {}
         if all_ids:
-            import duckdb
-            with duckdb.connect(db_path, read_only=True) as con_filter:
+            with duckdb.connect(MODELLAKE_DB, read_only=True) as con_filter:
                 table_ids_str = ','.join(str(tid) for tid in all_ids)
                 filename_query = f"""
                     SELECT DISTINCT tableid, filename
@@ -420,14 +365,14 @@ def search_card2tab2card(
                 target_col = query[numeric_cols[0]].tolist()
                 print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
                 similar_table_ids = search_table2table(
-                    query, search_type, k_overfetch, db_path=db_path,
+                    query, search_type, k_overfetch,
                     source_column=source_col, target_column=target_col
                 )
             else:
                 print(f"⚠️  No numeric column found for correlation search, skipping...")
                 similar_table_ids = []
         else:
-            similar_table_ids = search_table2table(query, search_type, k_overfetch, db_path=db_path)
+            similar_table_ids = search_table2table(query, search_type, k_overfetch)
         print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs)")
     sys.stdout.flush()
     
@@ -446,16 +391,14 @@ def search_card2tab2card(
                     "table_to_models": {}
                 }
             }
-            os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+            os.makedirs(os.path.dirname(output_json), exist_ok=True)
             with open(output_json, 'w', encoding='utf-8') as f:
-                import json
                 json.dump(result, f, ensure_ascii=False, indent=2)
             print(f"✅ Results saved to {output_json}")
         return []
     
     # Get filenames for retrieved tables from database
-    import duckdb
-    with duckdb.connect(db_path, read_only=True) as con:
+    with duckdb.connect(MODELLAKE_DB, read_only=True) as con:
         table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
         filename_query = f"""
             SELECT DISTINCT tableid, filename 
@@ -477,8 +420,7 @@ def search_card2tab2card(
     print(f"✅ Mapping {len(similar_table_ids)} retrieved tables to model cards...")
     
     # Get filenames for retrieved tables from database
-    import duckdb
-    with duckdb.connect(db_path, read_only=True) as con:
+    with duckdb.connect(MODELLAKE_DB, read_only=True) as con:
         if not similar_table_ids:
             print(f"⚠️  No table IDs to map")
             # Still save intermediate results even if no tables found
@@ -494,9 +436,8 @@ def search_card2tab2card(
                         "table_to_models": {}
                     }
                 }
-                os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+                os.makedirs(os.path.dirname(output_json), exist_ok=True)
                 with open(output_json, 'w', encoding='utf-8') as f:
-                    import json
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 print(f"✅ Results saved to {output_json}")
             return []
@@ -563,9 +504,8 @@ def search_card2tab2card(
                         "table_to_models": {}
                     }
                 }
-                os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+                os.makedirs(os.path.dirname(output_json), exist_ok=True)
                 with open(output_json, 'w', encoding='utf-8') as f:
-                    import json
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 print(f"✅ Results saved to {output_json}")
             return []
@@ -577,7 +517,6 @@ def search_card2tab2card(
 
     # Map table basenames to model IDs via relationship parquet (DuckDB or full load)
     table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
-    print(f"📋 Using relationship_parquet to map tables to model cards...")
     print(f"📝 Matching {len(table_basenames)} table basenames...")
     print(f"   Sample basenames: {table_basenames[:3]}{'...' if len(table_basenames) > 3 else ''}")
     basename_to_models = load_csvs_to_modelids(table_basenames)
@@ -591,7 +530,7 @@ def search_card2tab2card(
             print(f"   ✅ Matched {basename} -> {len(matched_models)} models")
         else:
             print(f"   ⚠️  No match for {basename}")
-    print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
+    print(f"✅ Matched {len(similar_model_ids)} model cards")
     
     # Per-table model count (value_counts): which tables span how many models (user cares about "countless" tables)
     if table_to_models:
@@ -655,7 +594,7 @@ def search_card2tab2card(
                 "table_to_models": table_to_models
             }
         }
-        os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+        os.makedirs(os.path.dirname(output_json), exist_ok=True)
         with open(output_json, 'w', encoding='utf-8') as f:
             import json
             json.dump(result, f, ensure_ascii=False, indent=2)
@@ -664,24 +603,11 @@ def search_card2tab2card(
     return final_results
 
 
-def search_card2tab2card_from_tables(
-    model_id: str,
-    table_search_results: Dict[str, List[str]],
-    schema_log_path: str = "../ModelTables/logs/parquet_schema.log",
-    k: int = 10,
-    modelcard_k: Optional[int] = None
-) -> List[str]:
+def search_card2tab2card_from_tables(model_id: str, table_search_results: Dict[str, List[str]], k: int = 10, modelcard_k: Optional[int] = None) -> List[str]:
     """
     Search for model cards using pre-computed table search results.
     
     This is useful when you have already run table search and have the results.
-    
-    Args:
-        model_id: Hugging Face model ID to search from
-        table_search_results: Dictionary mapping CSV basename/path to list of similar CSV basenames/paths
-        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
-        k: Legacy parameter for backward compatibility. If modelcard_k is None, uses k.
-        modelcard_k: Maximum number of model card results to return (defaults to k if not provided)
     
     Returns:
         List of model IDs that have similar tables
@@ -743,18 +669,7 @@ def search_card2tab2card_from_tables(
     return final_results
 
 
-def search_card2tab2card_by_type(
-    model_id: str,
-    query: Optional[Any] = None,
-    search_type: str = "single_column",
-    k: int = 10,
-    table_search_k: Optional[int] = None,
-    modelcard_k: Optional[int] = None,
-    schema_log_path: str = SCHEMA_LOG,
-    output_json: str = TAB2TAB_BY_TYPE_OUTPUT_JSON,
-    classification_json: Optional[str] = CLASSIFICATION_JSON,
-    classifications: Optional[Dict[int, str]] = None,
-) -> List[str]:
+def search_card2tab2card_by_type(model_id: str, query: Optional[Any] = None, search_type: str = "single_column", k: int = 10, table_search_k: Optional[int] = None, modelcard_k: Optional[int] = None, output_json: str = TAB2TAB_BY_TYPE_OUTPUT_JSON) -> List[str]:
     """
     Search for model cards via table search with classification filtering.
     
@@ -768,19 +683,6 @@ def search_card2tab2card_by_type(
     2. Classify the query table
     3. Use tab2tab_by_type to search for similar tables (filtered by classification)
     4. Map retrieved tables back to model cards using a get_from-style function (or relationship)
-    
-    Args:
-        model_id: Hugging Face model ID to search from
-        query: Optional query data for table search. If None, uses tables from the model
-        search_type: Type of table search - "single_column", "multi_column", "keyword", or "unionable"
-        k: Legacy parameter for backward compatibility. If table_search_k or modelcard_k are None, uses k for both.
-        table_search_k: Number of table results to retrieve (defaults to k if not provided)
-        modelcard_k: Number of final model card results to return (defaults to k if not provided)
-        schema_log_path: Path to parquet_schema.log (for get_from-style approach)
-        output_json: Optional path to save results as JSON
-        db_path: Path to modellake.db (default: ../ModelTables/data/modellake.db)
-        classification_json: Path to JSON file with pre-computed classifications
-        classifications: Optional pre-loaded classifications dictionary (tableid -> label)
     
     Returns:
         List of model IDs that have similar tables (filtered by classification)
@@ -818,7 +720,7 @@ def search_card2tab2card_by_type(
                     "table_to_models": {}
                 }
             }
-            os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
+            os.makedirs(os.path.dirname(output_json), exist_ok=True)
             with open(output_json, 'w', encoding='utf-8') as f:
                 import json
                 json.dump(result, f, ensure_ascii=False, indent=2)
@@ -864,13 +766,6 @@ def search_card2tab2card_by_type(
     print(f"✅ Table Search Top K: {table_search_k}")
     print(f"✅ ModelCard Top K: {modelcard_k}")
     
-    db_path = MODELLAKE_DB
-    print(f"✅ Database: {db_path}")
-    
-    # Default classification_json
-    if classification_json is None:
-        classification_json = CLASSIFICATION_JSON
-    
     # Initialize variables
     similar_table_ids = []
     tableid_to_filename = {}
@@ -890,7 +785,7 @@ def search_card2tab2card_by_type(
         sys.stdout.flush()
 
         def _search_one_by_type(args):
-            ti, table_path, st, db, cj, cl = args
+            ti, table_path, st, cl = args
             csv_path = resolve_table_path(table_path)
             if not csv_path:
                 return None
@@ -898,8 +793,7 @@ def search_card2tab2card_by_type(
             if not tquery:
                 return None
             t0 = time.time()
-            ids = search_table2table_by_type(tquery, st, k_request, db_path=db,
-                classification_json=cj, classifications=cl)
+            ids = search_table2table_by_type(tquery, st, k_request, classifications=cl)
             elapsed = time.time() - t0
             bn = os.path.basename(str(table_path))
             ts = time.strftime("%H:%M:%S")
@@ -907,7 +801,7 @@ def search_card2tab2card_by_type(
             sys.stdout.flush()
             return (ids, bn) if ids else None
 
-        tables_to_search = [(ti, tp, search_type, db_path, classification_json, classifications) for ti, tp in enumerate(query_tables[:20])]
+        tables_to_search = [(ti, tp, search_type, classifications) for ti, tp in enumerate(query_tables[:20])]
         max_workers = min(8, len(tables_to_search))
         results_by_ti = {}
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -923,7 +817,7 @@ def search_card2tab2card_by_type(
         all_ids = [tid for ids, _ in per_table_results for tid in ids]
         tableid_to_filename: Dict[int, str] = {}
         if all_ids:
-            with duckdb.connect(db_path, read_only=True) as con_filter:
+            with duckdb.connect(MODELLAKE_DB, read_only=True) as con_filter:
                 table_ids_str = ','.join(str(tid) for tid in all_ids)
                 filename_query = f"""
                     SELECT DISTINCT tableid, filename
@@ -974,8 +868,7 @@ def search_card2tab2card_by_type(
                 target_col = query[numeric_cols[0]].tolist()
                 print(f"   Correlation: source='{query.columns[0]}', target='{numeric_cols[0]}'")
                 similar_table_ids = search_table2table_by_type(
-                    query, search_type, table_search_k, db_path=db_path,
-                    classification_json=classification_json,
+                    query, search_type, table_search_k,
                     classifications=classifications,
                     source_column=source_col, target_column=target_col
                 )
@@ -984,8 +877,7 @@ def search_card2tab2card_by_type(
                 similar_table_ids = []
         else:
             similar_table_ids = search_table2table_by_type(
-                query, search_type, table_search_k, db_path=db_path,
-                classification_json=classification_json,
+                query, search_type, table_search_k,
                 classifications=classifications
             )
         print(f"✅ Found {len(similar_table_ids)} retrieved tables (table IDs, filtered by classification)")
@@ -1014,7 +906,7 @@ def search_card2tab2card_by_type(
     
     # Get filenames for retrieved tables from database
     import duckdb
-    with duckdb.connect(db_path, read_only=True) as con:
+    with duckdb.connect(MODELLAKE_DB, read_only=True) as con:
         table_ids_str = ','.join(str(tid) for tid in similar_table_ids)
         filename_query = f"""
             SELECT DISTINCT tableid, filename 
@@ -1058,7 +950,6 @@ def search_card2tab2card_by_type(
     models_raw_count = 0
 
     table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
-    print(f"📋 Using relationship_parquet to map tables to model cards...")
     basename_to_models = load_csvs_to_modelids(table_basenames)
     for filename in retrieved_filenames:
         basename = os.path.basename(filename)
@@ -1067,7 +958,7 @@ def search_card2tab2card_by_type(
             models_raw_count += len(matched_models)
             similar_model_ids.update(matched_models)
             table_to_models[filename] = matched_models
-    print(f"✅ Matched {len(similar_model_ids)} model cards from relationship data")
+    print(f"✅ Matched {len(similar_model_ids)} model cards")
     
     # Per-table model count (value_counts): which tables span how many models
     if table_to_models:
@@ -1130,7 +1021,6 @@ def search_card2tab2card_by_type(
         }
         os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else '.', exist_ok=True)
         with open(output_json, 'w', encoding='utf-8') as f:
-            import json
             json.dump(result, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {output_json}")
     
@@ -1140,33 +1030,15 @@ def search_card2tab2card_by_type(
 def main():
     """CLI entry point for card2tab2card search"""
     parser = argparse.ArgumentParser(description="Card to Tab to Card Search")
-    parser.add_argument('--model_id', required=True,
-                       help='Hugging Face model ID to search from')
-    parser.add_argument('--query', default=None,
-                       help='Table search query: for mode=all a CSV path (required); for mode=single comma-separated values or CSV path')
-    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'],
-                       default='keyword',
-                       help='Type of table search')
-    parser.add_argument('--k', type=int, default=10,
-                       help='Number of table results to retrieve (table_search_k)')
-    parser.add_argument('--modelcard_k', type=int, default=0,
-                       help='Max model cards to return (0 = no limit)')
-    parser.add_argument('--table_search_json', default=None,
-                       help='Optional: Path to pre-computed table search results JSON')
-    parser.add_argument('--mode', choices=['single', 'all', 'by_type'], default='single',
-                       help='Search mode: single / all / by_type')
-    parser.add_argument('--output_json', default=CARD2TAB2CARD_OUTPUT_JSON,
-                       help='Output JSON path (default from src.config; demo overrides for job dir)')
+    parser.add_argument('--model_id', required=True, help='Hugging Face model ID to search from')
+    parser.add_argument('--query', default=None, help='Table search query: for mode=all a CSV path (required); for mode=single comma-separated values or CSV path')
+    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'], default='keyword', help='Type of table search')
+    parser.add_argument('--k', type=int, default=10, help='Number of table results to retrieve (table_search_k)')
+    parser.add_argument('--modelcard_k', type=int, default=0, help='Max model cards to return (0 = no limit)')
+    parser.add_argument('--table_search_json', default=None, help='Optional: Path to pre-computed table search results JSON')
+    parser.add_argument('--mode', choices=['single', 'all', 'by_type'], default='single',help='Search mode: single / all / by_type')
     args = parser.parse_args()
 
-    # Paths from src.config (only --output_json can override for job-specific output)
-    relationship_parquet = RELATIONSHIP_PARQUET
-    schema_log = SCHEMA_LOG
-    output_json = args.output_json
-    output_folder = OUTPUT_DIR
-    db_path = MODELLAKE_DB
-    classification_json = CLASSIFICATION_JSON
-    
     try:
         start_time = time.time()
         # If mode=all, run all three search types
@@ -1174,7 +1046,7 @@ def main():
             print(f"\n{'='*60}")
             print(f"🚀 Running ALL search modes")
             print(f"{'='*60}")
-            print(f"Output folder: {output_folder}")
+            print(f"Output folder: {OUTPUT_DIR}")
             print(f"Will run: single_column, keyword, unionable")
             print(f"{'='*60}\n")
             
@@ -1194,23 +1066,12 @@ def main():
             query_df = pd.read_csv(args.query)
             print(f"✅ Loaded CSV with {len(query_df)} rows and {len(query_df.columns)} columns")
             
-            # Ensure output folder exists
-            os.makedirs(output_folder, exist_ok=True)
             
             # Define search configurations
             search_configs = [
-                {
-                    'type': 'single_column',
-                    'output': os.path.join(output_folder, 'card2tab2card_singlecol_results.json')
-                },
-                {
-                    'type': 'keyword',
-                    'output': os.path.join(output_folder, 'card2tab2card_keyword_results.json')
-                },
-                {
-                    'type': 'unionable',
-                    'output': os.path.join(output_folder, 'card2tab2card_unionable_results.json')
-                }
+                {'type': 'single_column','output': os.path.join(OUTPUT_DIR, 'card2tab2card_singlecol_results.json')},
+                {'type': 'keyword','output': os.path.join(OUTPUT_DIR, 'card2tab2card_keyword_results.json')},
+                {'type': 'unionable','output': os.path.join(OUTPUT_DIR, 'card2tab2card_unionable_results.json')}
             ]
             
             all_results = {}
@@ -1246,30 +1107,12 @@ def main():
                     print(f"✅ Using entire DataFrame ({len(query)} rows, {len(query.columns)} columns) for unionable search")
                 
                 try:
-                    results = search_card2tab2card(
-                        model_id=args.model_id,
-                        relationship_parquet=relationship_parquet,
-                        query=query,
-                        search_type=search_type,
-                        k=args.k,
-                        schema_log_path=schema_log,
-                        output_json=output_path,
-                        db_path=db_path
-                    )
-                    all_results[search_type] = {
-                        'count': len(results),
-                        'results': results,
-                        'output': output_path
-                    }
+                    results = search_card2tab2card(model_id=args.model_id, query=query, search_type=search_type, k=args.k, output_json=CARD2TAB2CARD_OUTPUT_JSON)
+                    all_results[search_type] = {'count': len(results), 'results': results, 'output': output_path}
                     print(f"✅ {search_type} search completed: {len(results)} results saved to {output_path}")
                 except Exception as e:
                     print(f"❌ Error in {search_type} search: {e}")
-                    all_results[search_type] = {
-                        'count': 0,
-                        'results': [],
-                        'output': output_path,
-                        'error': str(e)
-                    }
+                    all_results[search_type] = {'count': 0, 'results': [], 'output': output_path, 'error': str(e)}
             
             # Summary
             print(f"\n{'='*60}")
@@ -1288,7 +1131,6 @@ def main():
             print(f"🚀 Running Card2Tab2Card Search (by Type)")
             print(f"{'='*60}")
             print(f"Mode: Classification-filtered search")
-            print(f"Classification JSON: {classification_json}")
             print(f"{'='*60}\n")
             
             # Parse query based on search type (if provided)
@@ -1303,18 +1145,7 @@ def main():
                 elif args.search_type == 'keyword':
                     query = [x.strip() for x in args.query.split(',')]
             
-            results = search_card2tab2card_by_type(
-                model_id=args.model_id,
-                relationship_parquet=relationship_parquet,
-                query=query,
-                search_type=args.search_type,
-                k=args.k,
-                schema_log_path=schema_log,
-                output_json=output_json,
-                db_path=db_path,
-                classification_json=classification_json
-            )
-            
+            results = search_card2tab2card_by_type(model_id=args.model_id, query=query, search_type=args.search_type, k=args.k, output_json=CARD2TAB2CARD_OUTPUT_JSON)
             print(f"Found {len(results)} similar model cards for {args.model_id} (filtered by classification):")
             for i, model_id in enumerate(results, 1):
                 print(f"  {i}. {model_id}")
@@ -1323,16 +1154,9 @@ def main():
             # Single mode - original behavior
             # If table_search_json is provided, use pre-computed results
             if args.table_search_json:
-                import json
                 with open(args.table_search_json, 'r') as f:
                     table_search_results = json.load(f)
-                results = search_card2tab2card_from_tables(
-                    model_id=args.model_id,
-                    table_search_results=table_search_results,
-                    relationship_parquet=relationship_parquet,
-                    schema_log_path=schema_log,
-                    k=args.k
-                )
+                results = search_card2tab2card_from_tables(model_id=args.model_id, table_search_results=table_search_results, k=args.k)
             else:
                 # Parse query based on search type (if provided)
                 query = None
@@ -1346,18 +1170,7 @@ def main():
                     elif args.search_type == 'keyword':
                         query = [x.strip() for x in args.query.split(',')]
                 
-                results = search_card2tab2card(
-                    model_id=args.model_id,
-                    relationship_parquet=relationship_parquet,
-                    query=query,
-                    search_type=args.search_type,
-                    k=args.k,
-                    table_search_k=args.k,
-                    modelcard_k=args.modelcard_k,
-                    schema_log_path=schema_log,
-                    output_json=output_json,
-                    db_path=db_path
-                )
+                results = search_card2tab2card(model_id=args.model_id, query=query, search_type=args.search_type, k=args.k, table_search_k=args.k, modelcard_k=args.modelcard_k, output_json=CARD2TAB2CARD_OUTPUT_JSON)
             
             print(f"Found {len(results)} similar model cards for {args.model_id}:")
             for i, model_id in enumerate(results, 1):
@@ -1365,23 +1178,14 @@ def main():
 
         elapsed = time.time() - start_time
         # Inline device detection so we don't depend on src.utils (subprocess may have different path)
-        def _device_str():
-            try:
-                import torch
-                return "cuda" if torch.cuda.is_available() else "cpu"
-            except Exception:
-                return "cpu"
-        print(f"\nTotal time: {elapsed:.2f}s (device: {_device_str()})")
+        print(f"\nTotal time: {elapsed:.2f}s (device: {get_device()})")
     except Exception as e:
         print(f"❌ Error: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)
 
 
 if __name__ == '__main__':
-    import sys
-    
     # If running as test (python src/search/card2tab2card.py test), run test cases
     if len(sys.argv) > 1 and sys.argv[1] == 'test':
         # Import directly from classification module to avoid __init__.py dependencies
@@ -1399,7 +1203,6 @@ if __name__ == '__main__':
         print("\n[Test 1] Test classification loading")
         print("-" * 60)
         import tempfile
-        import json as json_module
         
         temp_class_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
         mock_classifications = {
@@ -1407,7 +1210,7 @@ if __name__ == '__main__':
             "2": "numerical",
             "3": "categorical"
         }
-        json_module.dump(mock_classifications, temp_class_file)
+        json.dump(mock_classifications, temp_class_file)
         temp_class_file.close()
         
         try:

@@ -45,6 +45,9 @@ CLASSIFICATION_OUTPUT_JSON     = CLASSIFICATION_JSON
 EMB_NPZ                        = os.path.join(OUTPUT_DIR, "card2card_embeddings.npz")
 FAISS_INDEX                    = os.path.join(OUTPUT_DIR, "card2card.faiss")
 SPARSE_INDEX                   = os.path.join(OUTPUT_DIR, "card2card_sparse_index")
+CARD2CARD_CORPUS_JSONL         = os.path.join(OUTPUT_DIR, "card2card_corpus.jsonl")
+CARD2CARD_SPARSE_CORPUS        = os.path.join(OUTPUT_DIR, "card2card_sparse_corpus")
+CARD2CARD_NEIGHBORS_JSON       = os.path.join(OUTPUT_DIR, "card2card_neighbors.json")
 
 PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
 

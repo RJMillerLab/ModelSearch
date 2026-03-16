@@ -10,7 +10,7 @@
 
 | Phase | What | When |
 |-------|------|------|
-| **Preprocessing (run once)** | **Build modelcard index** — encode full corpus → `.npz` + `.faiss`; optional `.jsonl`. | Before query2modelcard / card2card. |
+| **Preprocessing (run once)** | **Build modelcard index** — encode full corpus → `.npz` + `.faiss`. | Before query2modelcard / card2card. |
 | | **Build sparse index** — Pyserini Lucene BM25 → `data/card2card_sparse_index` (1.1b). | Train once; inference then only loads index. |
 | | **Blend + data** — clone/symlink Blend_internal and data dirs. | Once per env. |
 | | **Valid model IDs txt** — `scripts/build_valid_model_ids_txt.py` → `data/valid_model_ids_with_tables.txt`. | Optional; before demo “Narrow down” (seed with tables). |
@@ -31,9 +31,7 @@
 Paths from `src.config` (e.g. `RAW_DIR`). Override with env if needed.
 
 ```bash
-# one-step (recommended)
-python -m src.search.card2card build-index --field card --output_npz data/card2card_embeddings.npz --output_index data/card2card.faiss
-# optional: --output_jsonl data/card2card_corpus.jsonl --device cuda
+python -m src.search.card2card build-index --field card
 ```
 
 Optional 3-step (baseline1): `build_modelcard_jsonl` → `table_retrieval_pipeline encode` → `table_retrieval_pipeline build_faiss`.
@@ -45,7 +43,7 @@ Uses **Pyserini** (Lucene BM25), same as ModelTables baseline2. **Train** = buil
 **Train (run once):**
 
 ```bash
-python -m src.search.card2card build-sparse-index --jsonl_path data/card2card_corpus.jsonl --corpus_dir data/card2card_sparse_corpus --output_index data/card2card_sparse_index
+python -m src.search.card2card build-sparse-index
 ```
 
 This copies the JSONL into `corpus_dir` and runs `pyserini.index.lucene` (JsonCollection, DefaultLuceneDocumentGenerator, --storeRaw). Output is a Lucene index directory at `output_index`.
@@ -56,7 +54,9 @@ This copies the JSONL into `corpus_dir` and runs `pyserini.index.lucene` (JsonCo
 
 ```bash
 # clone or symlink Blend_internal; symlink data if needed
-git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
+git clone git@github.com:DoraDong-2023/Blend_internal.git 
+git clone git@github.com:RJMillerLab/ModelTables.git
+ln -s ../Blend_internal src/Blend_internal
 # reuse data from ModelTables
 ```
 
@@ -65,8 +65,7 @@ git clone git@github.com:DoraDong-2023/Blend_internal.git src/Blend_internal
 Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
 
 ```bash
-# Parquet and output from src.config (no path args required)
-python src/utils/build_valid_model_ids_txt.py --output data/valid_model_ids_with_tables.txt
+python -m src.utils.build_valid_model_ids_txt --output data/valid_model_ids_with_tables.txt
 ```
 
 Output: `data/valid_model_ids_with_tables.txt` (one model_id per line). Demo backend “Narrow down” reads this file only; it does not read parquet at request time.
@@ -103,20 +102,20 @@ python -m src.search.classification --mode batch --output_json data/table_classi
 ## 2.1 query2modelcard
 
 ```bash
-python -m src.search.query2modelcard --query "transformer model for code generation" --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 > logs/query2modelcard.log 2>&1
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 > logs/query2modelcard.log 2>&1
 ```
 
 ## 2.2 card2card (dense, sparse, hybrid)
 
-**Train vs inference:** Part 1 (1.1, 1.1b) = train: build modelcard index and sparse Lucene index. Part 2 = inference: only load those artifacts and run retrieval. Sparse uses Pyserini (same as ModelTables baseline2); pass `--sparse_index_path data/card2card_sparse_index` after running build-sparse-index.
+**Train vs inference:** Part 1 (1.1, 1.1b) = train: build modelcard index and sparse Lucene index. Part 2 = inference: only load those artifacts and run retrieval. Sparse uses Pyserini (same as ModelTables baseline2).
 
 ```bash
 # dense (FAISS only)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
 # sparse (Pyserini Lucene index from 1.1b)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --sparse_index_path data/card2card_sparse_index --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
 # hybrid (sparse + FAISS)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --sparse_index_path data/card2card_sparse_index --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
+python -m src.search.card2card search --model_id google-bert/bert-base-uncased --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
 ```
 
 ## 2.3 card2tab2card (keyword, all, by_type)
@@ -124,11 +123,8 @@ python -m src.search.card2card search --model_id google-bert/bert-base-uncased -
 Paths (db, relationship parquet, classification JSON, output) from `src.config`. Only `--model_id`, `--query` (for mode=all), `--search_type`, `--k`, `--mode` are passed.
 
 ```bash
-# single type: keyword
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
-# all search types (--query required: CSV path; e.g. from scripts/get_config_paths.py sample_csv)
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all --query ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0000e35dae_table1.csv > logs/card2tab2card_all.log 2>&1
-# by table type (needs 1.4)
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type > logs/card2tab2card_by_type.log 2>&1
 ```
 
@@ -139,11 +135,8 @@ Paths from `src.config`. Keyword = match column names; single_column = cell valu
 ```bash
 # keyword
 python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 > logs/tab2tab_keyword.log 2>&1
-# single_column
 python -m src.search.tab2tab --search_type single_column --query "val1,val2,val3" --k 10 > logs/tab2tab_single_column.log 2>&1
-# multi_column (CSV path; use get_config_paths.py sample_csv for default)
 python -m src.search.tab2tab --search_type multi_column --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_multi_column.log 2>&1
-# unionable
 python -m src.search.tab2tab --search_type unionable --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_unionable.log 2>&1
 ```
 
@@ -152,13 +145,9 @@ python -m src.search.tab2tab --search_type unionable --query "$(python scripts/g
 Same modes as tab2tab, filtered by table type. Paths from `src.config`. **--query** = table ID or CSV path.
 
 ```bash
-# keyword (table ID or path)
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type keyword --k 10 --output_json data/tab2tab_by_type_keyword_results.json > logs/tab2tab_by_type_keyword.log 2>&1
-# single_column
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type single_column --k 10 --output_json data/tab2tab_by_type_single_column_results.json > logs/tab2tab_by_type_single_column.log 2>&1
-# multi_column
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type multi_column --k 10 --output_json data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
-# unionable
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --output_json data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1 
 ```
 
@@ -169,12 +158,9 @@ If **multi_column** fails with `Scalar Function with name to_bitstring does not 
 Generate markdown to view/compare tables by table ID or model ID; or from all logs (query + search results → md/).
 
 ```bash
-# By table ID(s) or model ID
 python -m src.postprocess.generate_table_md --table_ids 3690 46228 26307 --output table_comparison.md
 python -m src.postprocess.generate_table_md --model_id google-bert/bert-base-uncased --output model_tables.md
-# From all logs → md/<log_basename>.md (paths from src.config)
 python -m src.postprocess.generate_md_from_logs --logs_dir logs --output_dir md
-# Single log
 python -m src.postprocess.generate_md_from_logs --log_file logs/card2tab2card_by_type.log --output_dir md
 ```
 
@@ -183,20 +169,9 @@ python -m src.postprocess.generate_md_from_logs --log_file logs/card2tab2card_by
 ## 2.7 Demo (evaluation, QA, integration)
 
 ```bash
-# Default: backend does not run card2tab2card by_type
 python -m src.demo.backend
 python -m src.demo.frontend
 # open http://localhost:5001
-```
-
-**Backend: enable table type (by_type).** Use an arg or env to run card2tab2card in by_type mode (requires 1.4 table classification).
-```bash
-# Enable by_type (table type classification)
-python -m src.demo.backend --use-by-type
-# Enable by_type and set classification JSON path
-python -m src.demo.backend --use-by-type --classification-json data/table_classifications.json
-# Enable by_type via environment variable
-USE_BY_TYPE=1 python -m src.demo.backend
 ```
 
 ## 2.8 baseline2 / baseline3 (table retrieval; from ModelTables)
@@ -219,12 +194,12 @@ cp -r ../ModelTables/src/baseline3 src/
 | Part 1 | |
 |--------|---|
 | Modelcard index | card2card build-index (or baseline1 3 steps) |
-| Sparse index (card2card) | card2card build-sparse-index --jsonl_path ... --output_index data/card2card_sparse_index |
+| Sparse index (card2card) | card2card build-sparse-index |
 | Blend | clone/symlink src/Blend_internal |
 | DuckDB index | create_index_duckdb --db_path data/modellake.db --data_glob ... |
 | Table classification | classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json (or --method heuristic) |
 | **Part 2** | |
-| query2modelcard | query2modelcard --query "..." --emb_npz ... --faiss_index ... --top_k 20 |
+| query2modelcard | query2modelcard --query "..." --top_k 20 |
 | card2card | search --retrieval_mode dense \| sparse \| hybrid (test all 3) |
 | card2tab2card | --search_type keyword, --mode all, --mode by_type (test all) |
 | tab2tab | --search_type keyword \| single_column \| multi_column \| unionable (test all 4) |

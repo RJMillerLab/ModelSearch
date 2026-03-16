@@ -851,33 +851,17 @@ To create modellake.db, use:
     --table modellake_index
         """
     )
-    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'],
-                       default='single_column', help='Type of search to perform')
-    parser.add_argument('--query', default=None,
-                       help='Query data. For single_column: comma-separated values. '
-                            'For multi_column: path to CSV file. For keyword: comma-separated keywords. '
-                            'For unionable: path to CSV file.')
-    parser.add_argument('--k', type=int, default=10,
-                       help='Number of results to return')
-    parser.add_argument('--test_table_id', type=int, default=None,
-                       help='Test with a specific table ID from modellake.db')
-    
+    parser.add_argument('--search_type', choices=['single_column', 'multi_column', 'keyword', 'unionable'], default='single_column', help='Type of search to perform')
+    parser.add_argument('--query', default=None, help='Query data. For single_column: comma-separated values. For multi_column: path to CSV file. For keyword: comma-separated keywords. For unionable: path to CSV file.')
+    parser.add_argument('--k', type=int, default=10, help='Number of results to return')
+    parser.add_argument('--test_table_id', type=int, default=None, help='Test with a specific table ID from modellake.db')
     args = parser.parse_args()
     start_time = time.time()
-
     db_path = MODELLAKE_DB
     output_path = TAB2TAB_OUTPUT_JSON
-
-    # Update Blend_internal config with db_path BEFORE any imports
-    # This must happen before _lazy_import_blend() is called
     _update_blend_config(db_path)
-    print(f"✅ Updated Blend_internal config to use db_path: {db_path}")
-    
-    # If no query provided, try to use test_table_id or require query
     if args.query is None and args.test_table_id is None:
         parser.error("Either --query or --test_table_id must be provided")
-    
-    # Parse query based on search type
     if args.query:
         if args.search_type == 'single_column':
             query = [x.strip() for x in args.query.split(',')]
@@ -888,13 +872,8 @@ To create modellake.db, use:
         elif args.search_type == 'keyword':
             query = [x.strip() for x in args.query.split(',')]
     else:
-        # Use test_table_id - for now, just use the table ID as a keyword
-        # This is a simplified test approach
         query = [str(args.test_table_id)]
         args.search_type = 'keyword'
-        print(f"Testing with table ID {args.test_table_id} as keyword")
-    
-    # Perform search    
     results = search_table2table(query, args.search_type, args.k, db_path=db_path)
     print(f"Found {len(results)} tables:")
     for i, table_id in enumerate(results, 1):
