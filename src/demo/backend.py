@@ -39,16 +39,8 @@ def _sanitize_for_json(obj: Any) -> Any:
 # Repo root (backend lives in src/demo/)
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
-# Paths from build_index.md (relative to repo root)
-DEFAULT_EMB_NPZ = "data/card2card_embeddings.npz"
-DEFAULT_FAISS_INDEX = "data/card2card.faiss"
-DEFAULT_SPARSE_INDEX = "data/card2card_sparse_index"
-from src.config import (
-    MODELLAKE_DB as DEFAULT_DB_PATH,
-    RELATIONSHIP_PARQUET as DEFAULT_RELATIONSHIP_PARQUET,
-    CLASSIFICATION_JSON,
-    OUTPUT_DIR,
-)
+# Paths from config.py (relative to repo root)
+from src.config import OUTPUT_DIR, EMB_NPZ, FAISS_INDEX, SPARSE_INDEX
 
 # All job outputs (search results, integration, evaluation, QA) live under data/jobs/<job_id>
 JOBS_DIR = os.path.join(REPO_ROOT, OUTPUT_DIR, "jobs")
@@ -313,8 +305,8 @@ def _run_pipeline_body(
                     sys.executable, q2m_script,
                     "--query", query,
                     "--top_k", str(q2m_top_k),
-                    "--emb_npz", DEFAULT_EMB_NPZ,
-                    "--faiss_index", DEFAULT_FAISS_INDEX,
+                    "--emb_npz", EMB_NPZ,
+                    "--faiss_index", FAISS_INDEX,
                     "--output_json", q2m_out,
                 ]
                 t0 = time.time()
@@ -358,8 +350,8 @@ def _run_pipeline_body(
                 sys.executable, q2m_script,
                 "--query", query,
                 "--top_k", "1",
-                "--emb_npz", DEFAULT_EMB_NPZ,
-                "--faiss_index", DEFAULT_FAISS_INDEX,
+                "--emb_npz", EMB_NPZ,
+                "--faiss_index", FAISS_INDEX,
                 "--output_json", q2m_out,
             ]
             t0 = time.time()
@@ -399,7 +391,7 @@ def _run_pipeline_body(
         check_cmd = [
             sys.executable, os.path.join(REPO_ROOT, "scripts", "check_model_in_index.py"),
             "--model_id", model_id,
-            "--emb_npz", DEFAULT_EMB_NPZ,
+            "--emb_npz", EMB_NPZ,
         ]
         t0 = time.time()
         rc, out, err = _run_cmd(check_cmd, REPO_ROOT, timeout=60)
@@ -414,34 +406,6 @@ def _run_pipeline_body(
             logger.set_results({"error": msg, "model_id": model_id, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
             return
         logger.log("Model ID found in dataset, proceeding.")
-
-    # Table search requires these files; fail early with clear message if missing
-    rel_path = os.path.join(REPO_ROOT, DEFAULT_RELATIONSHIP_PARQUET)
-    db_path_abs = os.path.join(REPO_ROOT, DEFAULT_DB_PATH)
-    if not os.path.isfile(rel_path):
-        logger.log(f"Table search unavailable: relationship_parquet not found at {rel_path}")
-        logger.set_status("error")
-        logger.set_results({
-            "error": f"Table search failed: relationship_parquet not found at {DEFAULT_RELATIONSHIP_PARQUET}. Please add the file or symlink data_citationlake.",
-            "model_id": model_id,
-            "card2card_results": [],
-            "card2tab2card_results": {},
-            "folder_path": job_dir,
-            "run_log_path": run_log_path,
-        })
-        return
-    if not os.path.isfile(db_path_abs):
-        logger.log(f"Table search unavailable: db not found at {db_path_abs}")
-        logger.set_status("error")
-        logger.set_results({
-            "error": f"Table search failed: db not found at {DEFAULT_DB_PATH}. Please build or copy modellake.db.",
-            "model_id": model_id,
-            "card2card_results": [],
-            "card2tab2card_results": {},
-            "folder_path": job_dir,
-            "run_log_path": run_log_path,
-        })
-        return
 
     k_table = table_search_k if table_search_k is not None else 1  # Per-table k: how many each table searches (default 1)
     # Card2Card top_k: use high default (100) so we have enough; will truncate to right's max for alignment
@@ -460,11 +424,11 @@ def _run_pipeline_body(
             "--output_json", out_path,
         ]
         if mode == "dense":
-            cmd.extend(["--emb_npz", DEFAULT_EMB_NPZ, "--faiss_index", DEFAULT_FAISS_INDEX])
+            cmd.extend(["--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX])
         elif mode == "sparse":
-            cmd.extend(["--sparse_index_path", DEFAULT_SPARSE_INDEX])
+            cmd.extend(["--sparse_index_path", SPARSE_INDEX])
         else:
-            cmd.extend(["--emb_npz", DEFAULT_EMB_NPZ, "--faiss_index", DEFAULT_FAISS_INDEX, "--sparse_index_path", DEFAULT_SPARSE_INDEX, "--hybrid_method", "rrf"])
+            cmd.extend(["--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX, "--sparse_index_path", SPARSE_INDEX, "--hybrid_method", "rrf"])
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT)
         elapsed = time.time() - t0
@@ -575,11 +539,11 @@ def _run_pipeline_body(
                 if rc != 0:
                     logger.log(f"[Card2Tab2Card-{st}] Used on-disk JSON despite exit code {rc} (CLI may have failed after writing)")
                 if len(lst) == 0 and qty == 0:
-                    logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {DEFAULT_RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
+                    logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
                     if table_search_empty_reason is None:
                         table_search_empty_reason = (
                             f"Seed model «{model_id}» has no tables in the dataset: it is not in "
-                            f"{DEFAULT_RELATIONSHIP_PARQUET} or has no csv_basename. "
+                            f"{RELATIONSHIP_PARQUET} or has no csv_basename. "
                             "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
                         )
                     cli_out = (err or out or "").strip()
@@ -595,23 +559,12 @@ def _run_pipeline_body(
                 if data is None:
                     logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
-    # When we skipped Table Search (require_seed_has_tables but none had tables), fill empty
-    if seed_no_tables_skip_table_search:
-        for st in card2tab2card_types:
-            card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
-        if table_search_empty_reason is None:
-            table_search_empty_reason = (
-                "None of the top-20 models from the query have tables in the dataset. "
-                "Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
-            )
-    # Fill missing card2tab2card types with empty (no scan)
-    fill_types = ["multi_column", "unionable", "complex", "correlation", "imputation", "augmentation",
-                  "dependent_data", "feature_for_ml", "multi_column_collinearity", "negative_example"]
-    if USE_BY_TYPE and "by_type" not in card2tab2card_all:
-        fill_types = ["by_type"] + fill_types
-    for st in fill_types:
-        if st not in card2tab2card_all:
-            card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
+    # When we skipped Table Search (require_seed_has_tables but none had tables), record reason only
+    if seed_no_tables_skip_table_search and table_search_empty_reason is None:
+        table_search_empty_reason = (
+            "None of the top-20 models from the query have tables in the dataset. "
+            "Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
+        )
 
     # Right pipeline max: take max model count across all card2tab2card types
     max_right = 0
@@ -961,29 +914,18 @@ def integrate():
     tables_source = data.get("tables_source", "intermediate")
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from integration.table_integration import integrate_tables_from_search_results
-        result = integrate_tables_from_search_results(
+        from integration.table_integration import integrate_tables_from_card2tab2card
+        result = integrate_tables_from_card2tab2card(
             search_results_json=results_file,
             search_type=search_type,
             integration_type=integration_type,
             k=k,
-            db_path=DEFAULT_DB_PATH,
             tables_source=tables_source,
-            relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET if tables_source == "all_from_modelcards" else None,
         )
         run_key = _table_search_key(integration_type, search_type, tables_source)
 
         if not result.get("success", False):
-            save_payload = {
-                "status": "no_result",
-            "integration_type": integration_type,
-                "search_type": search_type,
-                "tables_source": tables_source,
-            "k": k,
-                "max_models": max_models,
-                "error": result.get("error", "Integration failed"),
-                "message": result.get("error", "Integration failed"),
-            }
+            save_payload = {"status": "no_result", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
             json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
@@ -995,10 +937,7 @@ def integrate():
         saved_path = None
         if integrated_df is not None:
             raw_data = integrated_df.values.tolist()
-            result["integrated_table"] = {
-                "columns": list(integrated_df.columns),
-                "data": _sanitize_for_json(raw_data)
-            }
+            result["integrated_table"] = {"columns": list(integrated_df.columns), "data": _sanitize_for_json(raw_data)}
             csv_name = f"integrated_table_search_{run_key}.csv"
             save_path = os.path.join(job_dir, csv_name)
             integrated_df.to_csv(save_path, index=False, encoding="utf-8")
@@ -1008,15 +947,7 @@ def integrate():
         # Ensure models_with_tables is always present for Table Search (model IDs used in this integration; may differ from full retrieval list)
         if "models_with_tables" not in result:
             result["models_with_tables"] = []
-        save_payload = {
-            "status": "success",
-            "integration_type": integration_type,
-            "search_type": search_type,
-            "tables_source": tables_source,
-            "k": k,
-            "max_models": max_models,
-            **result,
-        }
+        save_payload = {"status": "success", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, **result}
         json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(save_payload, f, ensure_ascii=False, indent=0)
@@ -1046,33 +977,19 @@ def integrate_model_search():
     card2card_retrieval_mode = data.get("card2card_retrieval_mode") or None
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from integration.table_integration import integrate_tables_from_model_search_results
+        from integration.table_integration import integrate_tables_from_card2card
         
-        # For the demo backend we don't rely on any external get_from service.
-        # Force integration to use the local relationship_parquet instead of a live get_from backend,
-        # to avoid "mapping not available ... no fallback data found" errors.
-        result = integrate_tables_from_model_search_results(
+        result = integrate_tables_from_card2card(
             search_results_json=results_file,
             integration_type=integration_type,
             k=k,
             max_models=max_models,
-            db_path=DEFAULT_DB_PATH,
-            relationship_parquet=DEFAULT_RELATIONSHIP_PARQUET,
-            use_citationlake=False,
             card2card_retrieval_mode=card2card_retrieval_mode,
         )
         run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
 
         if not result.get("success", False):
-            save_payload = {
-                "status": "no_result",
-            "integration_type": integration_type,
-                "card2card_retrieval_mode": card2card_retrieval_mode or "dense",
-            "k": k,
-            "max_models": max_models,
-                "error": result.get("error", "Integration failed"),
-                "message": result.get("error", "Integration failed"),
-            }
+            save_payload = {"status": "no_result", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
             json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, ensure_ascii=False, indent=0)
@@ -1094,14 +1011,7 @@ def integrate_model_search():
             saved_path = os.path.join("data", "jobs", job_id, csv_name)
         if saved_path:
             result["saved_path"] = saved_path
-        save_payload = {
-            "status": "success",
-            "integration_type": integration_type,
-            "card2card_retrieval_mode": card2card_retrieval_mode or "dense",
-            "k": k,
-            "max_models": max_models,
-            **result,
-        }
+        save_payload = {"status": "success", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, **result}
         json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(save_payload, f, ensure_ascii=False, indent=0)
@@ -1176,11 +1086,7 @@ def evaluate():
         table1_df, table2_df = _load_tables_from_integration_run(job_dir, integration_run_key)
     if table1_df is None or table2_df is None:
         table1_df = _load_integrated_table_from_json(job_dir, "integration_table_search.json")
-        if table1_df is None:
-            table1_df = _load_integrated_table_from_csv(job_dir, "integrated_table_search.csv")
         table2_df = _load_integrated_table_from_json(job_dir, "integration_model_search.json")
-        if table2_df is None:
-            table2_df = _load_integrated_table_from_csv(job_dir, "integrated_model_search.csv")
 
     if table1_df is None or table1_df.empty:
         return jsonify({"status": "error", "message": "Table Search integration not found. Please run Table Search integration first."}), 400
@@ -1199,13 +1105,7 @@ def evaluate():
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from evaluation.llm import evaluate_diversity_with_llm
 
-        result = evaluate_diversity_with_llm(
-            query=query,
-            table1=table1_df,
-            table2=table2_df,
-            table1_source="Table Search Integration",
-            table2_source="Model Search Integration",
-        )
+        result = evaluate_diversity_with_llm(query=query, table1=table1_df, table2=table2_df, table1_source="Table Search Integration", table2_source="Model Search Integration")
     except ValueError as ve:
         return jsonify({"status": "error", "message": f"Evaluation failed: {str(ve)}"}), 500
 
@@ -1219,12 +1119,7 @@ def evaluate():
             return None
         return {"columns": list(df.columns), "data": _sanitize_for_json(df.values.tolist())}
 
-    return jsonify({
-        "status": "success",
-        "evaluation": result,
-        "table1": _df_to_dict(table1_df),
-        "table2": _df_to_dict(table2_df),
-    })
+    return jsonify({"status": "success", "evaluation": result, "table1": _df_to_dict(table1_df), "table2": _df_to_dict(table2_df)})
 
 
 @app.route("/api/qa", methods=["POST"])
@@ -1242,14 +1137,10 @@ def qa():
     # Load the appropriate integrated table
     if use_table_search:
         table_df = _load_integrated_table_from_json(job_dir, "integration_table_search.json")
-        if table_df is None:
-            table_df = _load_integrated_table_from_csv(job_dir, "integrated_table_search.csv")
         table_source = "Table Search Integration"
         qa_mode = "card2tab2card"
     else:
         table_df = _load_integrated_table_from_json(job_dir, "integration_model_search.json")
-        if table_df is None:
-            table_df = _load_integrated_table_from_csv(job_dir, "integrated_model_search.csv")
         table_source = "Model Search Integration"
         qa_mode = "card2card"
 
@@ -1268,50 +1159,22 @@ def qa():
         query = sr.get("query") or query
         search_results_data = sr
 
-        # Extract model_ids for ranking
-        if use_table_search:
-            c2t2c = sr.get("card2tab2card_results") or {}
-            for stype, st_data in c2t2c.items():
-                mids = st_data.get("model_ids") if isinstance(st_data, dict) else (st_data if isinstance(st_data, list) else [])
-                if mids:
+        # Extract model_ids for ranking with strict schema:
+        # - If we used Table Search, do not infer model_ids_to_rank from other sources (leave as None).
+        # - Else, use only the configured Card2Card retrieval_mode list when available.
+        if not use_table_search:
+            modes = sr.get("card2card_all_modes")
+            rmode = sr.get("card2card_retrieval_mode")
+            if isinstance(modes, dict) and isinstance(rmode, str):
+                mids = modes.get(rmode)
+                if isinstance(mids, list) and mids:
                     model_ids_to_rank = list(mids)[:50]
-                    break
-        else:
-            modes = sr.get("card2card_all_modes") or {}
-            # Try retrieval_mode first (e.g. dense), then any non-empty mode
-            rmode = sr.get("card2card_retrieval_mode", "dense")
-            model_ids_to_rank = modes.get(rmode)
-            if isinstance(model_ids_to_rank, dict) and "error" in model_ids_to_rank:
-                model_ids_to_rank = None
-            elif model_ids_to_rank is not None and not isinstance(model_ids_to_rank, list):
-                model_ids_to_rank = list(model_ids_to_rank)[:50] if model_ids_to_rank else None
-            elif model_ids_to_rank:
-                model_ids_to_rank = list(model_ids_to_rank)[:50]
-            if not model_ids_to_rank:
-                for mode_key, mode_list in modes.items():
-                    if mode_list and isinstance(mode_list, list) and not (isinstance(mode_list, dict) and "error" in mode_list):
-                        model_ids_to_rank = list(mode_list)[:50]
-                        break
-
-        # Fallback: extract model_id from integrated table
-        if not model_ids_to_rank and not table_df.empty:
-            for col in ["model_id", "modelId", "model"]:
-                if col in table_df.columns:
-                    model_ids_to_rank = table_df[col].dropna().astype(str).unique().tolist()[:50]
-                    break
 
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from evaluation.llm_qa import answer_question_with_llm
 
-        result = answer_question_with_llm(
-            query=query,
-            table=table_df,
-            table_source=table_source,
-            qa_mode=qa_mode,
-            model_ids_to_rank=model_ids_to_rank,
-            search_results_data=search_results_data,
-        )
+        result = answer_question_with_llm(query=query, table=table_df, table_source=table_source, qa_mode=qa_mode, model_ids_to_rank=model_ids_to_rank, search_results_data=search_results_data)
     except ValueError as ve:
         return jsonify({"status": "error", "message": f"QA failed: {str(ve)}"}), 500
 
@@ -1321,11 +1184,7 @@ def qa():
     else:
         qa_answer = {"answer": str(qa_answer) if qa_answer else "No answer provided", "model_ranking": [], "summary": {}, "confidence": "medium", "limitations": []}
 
-    return jsonify({
-        "status": "success",
-        "qa": qa_answer,
-        "query": query,
-    })
+    return jsonify({"status": "success", "qa": qa_answer, "query": query})
 
 
 @app.route("/api/integration-runs/<job_id>", methods=["GET"])
@@ -1334,12 +1193,7 @@ def get_integration_runs(job_id: str):
     if not job_id or not job_id.strip():
         return jsonify({"status": "success", "job_id": job_id or "", "model_search_runs": [], "table_search_runs": []})
     out = _load_job_extras(job_id.strip())
-    return jsonify({
-        "status": "success",
-        "job_id": job_id,
-        "model_search_runs": out.get("model_search_runs", []),
-        "table_search_runs": out.get("table_search_runs", []),
-    })
+    return jsonify({"status": "success", "job_id": job_id, "model_search_runs": out.get("model_search_runs", []), "table_search_runs": out.get("table_search_runs", [])})
 
 
 @app.route("/api/save-integration-run", methods=["POST"])
@@ -1404,10 +1258,8 @@ if __name__ == "__main__":
     import argparse as _argparse
     parser = _argparse.ArgumentParser(description="ModelSearch Demo Backend")
     parser.add_argument("--port", type=int, default=None, help="Port (default: env PORT or 5002)")
-    parser.add_argument("--use-by-type", action="store_true", dest="use_by_type",
-                        help="Run card2tab2card with table type classification (by_type mode)")
-    parser.add_argument("--no-by-type", action="store_false", dest="use_by_type",
-                        help="Do not run by_type (default)")
+    parser.add_argument("--use-by-type", action="store_true", dest="use_by_type", help="Run card2tab2card with table type classification (by_type mode)")
+    parser.add_argument("--no-by-type", action="store_false", dest="use_by_type", help="Do not run by_type (default)")
     parser.set_defaults(use_by_type=None)
     args, _ = parser.parse_known_args()
 

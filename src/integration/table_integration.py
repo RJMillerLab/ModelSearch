@@ -7,18 +7,20 @@ Integrates multiple tables using various methods:
 - ALITE: FD-based integration using dialite_internal (requires dialite_internal repository)
 - Outer Join: Merge all tables using outer join
 
-Works with pre-searched table results to avoid re-searching.
+Test: python -m tests.test_integration
 """
 
 import os
 import sys
 import time
+import io
+from contextlib import redirect_stdout, redirect_stderr
 import pandas as pd
 import json
 from typing import List, Dict, Optional, Any, Set, Tuple
 from collections import Counter
 
-from src.utils import resolve_table_path, load_table, _get_models_to_tables_batch_sql, load_modelid_to_csvlist
+from src.utils import resolve_table_path, load_table, _get_models_to_tables_batch_sql
 
 def _reorder_columns_deterministic(df: pd.DataFrame) -> pd.DataFrame:
     """Deterministically reorder columns for readability/comparability.
@@ -29,55 +31,22 @@ def _reorder_columns_deterministic(df: pd.DataFrame) -> pd.DataFrame:
     3) Columns that are entirely null/empty always go to the end.
     4) Stable tie-breaker: original column order.
     """
-    if df is None or df.empty or df.columns.size == 0:
+    if df is None or df.empty or len(df.columns) == 0:
         return df
-
     cols = list(df.columns)
-    # Treat NaN as null; empty-string stays non-null in pandas, so we handle it explicitly.
-    # We consider both NaN and '' as empty for the non-null rate.
-    not_empty = df.notna()
-    try:
-        not_empty = not_empty & (df.astype(str) != "")
-    except Exception:
-        # If dtype conversion fails for some exotic object columns, fall back to NaN-only.
-        pass
-    rates = not_empty.mean().reindex(cols).fillna(0.0)
-    is_all_null = (rates == 0.0).astype(int)
-
-    meta = pd.DataFrame(
-        {
-            "col": cols,
-            "is_all_null": is_all_null.values,
-            "rate": rates.values,
-            "orig_idx": list(range(len(cols))),
-        }
-    )
-    meta = meta.sort_values(
-        by=["is_all_null", "rate", "orig_idx"],
-        ascending=[True, False, True],
-        kind="mergesort",
-    )
-    ordered_cols = meta["col"].tolist()
-
+    mask = df.notna() & (df != "")
+    rate = mask.mean().values
+    is_all_null = (rate == 0).astype(int)
+    order = sorted(range(len(cols)), key=lambda i: (is_all_null[i], -rate[i], i))
+    ordered_cols = [cols[i] for i in order]
     if ordered_cols != cols:
         print(
-            "[reorder] columns changed (deterministic, saved order).\n"
+            "[reorder] columns changed (deterministic)\n"
             f"  before: {cols}\n"
             f"  after:  {ordered_cols}"
         )
         return df[ordered_cols]
     return df
-
-# Add Blend_internal to path
-blend_path = os.path.join(os.path.dirname(__file__), '..', 'Blend_internal')
-blend_path_abs = os.path.abspath(blend_path)
-if blend_path_abs and os.path.exists(blend_path_abs):
-    if blend_path_abs in sys.path:
-        sys.path.remove(blend_path_abs)
-    sys.path.insert(0, blend_path_abs)
-
-# Blend_internal imports are optional and will be lazy-loaded if needed
-BLEND_AVAILABLE = bool(blend_path_abs and os.path.exists(blend_path_abs))
 
 def _integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
@@ -148,10 +117,7 @@ def _integrate_tables_intersection(tables: List[pd.DataFrame]) -> Optional[pd.Da
     result = result[common_columns]
     return result
 
-def _integrate_tables_alite(
-    tables: List[pd.DataFrame],
-    table_paths: List[str],
-) -> Optional[pd.DataFrame]:
+def _integrate_tables_alite(tables: List[pd.DataFrame], table_paths: List[str]) -> Optional[pd.DataFrame]:
     """
     Integrate tables using ALITE FD-based algorithm.
     Returns the full result (no row limit).
@@ -163,9 +129,8 @@ def _integrate_tables_alite(
     Returns:
         Integrated DataFrame or None if integration fails
     """
+    from src.config import DIALITE_INTERNAL_REPO
     dialite_repo = DIALITE_INTERNAL_REPO
-    
-    # Add dialite_internal to path
     if dialite_repo not in sys.path:
         sys.path.insert(0, dialite_repo)
 
@@ -175,7 +140,13 @@ def _integrate_tables_alite(
         print("⚠️  ALITE requires file paths, not DataFrames")
         return None
 
-    result_FD, stats_df, debug_dict = alite_module.FDAlgorithm(table_paths.copy())
+    alite_verbose = os.environ.get("ALITE_VERBOSE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if alite_verbose:
+        result_FD, stats_df, debug_dict = alite_module.FDAlgorithm(table_paths.copy())
+    else:
+        # ALITE emits many internal progress prints; suppress them by default.
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            result_FD, stats_df, debug_dict = alite_module.FDAlgorithm(table_paths.copy())
     if result_FD is not None and len(result_FD) > 0:
         return result_FD
     return result_FD
@@ -207,12 +178,27 @@ def _integrate_tables_outer_join(tables: List[pd.DataFrame]) -> Optional[pd.Data
     return result
 
 
-def integrate_tables(
-    table_paths: List[str],
-    integration_type: str = "union",
-    k: int = 10,
-    filename_to_tableid: Optional[Dict[str, int]] = None,
-) -> Dict[str, Any]:
+def _resolve_table_paths_for_model_ids(model_ids: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
+    """Resolve unique local table paths for model IDs."""
+    model_to_tables = _get_models_to_tables_batch_sql(model_ids)
+    seen_paths: Set[str] = set()
+    table_paths: List[str] = []
+    model_to_table_paths: Dict[str, List[str]] = {mid: [] for mid in model_ids}
+
+    for mid in model_ids:
+        for basename in model_to_tables.get(mid, []):
+            resolved_path = resolve_table_path(basename)
+            if not resolved_path:
+                continue
+            if resolved_path not in seen_paths:
+                seen_paths.add(resolved_path)
+                table_paths.append(resolved_path)
+            model_to_table_paths[mid].append(resolved_path)
+
+    return table_paths, model_to_table_paths
+
+
+def integrate_tables(table_paths: List[str], integration_type: str = "union", k: int = 10, filename_to_tableid: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """
     Integrate multiple tables from modellake.db (by tableid) or from CSV paths.
         
@@ -232,21 +218,17 @@ def integrate_tables(
     for table_path in table_paths:
         basename = os.path.basename(table_path)
         tid = filename_to_tableid.get(basename) if filename_to_tableid else None
+        resolved_table_path = resolve_table_path(table_path) or table_path
         df = load_table(table_path)
         if df is not None:
             tables.append(df)
-            loaded_paths.append(table_path)
+            loaded_paths.append(resolved_table_path)
             print(f"✅ Loaded: {os.path.basename(table_path)} ({len(df)} rows, {len(df.columns)} columns)")
         else:
             print(f"⚠️  Failed to load: {os.path.basename(table_path)}")
     
     if not tables:
-        return {
-            "success": False,
-            "error": "No tables could be loaded",
-            "integrated_table": None,
-            "stats": {}
-        }
+        return {"success": False, "error": "No tables could be loaded", "integrated_table": None, "stats": {}}
     
     # Integrate tables (k = number of tables only; we never truncate output rows)
     if integration_type == "union":
@@ -259,121 +241,31 @@ def integrate_tables(
     elif integration_type == "outer_join":
         integrated_df = _integrate_tables_outer_join(tables)
     else:
-        return {
-            "success": False,
-            "error": f"Unknown integration type: {integration_type}. Supported types: union, intersection, alite, outer_join",
-            "integrated_table": None,
-            "stats": {}
-        }
+        return {"success": False, "error": f"Unknown integration type: {integration_type}. Supported types: union, intersection, alite, outer_join", "integrated_table": None, "stats": {}}
     
-    # Handle None or empty DataFrame results
+    # if empty
     if integrated_df is None or (isinstance(integrated_df, pd.DataFrame) and len(integrated_df) == 0 and len(integrated_df.columns) == 0):
-        # Check if it's intersection with no common rows/columns (this is valid, return empty result)
         if integration_type == "intersection":
-            # Create empty DataFrame
             if tables:
-                # Try to get common columns
                 common_cols = set(tables[0].columns)
                 for df in tables[1:]:
                     common_cols = common_cols.intersection(set(df.columns))
-                
-                # Return empty DataFrame (with or without common columns)
                 empty_df = pd.DataFrame(columns=list(common_cols) if common_cols else [])
-                return {
-                    "success": True,
-                    "integrated_table": empty_df,
-                    "stats": {
-                        "input_tables": len(tables),
-                        "input_rows": sum(len(df) for df in tables),
-                        "output_rows": 0,
-                        "output_columns": len(common_cols) if common_cols else 0,
-                        "integration_type": integration_type
-                    },
-                    "table_paths": loaded_paths
-                }
-        
-        # Fallback: chosen method failed (ALITE/dialite missing, outer_join error, etc).
-        # Retry with union so user gets a result instead of "Integration failed".
-        if integration_type != "union":
-            fallback_df = _integrate_tables_union(tables)
-            if fallback_df is not None and (len(fallback_df) > 0 or len(fallback_df.columns) > 0):
-                stats = {
-                    "input_tables": len(tables),
-                    "input_rows": sum(len(df) for df in tables),
-                    "output_rows": len(fallback_df),
-                    "output_columns": len(fallback_df.columns),
-                    "integration_type": "union"
-                }
-                print(f"⚠️  {integration_type} returned no result; used union as fallback")
-                return {
-                    "success": True,
-                    "integrated_table": _reorder_columns_deterministic(fallback_df),
-                    "stats": stats,
-                    "table_paths": loaded_paths,
-                    "fallback": True,
-                    "fallback_reason": f"{integration_type} did not produce a result (tables may not meet its requirements); used union instead"
-                }
-        
-        return {
-            "success": False,
-            "error": "Integration failed",
-            "integrated_table": None,
-            "stats": {}
-        }
-    
-    # Handle empty DataFrame with columns (valid result for intersection with no common rows)
-    if isinstance(integrated_df, pd.DataFrame) and len(integrated_df) == 0 and len(integrated_df.columns) > 0:
-        # This is a valid empty result (e.g., intersection with common columns but no common rows)
-        integrated_df = _reorder_columns_deterministic(integrated_df)
-        stats = {
-            "input_tables": len(tables),
-            "input_rows": sum(len(df) for df in tables),
-            "output_rows": 0,
-            "output_columns": len(integrated_df.columns),
-            "integration_type": integration_type
-        }
-        return {
-            "success": True,
-            "integrated_table": integrated_df,
-            "stats": stats,
-            "table_paths": loaded_paths
-        }
-    
+                return {"success": True, "integrated_table": empty_df, "stats": {}, "table_paths": loaded_paths}
+        return {"success": False, "error": "Integration failed", "integrated_table": None, "stats": {}}
+
     # Calculate statistics
     integrated_df = _reorder_columns_deterministic(integrated_df)
-    stats = {
-        "input_tables": len(tables),
-        "input_rows": sum(len(df) for df in tables),
-        "output_rows": len(integrated_df),
-        "output_columns": len(integrated_df.columns),
-        "integration_type": integration_type
-    }
+    stats = {"input_tables": len(tables), "input_rows": sum(len(df) for df in tables), "output_rows": len(integrated_df), "output_columns": len(integrated_df.columns), "integration_type": integration_type}
     
     print(f"\n✅ Integration successful!")
     print(f"   Input: {stats['input_tables']} tables, {stats['input_rows']} total rows")
     print(f"   Output: {stats['output_rows']} rows, {stats['output_columns']} columns")
-    print(f"{'='*60}\n")
-    
-    return {
-        "success": True,
-        "integrated_table": integrated_df,
-        "stats": stats,
-        "table_paths": loaded_paths
-    }
+    print(f"{'='*60}\n")    
+    return {"success": True, "integrated_table": integrated_df, "stats": stats, "table_paths": loaded_paths}
 
-def integrate_tables_from_search_results(
-    search_results_json: str,
-    search_type: str = "single_column",
-    integration_type: str = "union",
-    k: int = 10,
-    tables_source: str = "intermediate",
-) -> Dict[str, Any]:
-    """
-    Integrate tables from Card2Tab2Card search results.
-        
-    Returns:
-        Dictionary with integration results
-    """
+def integrate_tables_from_card2tab2card(search_results_json: str, search_type: str = "single_column", integration_type: str = "union", k: int = 10, tables_source: str = "intermediate") -> Dict[str, Any]:
+    """Integrate tables from backend search_results.json Card2Tab2Card payloads."""
     t0 = time.time()
     print(f"\n{'='*60}")
     print(f"🔗 Table Integration from Search Results")
@@ -386,61 +278,35 @@ def integrate_tables_from_search_results(
     with open(search_results_json, 'r', encoding='utf-8') as f:
         search_results = json.load(f)
     
-    # Extract table filenames from intermediate results
-    if "intermediate" in search_results:
-        intermediate = search_results["intermediate"]
-    elif "card2tab2card_results" in search_results:
-        card2tab2card_results = search_results["card2tab2card_results"]
-        if search_type in card2tab2card_results:
-            if isinstance(card2tab2card_results[search_type], dict) and "intermediate" in card2tab2card_results[search_type]:
-                intermediate = card2tab2card_results[search_type]["intermediate"]
-            else:
-                return {"success": False, "error": f"Search type '{search_type}' found but no intermediate data available", "integrated_table": None}
-        else:
-            available_types = list(card2tab2card_results.keys())
-            return {"success": False, "error": f"Search type '{search_type}' not found in results. Available types: {', '.join(available_types)}", "integrated_table": None}
-    else:
-        return {"success": False, "error": "No intermediate results found in search results", "integrated_table": None}
+    # Only support the current backend schema:
+    # search_results["card2tab2card_results"][search_type]
+    card2tab2card_results = search_results.get("card2tab2card_results")
+    if not isinstance(card2tab2card_results, dict):
+        return {"success": False, "error": "search_results.json must contain card2tab2card_results", "integrated_table": None}
 
-    # Get retrieved table filenames (prefer Tab2Tab relevance order)
-    # Priority: retrieved_table_ids + table_id_to_filename > retrieved_table_filenames > table_to_models keys
+    search_payload = card2tab2card_results.get(search_type)
+    if not isinstance(search_payload, dict):
+        available_types = list(card2tab2card_results.keys())
+        return {"success": False, "error": f"Search type '{search_type}' not found in card2tab2card_results. Available types: {', '.join(available_types)}", "integrated_table": None}
+
+    intermediate = search_payload.get("intermediate")
+    if not isinstance(intermediate, dict):
+        return {"success": False, "error": f"Search type '{search_type}' has no intermediate payload", "integrated_table": None}
+
+    # Current card2tab2card payload stores the final table list in
+    # `searched_tables` and duplicates it in `intermediate.retrieved_table_filenames`.
     table_to_models = intermediate.get("table_to_models", {})
-    retrieved_table_ids = intermediate.get("retrieved_table_ids", [])
     table_id_to_filename = intermediate.get("table_id_to_filename", {})
-    
-    retrieved_filenames = []
-    if retrieved_table_ids and table_id_to_filename:
-        # Rebuild ordered list from Tab2Tab relevance (retrieved_table_ids order), dedupe by filename
-        seen_files = set()
-        for tid in retrieved_table_ids:
-            if tid in table_id_to_filename:
-                f = table_id_to_filename[tid]
-                if f not in seen_files:
-                    seen_files.add(f)
-                    retrieved_filenames.append(f)
-        if retrieved_filenames:
-            print(f"ℹ️  Using retrieved_table_ids order: {len(retrieved_filenames)} tables (Tab2Tab relevance)")
-    
-    if not retrieved_filenames:
+
+    retrieved_filenames = search_payload.get("searched_tables", []) if isinstance(search_payload, dict) else []
+    if retrieved_filenames:
+        print(f"ℹ️  Using searched_tables: {len(retrieved_filenames)} tables")
+    else:
         retrieved_filenames = intermediate.get("retrieved_table_filenames", [])
-    
+        if retrieved_filenames:
+            print(f"ℹ️  Using intermediate.retrieved_table_filenames: {len(retrieved_filenames)} tables")
     if not retrieved_filenames:
-        if table_to_models:
-            retrieved_filenames = list(table_to_models.keys())
-            print(f"ℹ️  Using table paths from table_to_models: {len(retrieved_filenames)} tables")
-        else:
-            return {
-                "success": False,
-                "error": "No retrieved tables found in search results (no retrieved_table_filenames or table_to_models)",
-                "integrated_table": None
-            }
-    
-    if not retrieved_filenames:
-        return {
-            "success": False,
-            "error": "No retrieved tables found in search results",
-            "integrated_table": None
-        }
+        return {"success": False, "error": "No retrieved tables found in card2tab2card payload (expected searched_tables or intermediate.retrieved_table_filenames)", "integrated_table": None}
     
     models_with_tables_list = []
     if tables_source == "all_from_modelcards":
@@ -457,19 +323,7 @@ def integrate_tables_from_search_results(
         if not model_ids:
             return {"success": False, "error": "No model IDs in intermediate for all_from_modelcards", "integrated_table": None}
         print(f"✅ tables_source=all_from_modelcards: DuckDB batch query for {len(model_ids)} models")
-        model_to_tables = _get_models_to_tables_batch_sql(model_ids)
-        seen = set()
-        table_paths = []
-        model_to_table_paths_ts = {mid: [] for mid in model_ids}
-        for mid in model_ids:
-            for bn in model_to_tables.get(mid, []):
-                if bn in seen:
-                    continue
-                seen.add(bn)
-                p = resolve_table_path(bn)
-                if p:
-                    table_paths.append(p)
-                    model_to_table_paths_ts[mid].append(p)
+        table_paths, model_to_table_paths_ts = _resolve_table_paths_for_model_ids(model_ids)
         # No table top-k cap: use ALL tables
         print(f"   Resolved {len(table_paths)} tables for integration (no table top-k cap; from {len(retrieved_filenames)} retrieved tables)")
         models_with_tables_list = model_ids
@@ -480,11 +334,7 @@ def integrate_tables_from_search_results(
         table_paths = retrieved_filenames
         table_to_models = intermediate.get("table_to_models", {})
         # Align with card2tab2card model_ids (50) when available - same set as retrieval results
-        c2t2c_model_ids = []
-        if "card2tab2card_results" in search_results and search_type in search_results.get("card2tab2card_results", {}):
-            stub = search_results["card2tab2card_results"][search_type]
-            if isinstance(stub, dict) and "model_ids" in stub:
-                c2t2c_model_ids = list(stub["model_ids"]) if isinstance(stub["model_ids"], (list, tuple)) else []
+        c2t2c_model_ids = list(search_payload["model_ids"]) if isinstance(search_payload.get("model_ids"), (list, tuple)) else []
         if c2t2c_model_ids:
             models_with_tables_list = c2t2c_model_ids
             print(f"   Using card2tab2card model_ids ({len(c2t2c_model_ids)}) for alignment with retrieval results")
@@ -534,19 +384,8 @@ def integrate_tables_from_search_results(
     print(f"⏱️  Table Search integration elapsed: {elapsed:.2f}s (tables_source={tables_source})")
     return result
 
-
-def integrate_tables_from_model_search_results(
-    search_results_json: str,
-    integration_type: str = "union",
-    k: int = 10,
-    max_models: int = 10,
-    card2card_retrieval_mode: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Integrate tables from Card2Card (model search) results.
-    Returns:
-        Dictionary with integration results
-    """
+def integrate_tables_from_card2card(search_results_json: str, integration_type: str = "union", k: int = 10, max_models: int = 10, card2card_retrieval_mode: Optional[str] = None) -> Dict[str, Any]:
+    """Integrate tables from backend search_results.json Card2Card payloads."""
     t0 = time.time()
     print(f"\n{'='*60}")
     print(f"🔗 Table Integration from Model Search Results")
@@ -554,33 +393,30 @@ def integrate_tables_from_model_search_results(
     
     # Load search results
     if not os.path.exists(search_results_json):
-        return {
-            "success": False,
-            "error": f"Search results file not found: {search_results_json}",
-            "integrated_table": None
-        }
+        return {"success": False, "error": f"Search results file not found: {search_results_json}", "integrated_table": None}
     
     with open(search_results_json, 'r', encoding='utf-8') as f:
         search_results = json.load(f)
     
-    # Extract Card2Card model IDs (optionally from a specific retrieval mode: dense/sparse/hybrid)
-    card2card_results = []
-    if isinstance(search_results, dict):
-        if card2card_retrieval_mode and search_results.get("card2card_all_modes"):
-            mode_data = search_results["card2card_all_modes"].get(card2card_retrieval_mode)
-            if isinstance(mode_data, list):
-                card2card_results = mode_data
-            elif isinstance(mode_data, dict) and "error" not in mode_data:
-                card2card_results = []
-            # else keep []
-        if not card2card_results and "card2card_results" in search_results:
-            card2card_results = search_results["card2card_results"]
-        elif not card2card_results and "results" in search_results and "card2card_results" in search_results["results"]:
-            card2card_results = search_results["results"]["card2card_results"]
-    elif isinstance(search_results, list):
-        card2card_results = search_results
-    
-    # Handle both string and object formats
+    # Only support the current backend schema:
+    # search_results["card2card_all_modes"][mode] or search_results["card2card_results"]
+    if not isinstance(search_results, dict):
+        return {"success": False, "error": "search_results.json must be a backend Card2Card payload object", "integrated_table": None}
+
+    if card2card_retrieval_mode:
+        card2card_all_modes = search_results.get("card2card_all_modes")
+        if not isinstance(card2card_all_modes, dict):
+            return {"success": False, "error": "search_results.json must contain card2card_all_modes when card2card_retrieval_mode is specified", "integrated_table": None}
+        card2card_results = card2card_all_modes.get(card2card_retrieval_mode)
+        if isinstance(card2card_results, dict) and card2card_results.get("error"):
+            return {"success": False, "error": f"Card2Card mode '{card2card_retrieval_mode}' failed: {card2card_results.get('error')}", "integrated_table": None}
+        if not isinstance(card2card_results, list):
+            return {"success": False, "error": f"Card2Card mode '{card2card_retrieval_mode}' is missing or not a list", "integrated_table": None}
+    else:
+        card2card_results = search_results.get("card2card_results")
+        if not isinstance(card2card_results, list):
+            return {"success": False, "error": "search_results.json must contain card2card_results as a list", "integrated_table": None}
+
     model_ids = []
     for item in card2card_results:
         if isinstance(item, str):
@@ -590,131 +426,26 @@ def integrate_tables_from_model_search_results(
         elif isinstance(item, dict) and "model_id" in item:
             model_ids.append(item["model_id"])
     if not model_ids:
-        return {
-            "success": False,
-            "error": "No model IDs found in Card2Card results",
-            "integrated_table": None
-        }
+        return {"success": False, "error": "No model IDs found in Card2Card results", "integrated_table": None}
     
     print(f"✅ Found {len(model_ids)} models in Card2Card results")
-    print(f"   Processing first {min(max_models, len(model_ids))} models (max_models cap COMMENTED OUT - using all models)")
-
-    # Limit to max_models -- COMMENTED OUT: use all models for now (user request)
-    # model_ids = model_ids[:max_models]
-    
-    # Import directly from card2tab2card to avoid triggering card2card imports that require torch
-    # Add parent directory to path if needed
-    import sys
-    parent_dir = os.path.join(os.path.dirname(__file__), '../..')
-    parent_dir_abs = os.path.abspath(parent_dir)
-    if parent_dir_abs not in sys.path:
-        sys.path.insert(0, parent_dir_abs)
-    
-    # Fallback: Try to extract table information from search_results JSON
-    # This is useful for template/fake data when real data sources are unavailable
-    fallback_table_paths = []
-    fallback_models_with_tables = {}
-    
-    # Priority 1: Check for dedicated card2card_integration_tables field (separate from table search)
-    if isinstance(search_results, dict) and "card2card_integration_tables" in search_results:
-        card2card_integration = search_results["card2card_integration_tables"]
-        print(f"✅ Found dedicated card2card_integration_tables field in search results")
-        
-        # Get table paths
-        if "table_paths" in card2card_integration:
-            fallback_table_paths = card2card_integration["table_paths"]
-            print(f"   Found {len(fallback_table_paths)} table paths")
-        
-        # Get model_to_tables mapping
-        if "model_to_tables" in card2card_integration:
-            model_to_tables = card2card_integration["model_to_tables"]
-            # Map our model_ids to tables
-            for model_id in model_ids:
-                if model_id in model_to_tables:
-                    tables = model_to_tables[model_id]
-                    if isinstance(tables, list):
-                        fallback_models_with_tables[model_id] = tables
-                        # Add to fallback_table_paths if not already there
-                        for table_path in tables:
-                            if table_path not in fallback_table_paths:
-                                fallback_table_paths.append(table_path)
-                    print(f"   Model {model_id}: {len(tables)} tables")
-    
-    # Priority 2: card2tab2card_results intermediate (tables from related-search)
-    elif isinstance(search_results, dict) and "card2tab2card_results" in search_results:
-        print(f"   Using card2tab2card_results intermediate (table_to_models)")
-        card2tab2card_results = search_results["card2tab2card_results"]
-        # Extract table_to_models mapping from any search type
-        for search_type, type_results in card2tab2card_results.items():
-            if isinstance(type_results, dict) and "intermediate" in type_results:
-                intermediate = type_results["intermediate"]
-                table_to_models = intermediate.get("table_to_models", {})
-                # Build reverse mapping: model_id -> list of tables
-                for table_path, model_list in table_to_models.items():
-                    # Normalize model list
-                    normalized_models = []
-                    for m in (model_list if isinstance(model_list, list) else []):
-                        if isinstance(m, str):
-                            normalized_models.append(m)
-                        elif isinstance(m, dict):
-                            normalized_models.append(m.get("model_id") or m.get("modelId") or str(m))
-                    
-                    # Check if any of our Card2Card models are in this list
-                    for model_id in model_ids:
-                        if model_id in normalized_models:
-                            if model_id not in fallback_models_with_tables:
-                                fallback_models_with_tables[model_id] = []
-                            if table_path not in fallback_models_with_tables[model_id]:
-                                fallback_models_with_tables[model_id].append(table_path)
-                            if table_path not in fallback_table_paths:
-                                fallback_table_paths.append(table_path)
-    
-    else:
-        return {
-            "success": False,
-            "error": "Cannot get tables: get_from-style mapping not available, and no fallback data found in search results",
-            "integrated_table": None
-        }
+    print(f"   Processing {len(model_ids)} models from Card2Card")
 
     # Collect all table paths from all models; also build model_id -> table_paths for UI debug
-    all_table_paths = []
-    models_with_tables = []
-    models_without_tables = []
-    model_to_table_paths: Dict[str, List[str]] = {}
-    
     # Fast path: DuckDB batch query (single SQL scan, no full parquet load)
     t_duck = time.time()
     print(f"✅ DuckDB batch query on parquet (fast, no full load)")
-    model_to_tables = _get_models_to_tables_batch_sql(model_ids)
-    for model_id in model_ids:
-        basenames = model_to_tables.get(model_id, [])
-        model_to_table_paths[model_id] = []
-        if basenames:
-            # No per-model table cap: use ALL tables from each model
-            for bn in basenames:
-                path = resolve_table_path(bn)
-                if path and path not in all_table_paths:
-                    all_table_paths.append(path)
-                if path:
-                    model_to_table_paths[model_id].append(path)
-            models_with_tables.append(model_id)
-            print(f"  ✅ Model {model_id}: {len(basenames)} tables")
-        else:
-            models_without_tables.append(model_id)
-            print(f"  ⚠️  Model {model_id}: No tables found")
+    all_table_paths, model_to_table_paths = _resolve_table_paths_for_model_ids(model_ids)
+    models_with_tables = [mid for mid, paths in model_to_table_paths.items() if paths]
+    models_without_tables = [mid for mid, paths in model_to_table_paths.items() if not paths]
+    for model_id in models_with_tables:
+        print(f"  ✅ Model {model_id}: {len(model_to_table_paths[model_id])} tables")
+    for model_id in models_without_tables:
+        print(f"  ⚠️  Model {model_id}: No tables found")
     print(f"   DuckDB query elapsed: {time.time() - t_duck:.2f}s")
     
     if not all_table_paths:
-        return {
-            "success": False,
-            "error": f"No tables found for any of the {len(model_ids)} models",
-            "integrated_table": None,
-            "stats": {
-                "models_processed": len(model_ids),
-                "models_with_tables": len(models_with_tables),
-                "models_without_tables": len(models_without_tables)
-            }
-        }
+        return {"success": False, "error": f"No tables found for any of the {len(model_ids)} models", "integrated_table": None, "stats": {"models_processed": len(model_ids), "models_with_tables": len(models_with_tables), "models_without_tables": len(models_without_tables)}}
     
     print(f"\n✅ Collected {len(all_table_paths)} unique tables from {len(models_with_tables)} models")
 
@@ -744,16 +475,3 @@ def integrate_tables_from_model_search_results(
         result["stats"]["elapsed_seconds"] = elapsed
     print(f"⏱️  Model Search integration elapsed: {elapsed:.2f}s")
     return result
-
-
-if __name__ == "__main__":
-    # Quick test: integration from template search results
-    import os as _os
-    _root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "../.."))
-    _path = _os.path.join(_root, "config", "demo_template", "search_results.json")
-    if not _os.path.exists(_path):
-        print("Test skip: config/demo_template/search_results.json not found")
-    else:
-        r = integrate_tables_from_model_search_results(_path, integration_type="union", k=10, max_models=5)
-        print("Test integration: success", r.get("success"), "stats", r.get("stats"))
-

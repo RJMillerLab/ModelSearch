@@ -23,73 +23,12 @@ from src.baseline1.table_retrieval_pipeline import (
     search_neighbors
 )
 
-from src.utils import load_combined_data as citationlake_load_combined_data
-from src.config import RAW_DIR
-
-
-def _get_device() -> str:
-    try:
-        import torch
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
-
-USE_CITATIONLAKE_UTILS = True
-
-
-def build_jsonl_from_citationlake_raw(raw_dir: str, field: str, output_jsonl: str) -> None:
-    """
-    Build JSONL corpus from data_citationlake raw data using load_combined_data.
-    Specifically uses the 'card' field.
-    
-    Args:
-        raw_dir: Directory with raw parquet shards (should be data_citationlake/raw)
-        field: Field to use (should be "card")
-        output_jsonl: Output JSONL path
-    """
-    import json
-    import os
-    
-    if field != "card":
-        raise ValueError("build_jsonl_from_citationlake_raw only supports field='card'")
-    
-    if not USE_CITATIONLAKE_UTILS or citationlake_load_combined_data is None:
-        raise ImportError("load_combined_data utils not available. Please ensure src.utils.load_combined_data is accessible.")
-    
-    # Use load_combined_data (ported from CitationLake) to load the card field
-    print(f"Loading modelcard data from {raw_dir} using load_combined_data...")
-    df = citationlake_load_combined_data(
-        data_type="modelcard",
-        file_path=raw_dir,
-        columns=["modelId", "card"]  # Only load needed columns
-    )
-    
-    print(f"Loaded {len(df)} model cards")
-    
-    # Filter out rows with empty card
-    df = df[df["card"].notna()].copy()
-    df = df[df["card"].astype(str).str.strip() != ""].copy()
-    
-    os.makedirs(os.path.dirname(output_jsonl) if os.path.dirname(output_jsonl) else '.', exist_ok=True)
-    
-    written = 0
-    with open(output_jsonl, "w", encoding="utf-8") as fout:
-        for _, row in df.iterrows():
-            model_id = str(row["modelId"])
-            card_text = str(row["card"]).strip()
-            if not model_id or not card_text:
-                continue
-            doc = {"id": model_id, "contents": card_text}
-            fout.write(json.dumps(doc, ensure_ascii=False) + "\n")
-            written += 1
-    
-    print(f"Wrote {written} documents to {output_jsonl}")
-
+from src.utils import load_combined_data
+from src.config import RAW_DIR, PROCESSED_DIR
+from src.utils import get_device
 
 def build_card_index(
     field: str = "card",
-    raw_dir: str = "data_citationlake/raw",  # Default to data_citationlake/raw, with fallback to data/raw
-    parquet: Optional[str] = None,
     output_jsonl: str = "data/card2card_corpus.jsonl",
     model_name: str = "all-MiniLM-L6-v2",
     batch_size: int = 256,
@@ -99,36 +38,12 @@ def build_card_index(
 ) -> None:
     """
     Build FAISS index for model card search.
-    
-    Args:
-        field: Field to use ("card" or "card_readme")
-        raw_dir: Directory with raw parquet shards (used when field="card")
-                 Can be "data_citationlake/raw" or "data/raw"
-        parquet: Path to processed parquet (used when field="card_readme")
-                 Can be "data_citationlake/processed/modelcard_step1.parquet" or local path
-        output_jsonl: Output JSONL corpus path
-        model_name: Sentence transformer model name
-        batch_size: Batch size for encoding
-        output_npz: Output embeddings NPZ path
-        output_index: Output FAISS index path
-        device: Device to use ("cuda" or "cpu")
     """
     # Build JSONL corpus
     if field == "card_readme":
-        if parquet is None:
-            # Try data_citationlake first, then fallback to local
-            if os.path.exists("data_citationlake/processed/modelcard_step1.parquet"):
-                parquet = "data_citationlake/processed/modelcard_step1.parquet"
-            else:
-                parquet = "data/processed/modelcard_step1.parquet"
-        build_jsonl_from_parquet(parquet, field, output_jsonl)
+        build_jsonl_from_parquet(f"{PROCESSED_DIR}/modelcard_step1.parquet", field, output_jsonl)
     else:
-        # For "card" field, use load_combined_data if available and raw_dir points to data_citationlake
-        if field == "card" and "data_citationlake" in raw_dir and USE_CITATIONLAKE_UTILS and citationlake_load_combined_data:
-            print(f"Using load_combined_data to load card field from {raw_dir}")
-            build_jsonl_from_citationlake_raw(RAW_DIR, field, output_jsonl)
-        else:
-            build_jsonl_from_raw(RAW_DIR, field, output_jsonl)
+        build_jsonl_from_raw(RAW_DIR, field, output_jsonl)
     
     # Encode corpus
     encode_corpus(output_jsonl, model_name, batch_size, output_npz, device)
@@ -549,16 +464,11 @@ def main():
     # Build index command
     build_parser = subparsers.add_parser('build-index', help='Build FAISS index')
     build_parser.add_argument('--field', choices=['card', 'card_readme'], default='card')
-    build_parser.add_argument('--raw_dir', default='data_citationlake/raw',
-                              help='Raw data directory. Can be data_citationlake/raw or data/raw')
-    build_parser.add_argument('--parquet', default=None)
     build_parser.add_argument('--output_jsonl', default='data/card2card_corpus.jsonl')
     build_parser.add_argument('--model_name', default='all-MiniLM-L6-v2')
     build_parser.add_argument('--batch_size', type=int, default=256)
     build_parser.add_argument('--output_npz', default='data/card2card_embeddings.npz')
     build_parser.add_argument('--output_index', default='data/card2card.faiss')
-    build_parser.add_argument('--device', default=None,
-                              help='Device (cuda or cpu). Auto-detects if not set.')
 
     # Build sparse index (Part 1, train): Pyserini Lucene index (same as ModelTables baseline2)
     sparse_build_parser = subparsers.add_parser('build-sparse-index', help='Train: build Pyserini Lucene BM25 index from jsonl (Part 1)')
@@ -595,21 +505,18 @@ def main():
     
     args = parser.parse_args()
     start_time = time.time()
-    device = getattr(args, 'device', None) or _get_device()
 
     if args.command == 'build-index':
         build_card_index(
             field=args.field,
-            raw_dir=args.raw_dir,
-            parquet=args.parquet,
             output_jsonl=args.output_jsonl,
             model_name=args.model_name,
             batch_size=args.batch_size,
             output_npz=args.output_npz,
             output_index=args.output_index,
-            device=device
+            device=get_device()
         )
-        print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
+        print(f"\nTotal time: {time.time() - start_time:.2f}s")
     elif args.command == 'build-sparse-index':
         build_sparse_index(
             jsonl_path=args.jsonl_path,

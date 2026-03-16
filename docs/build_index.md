@@ -32,7 +32,7 @@ Paths from `src.config` (e.g. `RAW_DIR`). Override with env if needed.
 
 ```bash
 # one-step (recommended)
-python -m src.search.card2card build-index --field card --raw_dir ../ModelTables/data/raw --output_npz data/card2card_embeddings.npz --output_index data/card2card.faiss
+python -m src.search.card2card build-index --field card --output_npz data/card2card_embeddings.npz --output_index data/card2card.faiss
 # optional: --output_jsonl data/card2card_corpus.jsonl --device cuda
 ```
 
@@ -103,7 +103,7 @@ python -m src.search.classification --mode batch --output_json data/table_classi
 ## 2.1 query2modelcard
 
 ```bash
-python -m src.search.query2modelcard --query "transformer model for code generation" --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 --device cuda > logs/query2modelcard.log 2>&1
+python -m src.search.query2modelcard --query "transformer model for code generation" --emb_npz data/card2card_embeddings.npz --faiss_index data/card2card.faiss --top_k 20 > logs/query2modelcard.log 2>&1
 ```
 
 ## 2.2 card2card (dense, sparse, hybrid)

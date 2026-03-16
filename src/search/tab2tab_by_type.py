@@ -435,13 +435,7 @@ Paths are read from src.config.
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
     print(f"\n✅ Results saved to {output_path}")
-    def _get_device():
-        try:
-            import torch
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            return "cpu"
-    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {_get_device()})")
+    print(f"\nTotal time: {time.time() - start_time:.2f}s")
 
 if __name__ == '__main__':
     import sys

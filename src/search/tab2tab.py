@@ -15,32 +15,13 @@ import numpy as np
 import argparse
 import duckdb
 
-from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON
+from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON, BLEND_INTERNAL_REPO
 
-# Add Blend_internal to path (now in src/)
-# Try src/Blend_internal first (if cloned into ModelSearchDemo)
-blend_path = os.path.join(os.path.dirname(__file__), '..', 'Blend_internal')
-blend_path_abs = os.path.abspath(blend_path)
-if not os.path.exists(blend_path_abs):
-    # Fallback: try parent directory (if Blend_internal is sibling to ModelSearchDemo)
-    blend_path_parent = os.path.join(os.path.dirname(__file__), '..', '..', 'Blend_internal')
-    blend_path_parent_abs = os.path.abspath(blend_path_parent)
-    if os.path.exists(blend_path_parent_abs):
-        blend_path_abs = blend_path_parent_abs
+blend_path_abs = os.path.abspath(BLEND_INTERNAL_REPO)
+if blend_path_abs in sys.path:
+    sys.path.remove(blend_path_abs)
+sys.path.insert(0, blend_path_abs)
 
-# CRITICAL: Insert Blend_internal path at the BEGINNING of sys.path
-# This ensures Blend_internal's src/utils.py is found before ModelSearchDemo's src/utils/
-if blend_path_abs and os.path.exists(blend_path_abs):
-    # Remove if already in path to avoid duplicates
-    if blend_path_abs in sys.path:
-        sys.path.remove(blend_path_abs)
-    # Insert at position 0 to give highest priority
-    sys.path.insert(0, blend_path_abs)
-
-# Store Blend_internal path for later use
-_BLEND_INTERNAL_PATH = blend_path_abs if os.path.exists(blend_path_abs) else blend_path_parent_abs if os.path.exists(blend_path_parent_abs) else None
-
-# Lazy import - will be imported when needed, after config is set
 _SingleColumnJoinSearch = None
 _MultiColumnJoinSearch = None
 _KeywordSearch = None
@@ -54,7 +35,6 @@ _FeatureForMLSearch = None
 _MultiColumnCollinearitySearch = None
 _NegativeExampleSearch = None
 
-# Thread lock for thread-safe lazy import and config update
 import threading
 _import_lock = threading.Lock()
 _config_lock = threading.Lock()
@@ -214,41 +194,6 @@ def _lazy_import_blend():
                     # Restore ModelSearchDemo root to sys.path if we removed it
                     if modelsearch_removed and modelsearch_root not in sys.path:
                         sys.path.append(modelsearch_root)
-
-
-def get_tables_from_modellake_db(
-    db_path: str = "data/modellake.db",
-    index_table: str = "modellake_index",
-    limit: Optional[int] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get all tables from modellake.db for testing.
-    
-    Args:
-        db_path: Path to modellake.db
-        index_table: Name of the index table
-        limit: Optional limit on number of tables to return
-    
-    Returns:
-        List of table metadata dictionaries with keys: tableid, filename, table_group, table_type
-    """
-    if not os.path.exists(db_path):
-        raise FileNotFoundError(f"modellake.db not found at {db_path}")
-    
-    with duckdb.connect(db_path, read_only=True) as con:
-        query = f"""
-        SELECT DISTINCT tableid, filename, table_group, table_type 
-        FROM {index_table} 
-        WHERE rowid = -1
-        """
-        if limit:
-            query += f" LIMIT {limit}"
-        results = con.execute(query).fetchall()
-        return [
-            {"tableid": row[0], "filename": row[1], "table_group": row[2], "table_type": row[3]}
-            for row in results
-        ]
-
 
 def search_single_column(
     query_values: Iterable[Any],
@@ -914,8 +859,6 @@ To create modellake.db, use:
                             'For unionable: path to CSV file.')
     parser.add_argument('--k', type=int, default=10,
                        help='Number of results to return')
-    parser.add_argument('--list_tables', action='store_true',
-                       help='List all tables from modellake.db and exit')
     parser.add_argument('--test_table_id', type=int, default=None,
                        help='Test with a specific table ID from modellake.db')
     
@@ -929,16 +872,6 @@ To create modellake.db, use:
     # This must happen before _lazy_import_blend() is called
     _update_blend_config(db_path)
     print(f"✅ Updated Blend_internal config to use db_path: {db_path}")
-
-    # List tables if requested
-    if args.list_tables:
-        tables = get_tables_from_modellake_db(db_path=db_path)
-        print(f"Found {len(tables)} tables in modellake.db:")
-        for i, table in enumerate(tables[:50], 1):  # Show first 50
-            print(f"  {i}. Table ID: {table['tableid']}, File: {table['filename']}, "
-                    f"Group: {table['table_group']}, Type: {table['table_type']}")
-        if len(tables) > 50:
-            print(f"  ... and {len(tables) - 50} more tables")
     
     # If no query provided, try to use test_table_id or require query
     if args.query is None and args.test_table_id is None:
@@ -980,13 +913,7 @@ To create modellake.db, use:
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
     print(f"✅ Results saved to {output_path}")
-    def _get_device():
-        try:
-            import torch
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            return "cpu"
-    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {_get_device()})")
+    print(f"\nTotal time: {time.time() - start_time:.2f}s")
 
 
 if __name__ == '__main__':

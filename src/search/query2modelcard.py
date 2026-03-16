@@ -14,26 +14,12 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
+from src.utils import get_device
+
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
-def _get_device() -> str:
-    try:
-        import torch
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
-
-
-def search_query2modelcard(
-    query: str,
-    emb_npz: str = "data/card2card_embeddings.npz",
-    faiss_index: str = "data/card2card.faiss",
-    model_name: str = "all-MiniLM-L6-v2",
-    top_k: int = 20,
-    device: Optional[str] = None,
-    output_json: Optional[str] = None
-) -> List[str]:
+def search_query2modelcard(query: str, emb_npz: str = "data/card2card_embeddings.npz", faiss_index: str = "data/card2card.faiss", model_name: str = "all-MiniLM-L6-v2", top_k: int = 20, output_json: Optional[str] = None) -> List[str]:
     """
     Search for model cards using a text query.
     
@@ -43,7 +29,6 @@ def search_query2modelcard(
         faiss_index: Path to FAISS index
         model_name: Sentence transformer model name (must match the one used to build index)
         top_k: Number of results to return
-        device: Device to use ("cuda" or "cpu")
         output_json: Optional path to save results as JSON
     
     Returns:
@@ -56,12 +41,8 @@ def search_query2modelcard(
     # Load FAISS index
     index = faiss.read_index(faiss_index)
     
-    # Auto-detect device if not specified
-    if device is None:
-        device = _get_device()
-    
     # Encode query
-    model = SentenceTransformer(model_name, device=device)
+    model = SentenceTransformer(model_name, device=get_device())
     model.eval()
     query_emb = model.encode([query], convert_to_numpy=True, show_progress_bar=False)
     query_emb = query_emb.astype('float32')
@@ -100,31 +81,25 @@ def main():
                        help='Sentence transformer model name')
     parser.add_argument('--top_k', type=int, default=20,
                        help='Number of results to return')
-    parser.add_argument('--device', default=None,
-                       help='Device to use (cuda or cpu). Auto-detects if not specified.')
     parser.add_argument('--output_json', default=None,
                        help='Optional path to save results as JSON')
     
     args = parser.parse_args()
     start_time = time.time()
 
-    # Auto-detect device if not specified
-    device = args.device if args.device else _get_device()
-    
     results = search_query2modelcard(
         query=args.query,
         emb_npz=args.emb_npz,
         faiss_index=args.faiss_index,
         model_name=args.model_name,
         top_k=args.top_k,
-        device=device,
         output_json=args.output_json
     )
     
     print(f"Found {len(results)} model cards for query: '{args.query}'")
     for i, model_id in enumerate(results, 1):
         print(f"  {i}. {model_id}")
-    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {device})")
+    print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {get_device()})")
 
 def _test():
     """Quick test when run with no args."""
@@ -135,7 +110,7 @@ def _test():
         return
     q = "For text-to-SQL, which models have the most complete and comparable benchmark results?"
     print("Test query2modelcard (top_k=1):", q[:60] + "...")
-    r = search_query2modelcard(query=q, emb_npz=emb_npz, faiss_index=faiss_index, top_k=1, device=_get_device())
+    r = search_query2modelcard(query=q, emb_npz=emb_npz, faiss_index=faiss_index, top_k=1)
     print("Result:", r[0] if r else "none")
 
 

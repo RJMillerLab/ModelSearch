@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS
 
-__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "load_modelid_to_csvlist", "load_csvs_to_modelids", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames"]
+__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "load_modelid_to_csvlist", "load_csvs_to_modelids", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db"]
 
 
 def get_device() -> str:
@@ -311,6 +311,26 @@ def load_table(csv_path: str) -> Optional[pd.DataFrame]:
     return None
 
 
+
+
+def get_tables_from_modellake_db(limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    Input: limit, Output: List[Dict[str, Any]]
+    """
+    from src.config import MODELLAKE_DB, INDEX_TABLE
+    with duckdb.connect(MODELLAKE_DB, read_only=True) as con:
+        query = f"""
+        SELECT DISTINCT tableid, filename, table_group, table_type 
+        FROM {INDEX_TABLE} 
+        WHERE rowid = -1
+        """
+        if limit:
+            query += f" LIMIT {limit}"
+        results = con.execute(query).fetchall()
+        return [
+            {"tableid": row[0], "filename": row[1], "table_group": row[2], "table_type": row[3]}
+            for row in results
+        ]
 
 ####################
 # deprecated functions

@@ -35,18 +35,31 @@ RELATIONSHIP_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step3_dedup{V2_SU
 # Default outputs go to ModelSearchDemo/data rather than ../ModelTables/data.
 OUTPUT_DIR = str(REPO_ROOT / "data")
 # Repo-local outputs (e.g. card2card build-index, search results, temp artifacts)
-CLASSIFICATION_JSON = os.path.join(OUTPUT_DIR, "table_classifications.json")
-SCHEMA_LOG = os.path.join(os.path.dirname(MODELTABLES_DATA), "logs", "parquet_schema.log")
-CARD2TAB2CARD_OUTPUT_JSON   = os.path.join(OUTPUT_DIR, "card2tab2card_results.json")
-TAB2TAB_OUTPUT_JSON        = os.path.join(OUTPUT_DIR, "tab2tab_results.json")
-TAB2TAB_BY_TYPE_OUTPUT_JSON   = os.path.join(OUTPUT_DIR, "tab2tab_by_type_results.json")
+CLASSIFICATION_JSON            = os.path.join(OUTPUT_DIR, "table_classifications.json")
+SCHEMA_LOG                     = os.path.join(os.path.dirname(MODELTABLES_DATA), "logs", "parquet_schema.log")
+CARD2TAB2CARD_OUTPUT_JSON      = os.path.join(OUTPUT_DIR, "card2tab2card_results.json")
+TAB2TAB_OUTPUT_JSON            = os.path.join(OUTPUT_DIR, "tab2tab_results.json")
+TAB2TAB_BY_TYPE_OUTPUT_JSON    = os.path.join(OUTPUT_DIR, "tab2tab_by_type_results.json")
 CARD2TAB2CARD_BY_TYPE_STANDALONE_JSON = os.path.join(OUTPUT_DIR, "card2tab2card_by_type_standalone.json")
-CLASSIFICATION_OUTPUT_JSON      = CLASSIFICATION_JSON
+CLASSIFICATION_OUTPUT_JSON     = CLASSIFICATION_JSON
+EMB_NPZ                        = os.path.join(OUTPUT_DIR, "card2card_embeddings.npz")
+FAISS_INDEX                    = os.path.join(OUTPUT_DIR, "card2card.faiss")
+SPARSE_INDEX                   = os.path.join(OUTPUT_DIR, "card2card_sparse_index")
 
 
 # --- Other repositories ---
 DIALITE_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "dialite")
+BLEND_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "Blend_internal")
 
+# --- Data Structures ---
+RESULT_DIR = os.path.join(OUTPUT_DIR, "results")
+QUERY_RESULT_PATH = os.path.join(RESULT_DIR, "query_to_modelids.parquet")
+QUERY_TIME_PATH = os.path.join(RESULT_DIR, "past_time_queries.parquet")
+QUERY_MODEL_ID_PATH = os.path.join(RESULT_DIR, "model_to_modelids.parquet")
+TABLE_RESULT_PATH = os.path.join(RESULT_DIR, "table_to_tables.parquet")
+LOG_PATH = os.path.join(RESULT_DIR, "query_to_logs.parquet")
+
+# --- 
 VALID_MODEL_IDS_TXT = os.path.join(OUTPUT_DIR, "valid_model_ids_with_tables.txt")
 
 def abs_path(relative_path: str) -> str:
