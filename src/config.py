@@ -46,10 +46,19 @@ EMB_NPZ                        = os.path.join(OUTPUT_DIR, "card2card_embeddings.
 FAISS_INDEX                    = os.path.join(OUTPUT_DIR, "card2card.faiss")
 SPARSE_INDEX                   = os.path.join(OUTPUT_DIR, "card2card_sparse_index")
 
+PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
+
+CARD2TAB2CARD_TIMEOUT = 600
+USE_BY_TYPE = False
+JOBS_DIR = os.path.join(OUTPUT_DIR, "jobs")
+os.makedirs(JOBS_DIR, exist_ok=True)
 
 # --- Other repositories ---
 DIALITE_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "dialite")
 BLEND_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "Blend_internal")
+TAB2KNOW_REPO = os.path.join(REPO_ROOT, "others", "tab2know")
+CARD2CARD_MODES = ["dense", "sparse", "hybrid"]
+CARD2TAB2CARD_TYPES = ["keyword", "single_column", "unionable"]
 
 # --- Data Structures ---
 RESULT_DIR = os.path.join(OUTPUT_DIR, "results")

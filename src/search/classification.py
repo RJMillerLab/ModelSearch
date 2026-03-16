@@ -35,41 +35,11 @@ from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
 import argparse
 
-from src.config import MODELLAKE_DB, CLASSIFICATION_OUTPUT_JSON, INDEX_TABLE
+from src.config import MODELLAKE_DB, CLASSIFICATION_OUTPUT_JSON, INDEX_TABLE, TAB2KNOW_REPO
 from src.utils import resolve_table_path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-
-
-def _find_tab2know_repo() -> Optional[str]:
-    """Find Tab2Know repository directory - checks local others/ first, then external repos"""
-    # Priority 1: Check local others/tab2know directory (bundled with this repo)
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-    local_tab2know = os.path.join(project_root, 'others', 'tab2know')
-    if os.path.exists(os.path.join(local_tab2know, 'run_inference.py')):
-        return local_tab2know
-    
-    # Priority 2: Check environment variable
-    if 'TAB2KNOW_REPO' in os.environ:
-        repo_dir = os.environ['TAB2KNOW_REPO']
-        if os.path.exists(os.path.join(repo_dir, 'run_inference.py')):
-            return repo_dir
-    
-    # Priority 3: Check common external locations
-    possible_paths = [
-        os.path.join(os.path.expanduser('~'), 'Repo', 'TabKnow_internal'),
-        os.path.join(os.path.dirname(__file__), '../../..', 'TabKnow_internal'),
-        '/Users/doradong/Repo/TabKnow_internal',
-    ]
-    
-    for path in possible_paths:
-        abs_path = os.path.abspath(path)
-        if os.path.exists(os.path.join(abs_path, 'run_inference.py')):
-            return abs_path
-    
-    return None
-
 
 # tab2know uses UNK = 'http://cs.vu.nl/tab2know/Other' (annotate.labelquery_types['table-type']['UNK']).
 # So "Other" is the proper label for uncertain/fallback; we never use "unknown" as an error code.
@@ -89,7 +59,7 @@ def _get_tab2know_valid_labels() -> List[str]:
     if _valid_labels_cache is not None:
         return _valid_labels_cache
     labels = set()
-    tab2know_repo = _find_tab2know_repo()
+    tab2know_repo = TAB2KNOW_REPO
     if tab2know_repo:
         import re
         tabletypes_path = os.path.join(tab2know_repo, "tab2know", "tabletypes.py")
@@ -121,7 +91,7 @@ def _extract_classification_from_rdf_type(rdf_type: str) -> str:
     return label if label in valid_labels else TAB2KNOW_UNK_LABEL
 
 
-def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) -> str:
+def _classify_with_tab2know(csv_path: str) -> str:
     """
     Classify a table using tab2know inference.
     
@@ -135,14 +105,7 @@ def _classify_with_tab2know(csv_path: str, tab2know_repo: Optional[str] = None) 
         RuntimeError: if tab2know inference fails (returncode != 0, no output, timeout, parse error).
         Predict must always yield a label; we do not return a fallback.
     """
-    if tab2know_repo is None:
-        tab2know_repo = _find_tab2know_repo()
-    
-    if tab2know_repo is None:
-        raise RuntimeError(
-            "Tab2Know repository not found. Please set TAB2KNOW_REPO environment variable "
-            "or ensure TabKnow_internal is in a standard location."
-        )
+    tab2know_repo = TAB2KNOW_REPO
     
     # Use a temporary directory (auto-cleaned on exit)
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -620,21 +583,16 @@ if __name__ == '__main__':
         # Test 5: Test tab2know classification (if available and inference succeeds)
         print("\n[Test 5] Test tab2know classification (if available)")
         print("-" * 60)
-        tab2know_repo = _find_tab2know_repo()
-        if tab2know_repo:
-            print(f"✅ Tab2Know repository found: {tab2know_repo}")
-            test_df = pd.DataFrame({
-                'Method': ['A', 'B', 'C'],
-                'Accuracy': [0.95, 0.92, 0.88],
-                'F1': [0.94, 0.91, 0.87]
-            })
-            result = classify_table(test_df, method="tab2know")
-            print(f"✅ Result: {result}")
-            assert isinstance(result, str) and len(result) > 0, f"Expected tab2know label, got '{result}'"
-            assert result in _get_tab2know_valid_labels(), f"Expected label from tab2know set, got '{result}'"
-        else:
-            print("⚠️  Tab2Know repository not found, skipping tab2know test")
-            print("   Set TAB2KNOW_REPO environment variable to enable tab2know tests")
+        print(f"✅ Tab2Know repository found: {TAB2KNOW_REPO}")
+        test_df = pd.DataFrame({
+            'Method': ['A', 'B', 'C'],
+            'Accuracy': [0.95, 0.92, 0.88],
+            'F1': [0.94, 0.91, 0.87]
+        })
+        result = classify_table(test_df, method="tab2know")
+        print(f"✅ Result: {result}")
+        assert isinstance(result, str) and len(result) > 0, f"Expected tab2know label, got '{result}'"
+        assert result in _get_tab2know_valid_labels(TAB2KNOW_REPO), f"Expected label from tab2know set, got '{result}'"
         
         print("\n" + "=" * 60)
         print("✅ All test cases passed!")

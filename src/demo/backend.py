@@ -6,24 +6,12 @@ All job outputs (search results, integration, evaluation, QA) go under data/jobs
 Minimal imports for fast startup.
 """
 
-import os
-import sys
-import json
-import random
-import string
-import threading
-import subprocess
-import time
+import os, sys, json, random, string, threading, subprocess, time, math, re, numpy as np, pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
-import math
-import re
-import numpy as np
-import pandas as pd
-
 
 def _sanitize_for_json(obj: Any) -> Any:
     """Replace float('nan') with None so JSON serialization produces null."""
@@ -35,22 +23,8 @@ def _sanitize_for_json(obj: Any) -> Any:
         return {k: _sanitize_for_json(v) for k, v in obj.items()}
     return obj
 
-
-# Repo root (backend lives in src/demo/)
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-
 # Paths from config.py (relative to repo root)
-from src.config import OUTPUT_DIR, EMB_NPZ, FAISS_INDEX, SPARSE_INDEX
-
-# All job outputs (search results, integration, evaluation, QA) live under data/jobs/<job_id>
-JOBS_DIR = os.path.join(REPO_ROOT, OUTPUT_DIR, "jobs")
-
-# Card2Tab2Card table search can be slow (Blend keyword/single_column over modellake.db; per-table search)
-CARD2TAB2CARD_TIMEOUT = int(os.environ.get("CARD2TAB2CARD_TIMEOUT", "600"))  # 10 min default
-
-# Table type classification (by_type): set via --use-by-type or env USE_BY_TYPE=1
-USE_BY_TYPE = False
-
+from src.config import EMB_NPZ, FAISS_INDEX, SPARSE_INDEX, PRESET_QUERIES_PATH, REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES
 
 def _generate_job_id() -> str:
     """Generate human-readable job ID: YYYY-MM-DD_HH-MM-SS_xxxx (time + 4-char suffix for uniqueness)."""
@@ -126,7 +100,6 @@ CORS(app)
 
 jobs: Dict[str, "JobLogger"] = {}
 
-
 class JobLogger:
     """Thread-safe logger for job progress. When log_file is set, also writes to file."""
     def __init__(self, job_id: str):
@@ -179,14 +152,7 @@ class JobLogger:
 def _run_cmd(cmd: List[str], cwd: str, env: Optional[Dict] = None, timeout: Optional[int] = 300) -> tuple:
     """Run command; return (returncode, stdout, stderr). No try/except - caller checks returncode."""
     env = env or os.environ.copy()
-    r = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
     return (r.returncode, r.stdout or "", r.stderr or "")
 
 
@@ -198,26 +164,23 @@ def _read_json(path: str) -> Optional[Dict]:
         return json.load(f)
 
 
-# Valid model IDs (have tables): built by scripts/build_valid_model_ids_txt.py (Part 1); inference only loads
+def _read_json_job(job_id: str, filename:str) -> Optional[Dict]:
+    """Read JSON file from job directory."""
+    return _read_json(os.path.join(JOBS_DIR, job_id, filename))
 
-def _get_valid_model_ids_with_tables() -> set:
+def _write_json_job(job_id: str, filename: str, data: Dict):
+    """Write JSON data to job directory."""
+    with open(os.path.join(JOBS_DIR, job_id, filename), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# Valid model IDs (have tables): built by scripts/build_valid_model_ids_txt.py (Part 1); inference only loads
+def _get_valid_modelids_with_tables() -> set:
     """Cached set of model_id that have tables. Fast O(1) lookup; loads from txt once per backend lifetime."""
     from src.config import VALID_MODEL_IDS_TXT
     with open(VALID_MODEL_IDS_TXT, "r", encoding="utf-8") as f:
         return {line.strip() for line in f if line.strip()}
 
-def run_search_pipeline(
-    job_id: str,
-    query: Optional[str] = None,
-    top_k: int = 20,
-    model_id: Optional[str] = None,
-    table_search_k: Optional[int] = None,
-    tab2tab_mode: str = "search",
-    tab2tab_json: Optional[str] = None,
-    card2card_retrieval_mode: str = "dense",
-    require_seed_has_tables: bool = False,
-    use_by_type: bool = False,
-):
+def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None, tab2tab_mode: str = "search", tab2tab_json: Optional[str] = None, card2card_retrieval_mode: str = "dense", require_seed_has_tables: bool = False, use_by_type: bool = False):
     """Run pipeline by calling CLI commands (build_index.md). All outputs under job_dir."""
     logger = jobs.get(job_id)
     if not logger:
@@ -235,33 +198,14 @@ def run_search_pipeline(
         logger.set_results(d)
 
     try:
-        _run_pipeline_body(
-            logger, job_id, job_dir, start_time,
-            query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode,
-            require_seed_has_tables, use_by_type,
-        )
+        _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type)
     except Exception as e:
         logger.log(f"Pipeline crashed: {e}")
         _set_pipeline_error(f"Pipeline error: {e}", model_id)
         import traceback
         logger.log(traceback.format_exc())
 
-
-def _run_pipeline_body(
-    logger: "JobLogger",
-    job_id: str,
-    job_dir: str,
-    start_time: float,
-    query: Optional[str],
-    top_k: int,
-    model_id: Optional[str],
-    table_search_k: Optional[int],
-    tab2tab_mode: str,
-    tab2tab_json: Optional[str],
-    card2card_retrieval_mode: str,
-    require_seed_has_tables: bool = False,
-    use_by_type: bool = False,
-):
+def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], tab2tab_mode: str, tab2tab_json: Optional[str], card2card_retrieval_mode: str, require_seed_has_tables: bool = False, use_by_type: bool = False):
     # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
@@ -292,23 +236,16 @@ def _run_pipeline_body(
         q2m_script = os.path.join(REPO_ROOT, "src", "search", "query2modelcard.py")
 
         if require_seed_has_tables:
-            valid_model_ids = _get_valid_model_ids_with_tables()
+            valid_model_ids = _get_valid_modelids_with_tables()
             logger.log(f"Narrow down: valid model IDs (have tables) = {len(valid_model_ids)} (from {VALID_MODEL_IDS_TXT})")
             # Two-phase: try 2× top_k first; if no valid model, run again with 5× (cap 200)
             phase1_k = min(100, 2 * top_k)
             phase2_k = min(200, 5 * top_k)
             for phase, q2m_top_k in enumerate([phase1_k, phase2_k], 1):
                 if phase == 2 and phase2_k <= phase1_k:
-                        break
+                    break
                 logger.log(f"query2modelcard phase {phase}: top_k={q2m_top_k}")
-                cmd = [
-                    sys.executable, q2m_script,
-                    "--query", query,
-                    "--top_k", str(q2m_top_k),
-                    "--emb_npz", EMB_NPZ,
-                    "--faiss_index", FAISS_INDEX,
-                    "--output_json", q2m_out,
-                ]
+                cmd = [sys.executable, q2m_script, "--query", query, "--top_k", str(q2m_top_k), "--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX, "--output_json", q2m_out]
                 t0 = time.time()
                 rc, out, err = _run_cmd(cmd, REPO_ROOT)
                 elapsed = time.time() - t0
@@ -346,14 +283,7 @@ def _run_pipeline_body(
                 logger.log(f"Table Search Seed Model: none of top-{len(results_list)} in valid set. Using top-1 for Card2Card only; Table Search skipped.")
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
         else:
-            cmd = [
-                sys.executable, q2m_script,
-                "--query", query,
-                "--top_k", "1",
-                "--emb_npz", EMB_NPZ,
-                "--faiss_index", FAISS_INDEX,
-                "--output_json", q2m_out,
-            ]
+            cmd = [sys.executable, q2m_script, "--query", query, "--top_k", "1", "--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX, "--output_json", q2m_out]
             t0 = time.time()
             rc, out, err = _run_cmd(cmd, REPO_ROOT)
             elapsed = time.time() - t0
@@ -388,11 +318,7 @@ def _run_pipeline_body(
             return
         logger.log(f"Using model_id: {model_id}")
         # User-provided ID must exist in our dataset; otherwise fail before any downstream
-        check_cmd = [
-            sys.executable, os.path.join(REPO_ROOT, "scripts", "check_model_in_index.py"),
-            "--model_id", model_id,
-            "--emb_npz", EMB_NPZ,
-        ]
+        check_cmd = [sys.executable, os.path.join(REPO_ROOT, "scripts", "check_model_in_index.py"), "--model_id", model_id, "--emb_npz", EMB_NPZ]
         t0 = time.time()
         rc, out, err = _run_cmd(check_cmd, REPO_ROOT, timeout=60)
         elapsed = time.time() - t0
@@ -416,13 +342,7 @@ def _run_pipeline_body(
 
     def run_card2card(mode: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2card_{mode}.json")
-        cmd = [
-            sys.executable, "-m", "src.search.card2card", "search",
-            "--model_id", model_id,
-            "--retrieval_mode", mode,
-            "--top_k", str(card2card_top_k),
-            "--output_json", out_path,
-        ]
+        cmd = [sys.executable, "-m", "src.search.card2card", "search", "--model_id", model_id, "--retrieval_mode", mode, "--top_k", str(card2card_top_k), "--output_json", out_path]
         if mode == "dense":
             cmd.extend(["--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX])
         elif mode == "sparse":
@@ -441,15 +361,7 @@ def _run_pipeline_body(
         c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
-        cmd = [
-            sys.executable, c2t2c_script,
-            "--model_id", model_id,
-            "--search_type", st,
-            "--k", str(k_table),
-            "--modelcard_k", "0",
-            "--no_citationlake",
-            "--output_json", out_path,
-        ]
+        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--search_type", st, "--k", str(k_table), "--modelcard_k", "0", "--no_citationlake", "--output_json", out_path]
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -463,28 +375,17 @@ def _run_pipeline_body(
         c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        cmd = [
-            sys.executable, c2t2c_script,
-            "--model_id", model_id,
-            "--mode", "by_type",
-            "--search_type", "keyword",
-            "--k", str(k_table),
-            "--modelcard_k", "0",
-            "--no_citationlake",
-            "--output_json", out_path,
-        ]
+        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--mode", "by_type", "--search_type", "keyword", "--k", str(k_table), "--modelcard_k", "0", "--no_citationlake", "--output_json", out_path]
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
         logger.log_cmd("Card2Tab2Card-by_type", cmd, out_path, elapsed, rc)
         return (st, rc, out_path, out, err, elapsed)
 
-    card2card_modes = ["dense", "sparse", "hybrid"]
-    # Table-search modes to actually run in the pipeline.
-    # keyword / single_column were always enabled; unionable is now also run (uses model's tables as query when no CSV is provided).
-    card2tab2card_types = ["keyword", "single_column", "unionable"]
-    # Add by_type if requested (from frontend checkbox or backend --use-by-type)
-    if use_by_type or USE_BY_TYPE:
+    card2card_modes = CARD2CARD_MODES
+    card2tab2card_types = CARD2TAB2CARD_TYPES
+    # Add by_type if requested
+    if use_by_type:
         card2tab2card_types = list(card2tab2card_types) + ["by_type"]
 
     futures = {}
@@ -579,40 +480,22 @@ def _run_pipeline_body(
             card2card_all[mode] = val[:max_right]
             logger.log(f"[Card2Card-{mode.upper()}] Truncated to {max_right} (align to right pipeline max)")
 
-    primary = card2card_all.get(
-        "dense",
-        card2card_all.get(list(card2card_all.keys())[0] if card2card_all else "dense", []),
-    )
-    if isinstance(primary, dict) and "error" in primary:
+    # Primary Card2Card list is strictly the configured retrieval_mode ("dense" by default).
+    # If that mode failed or produced no usable list, do not silently fall back to another mode.
+    primary = card2card_all.get("dense")
+    if not isinstance(primary, list):
+        logger.log("[Card2Card] Primary retrieval mode 'dense' missing or errored; returning empty primary list.")
         primary = []
 
     elapsed_total = time.time() - start_time
     logger.log(f"Step 3: Done. Total time: {elapsed_total:.2f}s")
 
-    results_data = {
-        "job_id": job_id,
-        "query": query,
-        "model_id": model_id,
-        "top_k": top_k,
-        "table_search_k": k_table,
-        "card2card_retrieval_mode": card2card_retrieval_mode,
-        "use_by_type": use_by_type,
-        "require_seed_has_tables": require_seed_has_tables,
-        "card2card_results": primary,
-        "card2card_all_modes": card2card_all,
-        "card2tab2card_results": card2tab2card_all,
-        "timestamp": datetime.fromtimestamp(start_time).isoformat(),
-        "folder_path": job_dir,
-        "run_log_path": run_log_path,
-        "running_time_seconds": round(elapsed_total, 3),
-    }
+    results_data = {"job_id": job_id, "query": query, "model_id": model_id, "top_k": top_k, "table_search_k": k_table, "card2card_retrieval_mode": card2card_retrieval_mode, "use_by_type": use_by_type, "require_seed_has_tables": require_seed_has_tables, "card2card_results": primary, "card2card_all_modes": card2card_all, "card2tab2card_results": card2tab2card_all, "timestamp": datetime.fromtimestamp(start_time).isoformat(), "folder_path": job_dir, "run_log_path": run_log_path, "running_time_seconds": round(elapsed_total, 3)}
     if table_search_empty_reason:
         results_data["table_search_reason"] = table_search_empty_reason
 
-    out_file = os.path.join(job_dir, "search_results.json")
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(results_data, f, ensure_ascii=False, indent=2)
-    logger.log(f"Results saved to {out_file}")
+    _write_json_job(job_id, "search_results.json", results_data)
+    logger.log(f"Results saved to {os.path.join(job_dir, 'search_results.json')}")
     logger.log(f"[FINAL] Job directory: {os.path.abspath(job_dir)} | Run log: {os.path.abspath(run_log_path)} | Total: {elapsed_total:.2f}s")
     logger.set_results(results_data)
     logger.set_status("completed")
@@ -622,7 +505,6 @@ def _run_pipeline_body(
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
-
 
 # ----- Optional UI (single-server deploy, e.g. Hugging Face Spaces) -----
 # When SERVE_UI=1 or running on port 7860, backend serves the frontend so one port is enough.
@@ -639,7 +521,6 @@ def index():
         return _serve_ui()
     return jsonify({"message": "ModelSearch API. Set SERVE_UI=1 to serve the demo UI.", "docs": "/api/health"})
 
-
 @app.route("/static/app.js")
 def serve_app_js():
     if os.environ.get("SERVE_UI", "").strip().lower() not in ("1", "true", "yes"):
@@ -651,7 +532,6 @@ def serve_app_js():
     with open(app_js_path, "r", encoding="utf-8") as f:
         content = f.read().replace("{{BACKEND_URL}}", "")
     return Response(content, mimetype="application/javascript")
-
 
 @app.route("/static/fig/<path:filename>")
 def serve_fig(filename):
@@ -665,44 +545,37 @@ def serve_fig(filename):
         return jsonify({"error": "file not found"}), 404
     return send_from_directory(fig_dir, filename)
 
-
 @app.route("/api/search", methods=["POST"])
 def search():
     data = request.json or {}
-    search_mode = data.get("search_mode", "new")
 
+    # Legacy "mimic" mode: load saved search results by folder/template instead of running pipeline.
+    search_mode = data.get("search_mode", "new")
     if search_mode == "mimic":
-        folder_name = data.get("folder_name")
-        if not folder_name:
-            return jsonify({"status": "error", "message": "folder_name required for mimic"}), 400
-        if folder_name == "template":
-            base_dir = os.path.join(REPO_ROOT, "config", "demo_template")
-            search_path = os.path.join(base_dir, "search_results.json")
-        else:
-            base_dir = os.path.join(JOBS_DIR, folder_name)
-            search_path = os.path.join(base_dir, "search_results.json")
-        if not os.path.exists(search_path):
-            return jsonify({"status": "error", "message": f"Saved results not found: {folder_name}"}), 404
-        with open(search_path, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-        # For saved searches under data/jobs/, use folder_name as job_id so integrate/eval/qa use same folder
-        # For template (config/demo_template), use new job_id so we do not write into config
-        if folder_name == "template":
-            job_id = _generate_job_id()
-            base_dir = None  # no optional files for template
-        else:
-            job_id = folder_name
-            jobs[job_id] = JobLogger(job_id)
+        job_id = data.get("folder_name")
+        if not job_id:
+            return jsonify({"status": "error", "message": "job_id required for mimic"}), 400
+        if job_id == "template":
+            return jsonify({"status": "error", "message": "No past searching, please search!"}), 400
+        saved = _read_json_job(job_id, "search_results.json")
+        if saved is None:
+            return jsonify({"status": "error", "message": f"Saved results not found: {job_id}"}), 404
+
+        jobs[job_id] = JobLogger(job_id)
         jobs[job_id].set_results(saved)
         jobs[job_id].set_status("completed")
+
         out = {"status": "completed", "job_id": job_id, "results": saved}
-        if base_dir and os.path.isdir(base_dir):
-            extras = _load_job_extras(job_id, base_dir=base_dir)
-            out.update(extras)
-            if isinstance(out.get("evaluation_results"), dict) and "evaluation" in out["evaluation_results"]:
-                out["evaluation_results"]["evaluation"] = _sanitize_for_js_template(out["evaluation_results"]["evaluation"])
+
+        extras = _load_job_extras(job_id)
+        out.update(extras)
+        # Sanitize evaluation text so it is safe for JS templates on the frontend.
+        if isinstance(out.get("evaluation_results"), dict) and "evaluation" in out["evaluation_results"]:
+            out["evaluation_results"]["evaluation"] = _sanitize_for_js_template(out["evaluation_results"]["evaluation"])
+
         return jsonify(out)
 
+    # Default "new" search: run the full pipeline.
     mode = data.get("mode", "query")
     top_k = int(data.get("top_k", 20))
     table_search_k = data.get("table_search_k")
@@ -738,7 +611,6 @@ def search():
     thread.start()
     return jsonify({"status": "started", "job_id": job_id, "message": "Search pipeline started"})
 
-
 @app.route("/api/status/<job_id>", methods=["GET"])
 def get_status(job_id: str):
     if job_id not in jobs:
@@ -746,11 +618,10 @@ def get_status(job_id: str):
     logger = jobs[job_id]
     return jsonify({"job_id": job_id, "status": logger.status, "logs": logger.get_logs()})
 
-
-def _load_job_extras(job_id: str, base_dir: Optional[str] = None) -> dict:
+def _load_job_extras(job_id: str) -> dict:
     """Load model_search_runs, table_search_runs, evaluation, qa from job dir."""
     out = {}
-    job_dir = base_dir if base_dir else os.path.join(JOBS_DIR, job_id)
+    job_dir = os.path.join(JOBS_DIR, job_id)
     if not os.path.isdir(job_dir):
         return out
     for key, filename in [
@@ -807,7 +678,8 @@ def get_results(job_id: str):
         return jsonify({"status": "error", "message": "Job not found"}), 404
     logger = jobs[job_id]
     if logger.status == "error" and logger.results is not None:
-        resp = {"status": "success", "job_id": job_id, "results": logger.results}
+        # Preserve error status so failures are explicit for debugging; results payload may contain more detail.
+        resp = {"status": "error", "job_id": job_id, "results": logger.results}
         resp.update(_load_job_extras(job_id))
         return jsonify(resp)
     if logger.status != "completed":
@@ -815,7 +687,6 @@ def get_results(job_id: str):
     resp = {"status": "success", "job_id": job_id, "results": logger.results}
     resp.update(_load_job_extras(job_id))
     return jsonify(resp)
-
 
 @app.route("/api/logs/<job_id>", methods=["GET"])
 def stream_logs(job_id: str):
@@ -828,19 +699,15 @@ def stream_logs(job_id: str):
         while logger.status in ("pending", "running"):
             logs = logger.get_logs()
             for log in logs[last:]:
-                    yield f"data: {json.dumps(log)}\n\n"
+                yield f"data: {json.dumps(log)}\n\n"
             last = len(logs)
             time.sleep(0.5)
         logs = logger.get_logs()
         for log in logs[last:]:
-                yield f"data: {json.dumps(log)}\n\n"
+            yield f"data: {json.dumps(log)}\n\n"
         yield f"data: {json.dumps({'status': 'completed'})}\n\n"
     
     return Response(stream_with_context(generate()), mimetype="text/event-stream")
-
-
-PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
-
 
 @app.route("/api/preset-queries", methods=["GET"])
 def get_preset_queries():
@@ -859,16 +726,9 @@ def get_table_preview():
 
 @app.route("/api/saved-searches", methods=["GET"])
 def list_saved_searches():
-    jobs_parent = JOBS_DIR
-    template_path = os.path.join(REPO_ROOT, "config", "demo_template", "search_results.json")
-    template_available = os.path.isfile(template_path)
-    if not os.path.isdir(jobs_parent):
-        os.makedirs(jobs_parent, exist_ok=True)
-        return jsonify({"status": "success", "searches": [], "template_available": template_available})
-    # Collect (name, path, mtime) for valid job dirs, sort by mtime descending (newest first)
     candidates = []
-    for name in os.listdir(jobs_parent):
-        path = os.path.join(jobs_parent, name)
+    for name in os.listdir(JOBS_DIR):
+        path = os.path.join(JOBS_DIR, name)
         json_path = os.path.join(path, "search_results.json")
         if os.path.isdir(path) and os.path.isfile(json_path):
             mtime = os.path.getmtime(json_path)
@@ -892,7 +752,7 @@ def list_saved_searches():
         entry["card2card_retrieval_mode"] = saved.get("card2card_retrieval_mode")
         entry["table_search_k"] = saved.get("table_search_k")
         searches.append(entry)
-    return jsonify({"status": "success", "searches": searches, "template_available": template_available})
+    return jsonify({"status": "success", "searches": searches})
 
 
 # Stubs for integrate / evaluate / qa (use legacy backend for full support)
@@ -915,13 +775,7 @@ def integrate():
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from integration.table_integration import integrate_tables_from_card2tab2card
-        result = integrate_tables_from_card2tab2card(
-            search_results_json=results_file,
-            search_type=search_type,
-            integration_type=integration_type,
-            k=k,
-            tables_source=tables_source,
-        )
+        result = integrate_tables_from_card2tab2card(search_results_json=results_file, search_type=search_type, integration_type=integration_type, k=k, tables_source=tables_source)
         run_key = _table_search_key(integration_type, search_type, tables_source)
 
         if not result.get("success", False):
@@ -959,7 +813,6 @@ def integrate():
         traceback.print_exc()
         return _api_error(str(e), 500)
 
-
 @app.route("/api/integrate-model-search", methods=["POST"])
 def integrate_model_search():
     """Integrate tables from Card2Card (model search) results"""
@@ -979,13 +832,7 @@ def integrate_model_search():
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from integration.table_integration import integrate_tables_from_card2card
         
-        result = integrate_tables_from_card2card(
-            search_results_json=results_file,
-            integration_type=integration_type,
-            k=k,
-            max_models=max_models,
-            card2card_retrieval_mode=card2card_retrieval_mode,
-        )
+        result = integrate_tables_from_card2card(search_results_json=results_file, integration_type=integration_type, k=k, max_models=max_models, card2card_retrieval_mode=card2card_retrieval_mode)
         run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
 
         if not result.get("success", False):
@@ -1001,10 +848,7 @@ def integrate_model_search():
         saved_path = None
         if integrated_df is not None:
             raw_data = integrated_df.values.tolist()
-            result["integrated_table"] = {
-                "columns": list(integrated_df.columns),
-                "data": _sanitize_for_json(raw_data)
-            }
+            result["integrated_table"] = {"columns": list(integrated_df.columns), "data": _sanitize_for_json(raw_data)}
             csv_name = f"integrated_model_search_{run_key}.csv"
             save_path = os.path.join(job_dir, csv_name)
             integrated_df.to_csv(save_path, index=False, encoding="utf-8")
@@ -1039,15 +883,6 @@ def _load_integrated_table_from_json(job_dir: str, json_name: str) -> Optional[p
     if not cols and not rows:
         return None
     return pd.DataFrame(rows, columns=cols) if cols else pd.DataFrame(rows)
-
-
-def _load_integrated_table_from_csv(job_dir: str, csv_name: str) -> Optional[pd.DataFrame]:
-    """Load integrated table from CSV file."""
-    path = os.path.join(job_dir, csv_name)
-    if not os.path.exists(path):
-        return None
-    return pd.read_csv(path)
-
 
 def _load_tables_from_integration_run(job_dir: str, run_key: str):
     """Load (table1_df, table2_df) from integration_run_<key>.json. table1=Table Search, table2=Model Search."""
@@ -1094,17 +929,14 @@ def evaluate():
         return jsonify({"status": "error", "message": "Model Search integration not found. Please run Model Search integration first."}), 400
 
     # Load query from search results
-    results_file = os.path.join(job_dir, "search_results.json")
     query = "model search query"
-    if os.path.exists(results_file):
-        with open(results_file, "r", encoding="utf-8") as f:
-            sr = json.load(f)
+    sr = _read_json_job(job_id, "search_results.json")
+    if sr:
         query = sr.get("query") or query
 
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
         from evaluation.llm import evaluate_diversity_with_llm
-
         result = evaluate_diversity_with_llm(query=query, table1=table1_df, table2=table2_df, table1_source="Table Search Integration", table2_source="Model Search Integration")
     except ValueError as ve:
         return jsonify({"status": "error", "message": f"Evaluation failed: {str(ve)}"}), 500
@@ -1258,15 +1090,7 @@ if __name__ == "__main__":
     import argparse as _argparse
     parser = _argparse.ArgumentParser(description="ModelSearch Demo Backend")
     parser.add_argument("--port", type=int, default=None, help="Port (default: env PORT or 5002)")
-    parser.add_argument("--use-by-type", action="store_true", dest="use_by_type", help="Run card2tab2card with table type classification (by_type mode)")
-    parser.add_argument("--no-by-type", action="store_false", dest="use_by_type", help="Do not run by_type (default)")
-    parser.set_defaults(use_by_type=None)
     args, _ = parser.parse_known_args()
-
-    if args.use_by_type is not None:
-        USE_BY_TYPE = args.use_by_type
-    else:
-        USE_BY_TYPE = os.environ.get("USE_BY_TYPE", "").strip().lower() in ("1", "true", "yes")
 
     print("Backend (CLI-based) starting...", flush=True)
     if USE_BY_TYPE:

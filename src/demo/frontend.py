@@ -16,7 +16,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Get the project root directory (assuming frontend.py is in src/demo/)
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+from src.config import REPO_ROOT
 
 # Backend API URL
 BACKEND_URL = "http://localhost:5002"
@@ -462,37 +462,15 @@ def serve_app_js():
 @app.route('/static/fig/<path:filename>')
 def serve_fig(filename):
     """Serve files from fig directory (PDF, PNG, etc.)"""
-    # Try multiple possible paths for fig directory
-    # Worktree path: /Users/doradong/.cursor/worktrees/ModelSearchDemo/gl4Cp
-    # Main repo path: /Users/doradong/Repo/ModelSearchDemo
-    possible_paths = [
-        os.path.join(PROJECT_ROOT, 'fig'),  # Current worktree
-        os.path.join(os.path.dirname(PROJECT_ROOT), 'fig'),  # Parent of worktree
-        '/Users/doradong/Repo/ModelSearchDemo/fig',  # Main repo (absolute path)
-        os.path.join(os.path.expanduser('~'), 'Repo', 'ModelSearchDemo', 'fig'),  # Main repo (home-relative)
-    ]
+    FIG_DIR = os.path.join(REPO_ROOT, 'fig')
+    os.makedirs(FIG_DIR, exist_ok=True)
     
-    # Also try to find by going up from worktree to find main repo
-    current = PROJECT_ROOT
-    for _ in range(5):  # Go up max 5 levels
-        parent = os.path.dirname(current)
-        possible_paths.append(os.path.join(parent, 'ModelSearchDemo', 'fig'))
-        possible_paths.append(os.path.join(parent, 'fig'))
-        if 'worktrees' in current:
-            # If we're in a worktree, try to find the main repo
-            main_repo = os.path.join(os.path.dirname(os.path.dirname(current)), 'Repo', 'ModelSearchDemo', 'fig')
-            possible_paths.append(main_repo)
-        current = parent
-    
-    for fig_dir in possible_paths:
-        if fig_dir and os.path.exists(fig_dir):
-            file_path = os.path.join(fig_dir, filename)
-            if os.path.exists(file_path):
-                print(f"✅ Serving file from: {file_path}")
-                return send_from_directory(fig_dir, filename)
-    
-    # If not found, return 404 with debug info
-    print(f"❌ File not found. Tried paths: {possible_paths[:5]}")
+    file_path = os.path.join(FIG_DIR, filename)
+    if os.path.exists(file_path):
+        print(f"✅ Serving file from: {file_path}")
+        return send_from_directory(FIG_DIR, filename)
+
+    print(f"❌ File not found. Tried paths: {file_path}")
     return jsonify({"error": "File not found", "filename": filename}), 404
 
 
