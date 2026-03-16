@@ -18,7 +18,7 @@ import json
 from typing import List, Dict, Optional, Any, Set, Tuple
 from collections import Counter
 
-from src.utils import resolve_table_path, load_table
+from src.utils import resolve_table_path, load_table, _get_models_to_tables_batch_sql, load_modelid_to_csvlist
 
 def _reorder_columns_deterministic(df: pd.DataFrame) -> pd.DataFrame:
     """Deterministically reorder columns for readability/comparability.
@@ -68,68 +68,6 @@ def _reorder_columns_deterministic(df: pd.DataFrame) -> pd.DataFrame:
         return df[ordered_cols]
     return df
 
-
-def _normalize_val_to_items(val: Any) -> List[Any]:
-    """Unify iteration over parquet list cells: handle list, tuple, np.ndarray, scalar."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return []
-    if isinstance(val, (list, tuple)):
-        return val
-    if hasattr(val, "__iter__") and not isinstance(val, str):
-        return list(val)
-    return [val]
-
-
-def _get_tables_for_models_duckdb(
-    parquet_path: str, model_ids: List[str]
-) -> Dict[str, List[str]]:
-    """
-    Fast batch query: get all (modelId, csv_basename) for given models using DuckDB.
-    Single SQL scan instead of per-model iteration.
-    """
-    import duckdb
-    if not model_ids or not os.path.exists(parquet_path):
-        return {}
-    path_abs = os.path.abspath(parquet_path).replace("\\", "/")
-    conn = duckdb.connect(":memory:")
-    ids_sql = ",".join(repr(m) for m in model_ids)
-    df = conn.execute(f"""
-        SELECT modelId FROM read_parquet('{path_abs}')
-        WHERE modelId IN ({ids_sql})
-    """).fetchdf()
-    if df.empty:
-        conn.close()
-        return {}
-    cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
-    list_cols = [
-        c[0] for c in cols
-        if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())
-    ][:4]
-    if not list_cols:
-        conn.close()
-        return {}
-    select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
-    full_df = conn.execute(f"""
-        SELECT {select_cols} FROM read_parquet('{path_abs}')
-        WHERE modelId IN ({ids_sql})
-    """).fetchdf()
-    conn.close()
-    model_to_tables: Dict[str, List[str]] = {m: [] for m in model_ids}
-    for _, row in full_df.iterrows():
-        mid = str(row["modelId"])
-        for col in list_cols:
-            val = row.get(col)
-            items = _normalize_val_to_items(val)
-            for v in items:
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s:
-                    base = os.path.basename(s)
-                    if base and base not in model_to_tables[mid]:
-                        model_to_tables[mid].append(base)
-    return model_to_tables
-
 # Add Blend_internal to path
 blend_path = os.path.join(os.path.dirname(__file__), '..', 'Blend_internal')
 blend_path_abs = os.path.abspath(blend_path)
@@ -139,11 +77,9 @@ if blend_path_abs and os.path.exists(blend_path_abs):
     sys.path.insert(0, blend_path_abs)
 
 # Blend_internal imports are optional and will be lazy-loaded if needed
-# We don't import them at module level to avoid DB initialization issues
 BLEND_AVAILABLE = bool(blend_path_abs and os.path.exists(blend_path_abs))
 
-
-def integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
+def _integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
     Integrate multiple tables using Union operation.
     Returns the full integrated result (no row limit).
@@ -171,8 +107,7 @@ def integrate_tables_union(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]
     integrated = integrated.drop_duplicates()
     return integrated
 
-
-def integrate_tables_intersection(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
+def _integrate_tables_intersection(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
     Integrate multiple tables using Intersection operation (find common rows).
     Returns the full result (no row limit).
@@ -213,38 +148,7 @@ def integrate_tables_intersection(tables: List[pd.DataFrame]) -> Optional[pd.Dat
     result = result[common_columns]
     return result
 
-
-def _find_dialite_internal() -> Optional[str]:
-    """Find dialite_internal repository directory - checks local others/ first, then external repos"""
-    # Priority 1: Check local others/dialite directory (bundled with this repo)
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-    local_dialite = os.path.join(project_root, 'others', 'dialite')
-    if os.path.exists(os.path.join(local_dialite, 'alite', 'alite_fd.py')):
-        return local_dialite
-    
-    # Priority 2: Check environment variable
-    if 'DIALITE_INTERNAL_REPO' in os.environ:
-        repo_dir = os.environ['DIALITE_INTERNAL_REPO']
-        if os.path.exists(os.path.join(repo_dir, 'alite', 'alite_fd.py')):
-            return repo_dir
-    
-    # Priority 3: Check common external locations
-    possible_paths = [
-        os.path.join(os.path.dirname(__file__), '../../..', 'dialite_internal'),
-        os.path.join(os.path.dirname(__file__), '../..', 'dialite_internal'),
-        '/Users/doradong/Repo/dialite_internal',
-        os.path.join(os.path.expanduser('~'), 'Repo', 'dialite_internal'),
-    ]
-    
-    for path in possible_paths:
-        abs_path = os.path.abspath(path)
-        if os.path.exists(os.path.join(abs_path, 'alite', 'alite_fd.py')):
-            return abs_path
-    
-    return None
-
-
-def integrate_tables_alite(
+def _integrate_tables_alite(
     tables: List[pd.DataFrame],
     table_paths: List[str],
 ) -> Optional[pd.DataFrame]:
@@ -259,11 +163,7 @@ def integrate_tables_alite(
     Returns:
         Integrated DataFrame or None if integration fails
     """
-    dialite_repo = _find_dialite_internal()
-    if dialite_repo is None:
-        print("⚠️  dialite_internal not found. ALITE integration requires dialite_internal repository.")
-        print("   Set DIALITE_INTERNAL_REPO environment variable or ensure dialite_internal is in a standard location.")
-        return None
+    dialite_repo = DIALITE_INTERNAL_REPO
     
     # Add dialite_internal to path
     if dialite_repo not in sys.path:
@@ -281,7 +181,7 @@ def integrate_tables_alite(
     return result_FD
 
 
-def integrate_tables_outer_join(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
+def _integrate_tables_outer_join(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
     """
     Integrate tables using outer join (merge all tables on index).
     Returns the full result (no row limit).
@@ -311,18 +211,10 @@ def integrate_tables(
     table_paths: List[str],
     integration_type: str = "union",
     k: int = 10,
-    db_path: Optional[str] = None,
     filename_to_tableid: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """
     Integrate multiple tables from modellake.db (by tableid) or from CSV paths.
-    
-    Args:
-        table_paths: List of paths or filenames (basename) to tables
-        integration_type: "union", "intersection", "alite", or "outer_join"
-        k: Number of tables to integrate (top k); the integrated result is not truncated by row count
-        db_path: Optional path to modellake.db; when set with filename_to_tableid, load from DB first (no CSV)
-        filename_to_tableid: Optional map basename -> tableid for loading from modellake_index
         
     Returns:
         Dictionary with integration results
@@ -336,7 +228,6 @@ def integrate_tables(
     
     tables = []
     loaded_paths = []
-    use_db = bool(db_path and filename_to_tableid)
     
     for table_path in table_paths:
         basename = os.path.basename(table_path)
@@ -359,14 +250,14 @@ def integrate_tables(
     
     # Integrate tables (k = number of tables only; we never truncate output rows)
     if integration_type == "union":
-        integrated_df = integrate_tables_union(tables)
+        integrated_df = _integrate_tables_union(tables)
     elif integration_type == "intersection":
-        integrated_df = integrate_tables_intersection(tables)
+        integrated_df = _integrate_tables_intersection(tables)
     elif integration_type == "alite":
         # ALITE requires file paths, not DataFrames
-        integrated_df = integrate_tables_alite(tables, loaded_paths)
+        integrated_df = _integrate_tables_alite(tables, loaded_paths)
     elif integration_type == "outer_join":
-        integrated_df = integrate_tables_outer_join(tables)
+        integrated_df = _integrate_tables_outer_join(tables)
     else:
         return {
             "success": False,
@@ -404,7 +295,7 @@ def integrate_tables(
         # Fallback: chosen method failed (ALITE/dialite missing, outer_join error, etc).
         # Retry with union so user gets a result instead of "Integration failed".
         if integration_type != "union":
-            fallback_df = integrate_tables_union(tables)
+            fallback_df = _integrate_tables_union(tables)
             if fallback_df is not None and (len(fallback_df) > 0 or len(fallback_df.columns) > 0):
                 stats = {
                     "input_tables": len(tables),
@@ -470,23 +361,15 @@ def integrate_tables(
         "table_paths": loaded_paths
     }
 
-
 def integrate_tables_from_search_results(
     search_results_json: str,
     search_type: str = "single_column",
     integration_type: str = "union",
     k: int = 10,
-    db_path: Optional[str] = None,
     tables_source: str = "intermediate",
-    relationship_parquet: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Integrate tables from Card2Tab2Card search results.
-    
-    Args:
-        tables_source: "intermediate" = use retrieved tables from search (fast).
-                       "all_from_modelcards" = get ALL tables for found models from parquet (DuckDB).
-        relationship_parquet: Required when tables_source="all_from_modelcards".
         
     Returns:
         Dictionary with integration results
@@ -498,60 +381,27 @@ def integrate_tables_from_search_results(
     
     # Load search results
     if not os.path.exists(search_results_json):
-        return {
-            "success": False,
-            "error": f"Search results file not found: {search_results_json}",
-            "integrated_table": None
-        }
+        return {"success": False, "error": f"Search results file not found: {search_results_json}", "integrated_table": None}
     
     with open(search_results_json, 'r', encoding='utf-8') as f:
         search_results = json.load(f)
     
     # Extract table filenames from intermediate results
-    # Handle both old format (list) and new format (dict with model_ids and intermediate)
-    if isinstance(search_results, dict):
-        if "intermediate" in search_results:
-            # New format with intermediate data
-            intermediate = search_results["intermediate"]
-        elif "card2tab2card_results" in search_results:
-            # Results from backend API
-            card2tab2card_results = search_results["card2tab2card_results"]
-            if isinstance(card2tab2card_results, dict):
-                if search_type in card2tab2card_results:
-                    if isinstance(card2tab2card_results[search_type], dict) and "intermediate" in card2tab2card_results[search_type]:
-                        intermediate = card2tab2card_results[search_type]["intermediate"]
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"Search type '{search_type}' found but no intermediate data available",
-                            "integrated_table": None
-                        }
-                else:
-                    available_types = list(card2tab2card_results.keys())
-                    return {
-                        "success": False,
-                        "error": f"Search type '{search_type}' not found in results. Available types: {', '.join(available_types)}",
-                        "integrated_table": None
-                    }
+    if "intermediate" in search_results:
+        intermediate = search_results["intermediate"]
+    elif "card2tab2card_results" in search_results:
+        card2tab2card_results = search_results["card2tab2card_results"]
+        if search_type in card2tab2card_results:
+            if isinstance(card2tab2card_results[search_type], dict) and "intermediate" in card2tab2card_results[search_type]:
+                intermediate = card2tab2card_results[search_type]["intermediate"]
             else:
-                return {
-                    "success": False,
-                    "error": "Invalid search results format",
-                    "integrated_table": None
-                }
+                return {"success": False, "error": f"Search type '{search_type}' found but no intermediate data available", "integrated_table": None}
         else:
-            return {
-                "success": False,
-                "error": "No intermediate results found in search results",
-                "integrated_table": None
-            }
+            available_types = list(card2tab2card_results.keys())
+            return {"success": False, "error": f"Search type '{search_type}' not found in results. Available types: {', '.join(available_types)}", "integrated_table": None}
     else:
-        return {
-            "success": False,
-            "error": "Invalid search results format",
-            "integrated_table": None
-        }
-    
+        return {"success": False, "error": "No intermediate results found in search results", "integrated_table": None}
+
     # Get retrieved table filenames (prefer Tab2Tab relevance order)
     # Priority: retrieved_table_ids + table_id_to_filename > retrieved_table_filenames > table_to_models keys
     table_to_models = intermediate.get("table_to_models", {})
@@ -593,7 +443,7 @@ def integrate_tables_from_search_results(
         }
     
     models_with_tables_list = []
-    if tables_source == "all_from_modelcards" and relationship_parquet and os.path.exists(relationship_parquet):
+    if tables_source == "all_from_modelcards":
         # Get model_ids from table_to_models, then DuckDB batch query
         model_ids = set()
         table_to_models = intermediate.get("table_to_models", {})
@@ -607,7 +457,7 @@ def integrate_tables_from_search_results(
         if not model_ids:
             return {"success": False, "error": "No model IDs in intermediate for all_from_modelcards", "integrated_table": None}
         print(f"✅ tables_source=all_from_modelcards: DuckDB batch query for {len(model_ids)} models")
-        model_to_tables = _get_tables_for_models_duckdb(relationship_parquet, model_ids)
+        model_to_tables = _get_models_to_tables_batch_sql(model_ids)
         seen = set()
         table_paths = []
         model_to_table_paths_ts = {mid: [] for mid in model_ids}
@@ -663,9 +513,7 @@ def integrate_tables_from_search_results(
                 mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
                 if mid:
                     model_to_table_paths_ts.setdefault(mid, []).append(tp)
-    # all_from_modelcards: model_to_table_paths_ts already built above
-    
-    # Build filename -> tableid so we can try loading from modellake.db first (no CSV dirs needed)
+    # Build filename -> tableid
     filename_to_tableid: Dict[str, int] = {}
     if table_id_to_filename:
         for tid, fname in table_id_to_filename.items():
@@ -673,7 +521,7 @@ def integrate_tables_from_search_results(
             if bn:
                 filename_to_tableid[bn] = int(tid) if isinstance(tid, (int, float)) else tid
     print(f"📊 Integration (Table Search): #tables={len(table_paths)}, #models={len(models_with_tables_list)}")
-    result = integrate_tables(table_paths, integration_type, k, db_path=db_path, filename_to_tableid=filename_to_tableid or None)
+    result = integrate_tables(table_paths, integration_type, k, filename_to_tableid=filename_to_tableid or None)
     result["models_with_tables"] = models_with_tables_list
     result["model_to_table_paths"] = model_to_table_paths_ts
     elapsed = time.time() - t0
@@ -692,26 +540,10 @@ def integrate_tables_from_model_search_results(
     integration_type: str = "union",
     k: int = 10,
     max_models: int = 10,
-    db_path: Optional[str] = None,
-    relationship_parquet: Optional[str] = None,
-    schema_log_path: str = "data_citationlake/logs/parquet_schema.log",
-    use_citationlake: bool = True,
     card2card_retrieval_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Integrate tables from Card2Card (model search) results.
-    
-    Args:
-        search_results_json: Path to JSON file with search results
-        integration_type: "union", "intersection", "alite", or "outer_join"
-        k: Maximum number of rows in result
-        max_models: Maximum number of models to process (default: 10)
-        db_path: Optional path to modellake.db (for Blend_internal integration)
-        relationship_parquet: Optional path to relationship parquet file
-        schema_log_path: Path to parquet_schema.log (for get_from-style approach, e.g., ModelTables)
-        use_citationlake: Whether to use get_from-style mapping (default: True)
-        card2card_retrieval_mode: Optional retrieval mode: "dense", "sparse", or "hybrid"
-        
     Returns:
         Dictionary with integration results
     """
@@ -753,11 +585,10 @@ def integrate_tables_from_model_search_results(
     for item in card2card_results:
         if isinstance(item, str):
             model_ids.append(item)
-        elif isinstance(item, dict) and "model_id" in item:
-            model_ids.append(item["model_id"])
         elif isinstance(item, dict) and "modelId" in item:
             model_ids.append(item["modelId"])
-    
+        elif isinstance(item, dict) and "model_id" in item:
+            model_ids.append(item["model_id"])
     if not model_ids:
         return {
             "success": False,
@@ -771,7 +602,6 @@ def integrate_tables_from_model_search_results(
     # Limit to max_models -- COMMENTED OUT: use all models for now (user request)
     # model_ids = model_ids[:max_models]
     
-    # Import get_tables_for_model and load_relationship_parquet
     # Import directly from card2tab2card to avoid triggering card2card imports that require torch
     # Add parent directory to path if needed
     import sys
@@ -779,12 +609,6 @@ def integrate_tables_from_model_search_results(
     parent_dir_abs = os.path.abspath(parent_dir)
     if parent_dir_abs not in sys.path:
         sys.path.insert(0, parent_dir_abs)
-    
-    from src.search.card2tab2card import load_modelid_to_csvlist
-    from src.modelsearch.compare_baselines import _load_modelid_to_csv_expand
-    relationship_df = _load_modelid_to_csv_expand()
-    # Table–model mapping uses relationship_parquet only (no optional get_from)
-    citationlake_available = False
     
     # Fallback: Try to extract table information from search_results JSON
     # This is useful for template/fake data when real data sources are unavailable
@@ -845,88 +669,40 @@ def integrate_tables_from_model_search_results(
                             if table_path not in fallback_table_paths:
                                 fallback_table_paths.append(table_path)
     
-    # Model Search: always get tables from parquet (DuckDB batch when available). No "intermediate" - that's Table Search only.
-    use_fallback = False
-    if use_citationlake and not citationlake_available and relationship_df is None:
-        if fallback_table_paths:
-            use_fallback = True
-        else:
-            return {
-                "success": False,
-                "error": "Cannot get tables: get_from-style mapping not available, relationship parquet failed to load, and no fallback data found in search results",
-                "integrated_table": None
-            }
     else:
-        # Use relationship_df approach if get_from-style mapping is not available or if explicitly requested
-        if not citationlake_available or (relationship_df is not None and not use_citationlake):
-            if relationship_df is None:
-                # Try fallback before giving up
-                if fallback_table_paths:
-                    use_fallback = True
-                else:
-                    return {
-                        "success": False,
-                        "error": "relationship_df is required when get_from-style mapping is not available, and no fallback data found",
-                        "integrated_table": None
-                    }
-            else:
-                use_citationlake = False
-    
+        return {
+            "success": False,
+            "error": "Cannot get tables: get_from-style mapping not available, and no fallback data found in search results",
+            "integrated_table": None
+        }
+
     # Collect all table paths from all models; also build model_id -> table_paths for UI debug
     all_table_paths = []
     models_with_tables = []
     models_without_tables = []
     model_to_table_paths: Dict[str, List[str]] = {}
     
-    # Use fallback only when parquet/get_from-style mapping is unavailable (e.g. from card2tab2card_results)
-    if use_fallback:
-        print(f"⚠️  Using {len(fallback_table_paths)} fallback tables from search results JSON (parquet unavailable)")
-        all_table_paths = fallback_table_paths  # No table top-k cap
-        models_with_tables = list(fallback_models_with_tables.keys())
-        models_without_tables = [m for m in model_ids if m not in models_with_tables]
-        for mid in models_with_tables:
-            model_to_table_paths[mid] = fallback_models_with_tables.get(mid, [])
-    elif relationship_parquet and os.path.exists(relationship_parquet):
-        # Fast path: DuckDB batch query (single SQL scan, no full parquet load)
-        t_duck = time.time()
-        print(f"✅ DuckDB batch query on parquet (fast, no full load)")
-        model_to_tables = _get_tables_for_models_duckdb(relationship_parquet, model_ids)
-        for model_id in model_ids:
-            basenames = model_to_tables.get(model_id, [])
-            model_to_table_paths[model_id] = []
-            if basenames:
-                # No per-model table cap: use ALL tables from each model
-                for bn in basenames:
-                    path = resolve_table_path(bn)
-                    if path and path not in all_table_paths:
-                        all_table_paths.append(path)
-                    if path:
-                        model_to_table_paths[model_id].append(path)
-                models_with_tables.append(model_id)
-                print(f"  ✅ Model {model_id}: {len(basenames)} tables")
-            else:
-                models_without_tables.append(model_id)
-                print(f"  ⚠️  Model {model_id}: No tables found")
-        print(f"   DuckDB query elapsed: {time.time() - t_duck:.2f}s")
-    else:
-        # Fallback: per-model get_tables_for_model (slower)
-        for model_id in model_ids:
-            model_to_table_paths[model_id] = []
-            # Get tables for this model
-            model_tables = load_modelid_to_csvlist(model_id=model_id)
-
-            if model_tables:
-                for table_basename in model_tables:
-                    table_path = resolve_table_path(table_basename) or table_basename
-                    if table_path not in all_table_paths:
-                        all_table_paths.append(table_path)
-                    model_to_table_paths[model_id].append(table_path)
-
-                models_with_tables.append(model_id)
-                print(f"  ✅ Model {model_id}: {len(model_tables)} tables")
-            else:
-                models_without_tables.append(model_id)
-                print(f"  ⚠️  Model {model_id}: No tables found")
+    # Fast path: DuckDB batch query (single SQL scan, no full parquet load)
+    t_duck = time.time()
+    print(f"✅ DuckDB batch query on parquet (fast, no full load)")
+    model_to_tables = _get_models_to_tables_batch_sql(model_ids)
+    for model_id in model_ids:
+        basenames = model_to_tables.get(model_id, [])
+        model_to_table_paths[model_id] = []
+        if basenames:
+            # No per-model table cap: use ALL tables from each model
+            for bn in basenames:
+                path = resolve_table_path(bn)
+                if path and path not in all_table_paths:
+                    all_table_paths.append(path)
+                if path:
+                    model_to_table_paths[model_id].append(path)
+            models_with_tables.append(model_id)
+            print(f"  ✅ Model {model_id}: {len(basenames)} tables")
+        else:
+            models_without_tables.append(model_id)
+            print(f"  ⚠️  Model {model_id}: No tables found")
+    print(f"   DuckDB query elapsed: {time.time() - t_duck:.2f}s")
     
     if not all_table_paths:
         return {
@@ -941,11 +717,12 @@ def integrate_tables_from_model_search_results(
         }
     
     print(f"\n✅ Collected {len(all_table_paths)} unique tables from {len(models_with_tables)} models")
+
     # No table top-k cap: use ALL tables
     table_paths = all_table_paths
     print(f"📊 Integration (Model Search): #tables={len(table_paths)}, #models={len(models_with_tables)} (no table top-k cap)")
     # Integrate tables
-    result = integrate_tables(table_paths, integration_type, k, db_path)
+    result = integrate_tables(table_paths, integration_type, k)
     
     # Add model search specific stats
     if result.get("success"):
@@ -962,12 +739,10 @@ def integrate_tables_from_model_search_results(
         result["model_to_table_paths"] = model_to_table_paths
     
     elapsed = time.time() - t0
-    duckdb_used = relationship_parquet and os.path.exists(relationship_parquet) and not use_fallback
     # Attach timing + DuckDB info to stats for debugging
     if isinstance(result.get("stats"), dict):
         result["stats"]["elapsed_seconds"] = elapsed
-        result["stats"]["duckdb_used"] = bool(duckdb_used)
-    print(f"⏱️  Model Search integration elapsed: {elapsed:.2f}s (DuckDB={'yes' if duckdb_used else 'no'})")
+    print(f"⏱️  Model Search integration elapsed: {elapsed:.2f}s")
     return result
 
 
@@ -979,6 +754,6 @@ if __name__ == "__main__":
     if not _os.path.exists(_path):
         print("Test skip: config/demo_template/search_results.json not found")
     else:
-        r = integrate_tables_from_model_search_results(_path, integration_type="union", k=10, max_models=5, schema_log_path=_os.path.join(_root, "data_citationlake", "logs", "parquet_schema.log"), use_citationlake=True)
+        r = integrate_tables_from_model_search_results(_path, integration_type="union", k=10, max_models=5)
         print("Test integration: success", r.get("success"), "stats", r.get("stats"))
 

@@ -22,7 +22,7 @@ import pandas as pd
 _reporoot = os.path.join(os.path.dirname(__file__), '../..')
 if _reporoot not in sys.path:
     sys.path.insert(0, _reporoot)
-from src.utils import resolve_table_path, load_modelid_to_csvlist
+from src.utils import resolve_table_path, load_modelid_to_csvlist, load_csvs_to_modelids
 from src.config import (
     RELATIONSHIP_PARQUET,
     MODELLAKE_DB,
@@ -580,7 +580,7 @@ def search_card2tab2card(
     print(f"📋 Using relationship_parquet to map tables to model cards...")
     print(f"📝 Matching {len(table_basenames)} table basenames...")
     print(f"   Sample basenames: {table_basenames[:3]}{'...' if len(table_basenames) > 3 else ''}")
-    basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
+    basename_to_models = load_csvs_to_modelids(table_basenames)
     for filename in retrieved_filenames:
         basename = os.path.basename(filename)
         matched_models = basename_to_models.get(basename, [])
@@ -713,7 +713,7 @@ def search_card2tab2card_from_tables(
     # Map retrieved tables to model IDs via relationship parquet
     similar_model_ids = set()
     table_basenames = [os.path.basename(str(t)) for t in retrieved_tables]
-    basename_to_models = get_modelids_for_basenames_duckdb(RELATIONSHIP_PARQUET, table_basenames)
+    basename_to_models = load_csvs_to_modelids(table_basenames)
     for bn in table_basenames:
         similar_model_ids.update(basename_to_models.get(bn, []))
 
@@ -1059,7 +1059,7 @@ def search_card2tab2card_by_type(
 
     table_basenames = [os.path.basename(fname) for fname in retrieved_filenames]
     print(f"📋 Using relationship_parquet to map tables to model cards...")
-    basename_to_models = get_modelids_for_basenames_duckdb(relationship_parquet, table_basenames)
+    basename_to_models = load_csvs_to_modelids(table_basenames)
     for filename in retrieved_filenames:
         basename = os.path.basename(filename)
         matched_models = basename_to_models.get(basename, [])

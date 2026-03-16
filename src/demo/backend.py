@@ -207,25 +207,12 @@ def _read_json(path: str) -> Optional[Dict]:
 
 
 # Valid model IDs (have tables): built by scripts/build_valid_model_ids_txt.py (Part 1); inference only loads
-VALID_MODEL_IDS_TXT = "data/valid_model_ids_with_tables.txt"
-_CACHED_VALID_MODEL_IDS: Optional[set] = None
-_CACHED_VALID_MODEL_IDS_MTIME: float = 0
 
-
-def _get_valid_model_ids_with_tables(txt_path: Optional[str] = None) -> set:
+def _get_valid_model_ids_with_tables() -> set:
     """Cached set of model_id that have tables. Fast O(1) lookup; loads from txt once per backend lifetime."""
-    global _CACHED_VALID_MODEL_IDS, _CACHED_VALID_MODEL_IDS_MTIME
-    path = txt_path or os.path.join(REPO_ROOT, VALID_MODEL_IDS_TXT)
-    if not os.path.isfile(path):
-        return set()
-    mtime = os.path.getmtime(path)
-    if _CACHED_VALID_MODEL_IDS is not None and mtime == _CACHED_VALID_MODEL_IDS_MTIME:
-        return _CACHED_VALID_MODEL_IDS
-    with open(path, "r", encoding="utf-8") as f:
-        _CACHED_VALID_MODEL_IDS = {line.strip() for line in f if line.strip()}
-    _CACHED_VALID_MODEL_IDS_MTIME = mtime
-    return _CACHED_VALID_MODEL_IDS
-
+    from src.config import VALID_MODEL_IDS_TXT
+    with open(VALID_MODEL_IDS_TXT, "r", encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip()}
 
 def run_search_pipeline(
     job_id: str,
@@ -1315,7 +1302,7 @@ def qa():
 
     try:
         sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from qa.llm import answer_question_with_llm
+        from evaluation.llm_qa import answer_question_with_llm
 
         result = answer_question_with_llm(
             query=query,

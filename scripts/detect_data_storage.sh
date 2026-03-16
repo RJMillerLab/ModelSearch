@@ -16,9 +16,22 @@ echo "REPO_ROOT=$REPO_ROOT"
 echo "Date: $(date -Iseconds 2>/dev/null || date)"
 echo ""
 
-# Paths from src.config (scripts/get_config_paths.py --report)
-PATHS=()
-while IFS= read -r p; do PATHS+=("$p"); done < <(cd "$REPO_ROOT" && python scripts/get_config_paths.py --report)
+# Paths: same defaults as src.config (MODELTABLES_DATA, MODELLAKE_DB, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS)
+PATHS=(
+  "data/card2card_embeddings.npz"
+  "data/card2card.faiss"
+  "data/modellake.db"
+  "../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet"
+  "data/valid_model_ids_with_tables.txt"
+  "data/card2card_sparse_index"
+  "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117"
+  "../ModelTables/data/processed/deduped_github_csvs_v2_251117"
+  "../ModelTables/data/processed/tables_output_v2_251117"
+  "data/table_classifications.json"
+  "config/demo_template/search_results.json"
+  "fig"
+  "data/jobs"
+)
 
 printf "%-55s %-8s %s\n" "PATH" "EXISTS" "SIZE"
 printf "%-55s %-8s %s\n" "----" "-----" "----"

@@ -1,14 +1,15 @@
 """
-QA entry: answer_question_with_llm. All LLM logic lives in evaluation.llm.
+QA entry: answer_question_with_llm. Core LLM helpers live in evaluation.llm.
 """
 import os
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
 
 from evaluation.llm import (
     call_llm_api,
-    serialize_table_for_prompt,
     parse_llm_response_qa,
+    serialize_table_for_prompt,
 )
 
 
@@ -51,7 +52,7 @@ def get_qa_prompt(
     else:
         mode_instructions = """
 ## Analysis Mode: Card2Tab2Card (Table + Model Card Based)
-- **Primary Sources**: 
+- **Primary Sources**:
   - Integrated table (contains model card data extracted into structured format)
   - Model card information (original text and metadata)
 - **Focus**: Analyze both table cells AND model card information
@@ -76,18 +77,18 @@ Perform model ID reranking by:
    - Identify supporting evidence from:
      * **Table cells**: Specific values, metrics, descriptions from the integrated table
      * **Model card text**: Original descriptions, capabilities, performance claims
-   
+
 2. **Extract Supporting Evidence**: For each model ID, extract:
    - **From integrated table cells**: Actual values, metrics, specifications (cite specific cells)
    - **From model card**: Key capabilities, performance claims, use case descriptions
    - **Mark the source**: Clearly indicate whether evidence comes from table cells or model card text
-   
+
 3. **Rerank Model IDs**: Sort the provided model IDs based on:
    - How well each model matches the query requirements
    - Evidence from integrated table cells (if available)
    - Evidence from model card information
    - Quality and relevance of supporting evidence
-   
+
 4. **Provide Analysis**: For each model ID, provide:
    - Suitability score (0-100)
    - Detailed analysis explaining the ranking
@@ -111,7 +112,7 @@ Perform model ID reranking by:
      * Architecture and specifications
      * Use cases and applications
      * Limitations and constraints
-   
+
 2. **Identify Supporting Evidence**: For each piece of information, mark its source:
    - **Table Cell**: "From table cell [column_name]: [value]" or "Table shows [metric] = [value]"
    - **Model Card**: "Model card states [claim]" or "According to model card: [description]"

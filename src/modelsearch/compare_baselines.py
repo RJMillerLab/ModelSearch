@@ -79,8 +79,15 @@ def compare(model_id: str, starmie_json: str, dense_neighbors: str) -> Tuple[Lis
     retrieved_csvs: Set[str] = set()
     for q in q_csvs:
         retrieved_csvs.update(starmie.get(q, []))
-    # Map retrieved CSVs -> modelIds using relationship parquet (smart membership over exploded list columns)
-    derived_modelids = load_csvs_to_modelids(list(retrieved_csvs))
+    # Map retrieved CSVs -> modelIds using relationship parquet.
+    basename_to_models = load_csvs_to_modelids(list(retrieved_csvs))
+    derived_modelids: List[str] = []
+    seen_modelids: Set[str] = set()
+    for csv_basename in retrieved_csvs:
+        for model_id_candidate in basename_to_models.get(csv_basename, []):
+            if model_id_candidate not in seen_modelids:
+                seen_modelids.add(model_id_candidate)
+                derived_modelids.append(model_id_candidate)
     # Dense neighbors for the modelId
     dense_cands = dense.get(model_id, [])
     # Keep top-N reasonable length for display

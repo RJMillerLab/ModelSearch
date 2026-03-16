@@ -22,13 +22,11 @@ from typing import List, Dict, Optional, Any
 import pandas as pd
 
 from src.config import MODELLAKE_DB, CLASSIFICATION_JSON
-from .pipeline import is_model_search_log
-from .table_md_common import (
-    resolve_path,
+from . import (
     load_classifications,
-    get_table_metadata,
-    load_table_csv,
+    get_tables_metadata,
     table_to_markdown,
+    is_model_search_log
 )
 from src.utils import resolve_table_path
 
@@ -46,11 +44,9 @@ def _run_integration_and_save(
     """Run table integration when possible; save CSV to md/<log_name>_materials/csv_integrated/integrated.csv. Returns full path or None."""
     from src.integration.table_integration import integrate_tables
 
-    out_dir = resolve_path(output_dir) / f"{log_name}_materials" / "csv_integrated"
+    out_dir = Path(output_dir) / f"{log_name}_materials" / "csv_integrated"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_csv = out_dir / "integrated.csv"
-
-    db_abs = str(resolve_path(db_path))
 
     # Card2tab2card-style: resolve filenames with same dirs as postprocess (avoids "Table not found" on server)
     intermediate = result_data.get("intermediate", {})
@@ -62,14 +58,13 @@ def _run_integration_and_save(
             if full:
                 paths.append(full)
         if paths:
-            res = integrate_tables(paths, integration_type=integration_type, k=integration_k, db_path=db_abs)
+            res = integrate_tables(paths, integration_type=integration_type, k=integration_k, db_path=db_path)
         else:
             res = {}
     elif table_ids:
         # Build table paths from table_ids (tab2tab-style results)
         paths = []
-        for tid in table_ids[:integration_k]:
-            meta = get_table_metadata(tid, db_abs)
+        for meta in get_tables_metadata(table_ids[:integration_k], db_path):
             if not meta:
                 continue
             full = resolve_table_path(meta["filename"])
@@ -77,7 +72,7 @@ def _run_integration_and_save(
                 paths.append(full)
         if not paths:
             return None
-        res = integrate_tables(paths, integration_type=integration_type, k=integration_k, db_path=db_abs)
+        res = integrate_tables(paths, integration_type=integration_type, k=integration_k, db_path=db_path)
     else:
         return None
 
@@ -119,14 +114,12 @@ def extract_json_path_from_log(log_path: str) -> Optional[str]:
         matches = re.findall(pattern, content, re.IGNORECASE | re.MULTILINE)
         if matches:
             raw = matches[-1]
-            return str(resolve_path(raw))
+            return raw
     # Fallback: try default path for known log names (if file exists)
     log_name = Path(log_path).stem
     default_rel = _LOG_DEFAULT_JSON.get(log_name)
     if default_rel:
-        p = resolve_path(default_rel)
-        if p.exists():
-            return str(p)
+        return default_rel
     return None
 
 
@@ -237,9 +230,7 @@ def generate_markdown_from_log(
 
     classifications = {}
     if classification_json:
-        p = resolve_path(classification_json)
-        if p.exists():
-            classifications = load_classifications(str(p))
+        classifications = load_classifications(classification_json)
 
     # Use shared pipeline type: model-search = models first, then tables; table-search = tables only
     is_model_search = is_model_search_log(log_name)
@@ -270,9 +261,11 @@ def generate_markdown_from_log(
     if table_ids:
         section_title = "\n## Related tables (secondary)\n\n" if is_model_search else "\n## Tables\n\n"
         lines.append(section_title)
-        db_abs = str(resolve_path(db_path))
+        metadata_by_tableid = {
+            meta["tableid"]: meta for meta in get_tables_metadata(table_ids[:50], db_path)
+        }
         for i, tableid in enumerate(table_ids[:50], 1):
-            meta = get_table_metadata(tableid, db_abs)
+            meta = metadata_by_tableid.get(tableid)
             lines.append(f"\n### Table {i}: ID `{tableid}`\n")
             if not meta:
                 lines.append("⚠️  **Table not found in database**\n")
@@ -286,7 +279,7 @@ def generate_markdown_from_log(
             if tableid in classifications:
                 lines.append(f"- **Classification:** `{classifications[tableid]}`")
             lines.append("")
-            df = load_table_csv(meta["filename"], max_rows=max_rows)
+            df = pd.read_csv(full_csv_path, nrows=max_rows)
             if df is not None:
                 lines.append(f"#### Preview ({len(df)} rows, {len(df.columns)} columns)\n")
                 lines.append(table_to_markdown(df, max_rows=max_rows))
@@ -299,7 +292,7 @@ def generate_markdown_from_log(
         if len(table_ids) > 50:
             lines.append(f"\n*... and {len(table_ids) - 50} more tables*\n")
 
-    output_path = resolve_path(output_dir) / f"{log_name}.md"
+    output_path = Path(output_dir) / f"{log_name}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -339,10 +332,7 @@ def main():
     if args.log_file:
         log_files = [Path(args.log_file)]
     else:
-        logs_dir = resolve_path(args.logs_dir)
-        if not logs_dir.exists():
-            print(f"Logs directory not found: {logs_dir}")
-            return
+        logs_dir = Path(args.logs_dir)
         all_logs = sorted(logs_dir.glob("*.log"))
         log_files = [f for f in all_logs if f.stem not in _SKIP_LOG_STEMS]
 

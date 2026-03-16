@@ -66,7 +66,7 @@ Extract model_id that have tables (non-empty `csv_basename` in relationship parq
 
 ```bash
 # Parquet and output from src.config (no path args required)
-python scripts/build_valid_model_ids_txt.py --output data/valid_model_ids_with_tables.txt
+python src/utils/build_valid_model_ids_txt.py --output data/valid_model_ids_with_tables.txt
 ```
 
 Output: `data/valid_model_ids_with_tables.txt` (one model_id per line). Demo backend “Narrow down” reads this file only; it does not read parquet at request time.

@@ -1,6 +1,8 @@
 """
-Unified config for data paths: ModelTables/data, modellake.db, processed dirs, relationship parquet.
-All path usages should import from here. Override via env vars if needed (see below).
+Unified config for data paths.
+
+- Relationship / raw / processed inputs default to ModelTables data.
+- Output artifacts default to this repo's own data directory.
 """
 import os
 from pathlib import Path
@@ -21,7 +23,6 @@ V2_SUFFIX = "_v2"
 MODELLAKE_DB = os.path.join(MODELTABLES_DATA, "modellake.db")
 INDEX_TABLE = "modellake_index"
 
-# --- Processed CSV/table dirs (deduped_hugging_csvs, deduped_github_csvs, tables_output) ---
 DEDUPED_HUGGING_CSVS =  os.path.join(PROCESSED_DIR, f"deduped_hugging_csvs{V2_SUFFIX}{DATA_TAG}")
 DEDUPED_GITHUB_CSVS =   os.path.join(PROCESSED_DIR, f"deduped_github_csvs{V2_SUFFIX}{DATA_TAG}")
 TABLES_OUTPUT = os.path.join(PROCESSED_DIR, f"tables_output{V2_SUFFIX}{DATA_TAG}")
@@ -31,8 +32,9 @@ TABLE_BASE_DIRS = [DEDUPED_HUGGING_CSVS, DEDUPED_GITHUB_CSVS, TABLES_OUTPUT]
 RELATIONSHIP_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step3_dedup{V2_SUFFIX}{DATA_TAG}.parquet")
 
 # --- Output / artifact paths (single source: change here only) ---
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "data")
-# Repo-local data/raw (e.g. for card2card build-index when not using ModelTables)
+# Default outputs go to ModelSearchDemo/data rather than ../ModelTables/data.
+OUTPUT_DIR = str(REPO_ROOT / "data")
+# Repo-local outputs (e.g. card2card build-index, search results, temp artifacts)
 CLASSIFICATION_JSON = os.path.join(OUTPUT_DIR, "table_classifications.json")
 SCHEMA_LOG = os.path.join(os.path.dirname(MODELTABLES_DATA), "logs", "parquet_schema.log")
 CARD2TAB2CARD_OUTPUT_JSON   = os.path.join(OUTPUT_DIR, "card2tab2card_results.json")
@@ -41,6 +43,11 @@ TAB2TAB_BY_TYPE_OUTPUT_JSON   = os.path.join(OUTPUT_DIR, "tab2tab_by_type_result
 CARD2TAB2CARD_BY_TYPE_STANDALONE_JSON = os.path.join(OUTPUT_DIR, "card2tab2card_by_type_standalone.json")
 CLASSIFICATION_OUTPUT_JSON      = CLASSIFICATION_JSON
 
+
+# --- Other repositories ---
+DIALITE_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "dialite")
+
+VALID_MODEL_IDS_TXT = os.path.join(OUTPUT_DIR, "valid_model_ids_with_tables.txt")
 
 def abs_path(relative_path: str) -> str:
     """Return absolute path for a path that may be relative to repo root."""

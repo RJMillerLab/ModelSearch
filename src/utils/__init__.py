@@ -5,10 +5,11 @@ import os
 import pandas as pd
 import duckdb
 import numpy as np
-from typing import List, Dict, Any
-from src.config import DATA_RAW, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS
+from typing import List, Dict, Any, Optional
+from collections import defaultdict
+from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS
 
-__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "load_modelid_to_csvlist", "load_csvs_to_modelids", "_load_modelid_to_csv_expand"]
+__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "load_modelid_to_csvlist", "load_csvs_to_modelids", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames"]
 
 
 def get_device() -> str:
@@ -35,7 +36,7 @@ def load_combined_data(data_type, file_path=None, columns=None):
         Combined DataFrame
     """
     if file_path is None:
-        file_path = DATA_RAW
+        file_path = RAW_DIR
     if columns is None:
         columns = []
     assert data_type in ["modelcard", "datasetcard"], "data_type must be 'modelcard' or 'datasetcard'"
@@ -50,6 +51,35 @@ def load_combined_data(data_type, file_path=None, columns=None):
         dfs = [pd.read_parquet(os.path.join(file_path, file)) for file in file_names]
     combined_df = pd.concat(dfs, ignore_index=True)
     return combined_df
+
+def _sample_model_ids(limit: int = 20) -> List[str]:
+    with duckdb.connect(":memory:") as con:
+        rows = con.execute(
+            """
+            SELECT DISTINCT modelId
+            FROM read_parquet(?)
+            WHERE modelId IS NOT NULL
+            LIMIT ?
+            """,
+            [RELATIONSHIP_PARQUET, limit],
+        ).fetchall()
+    return [str(model_id) for (model_id,) in rows if str(model_id).strip()]
+
+
+def _sample_csv_basenames(limit: int = 40) -> List[str]:
+    model_ids = _sample_model_ids(limit=10)
+    model_to_tables = _get_models_to_tables_batch_sql(model_ids)
+    csv_basenames: List[str] = []
+    seen = set()
+    for tables in model_to_tables.values():
+        for csv_basename in tables:
+            base = os.path.basename(str(csv_basename))
+            if base and base not in seen:
+                seen.add(base)
+                csv_basenames.append(base)
+            if len(csv_basenames) >= limit:
+                return csv_basenames
+    return csv_basenames
 
 
 def _flatten_cell(value: Any) -> List[Any]:
@@ -67,23 +97,162 @@ def _flatten_cell(value: Any) -> List[Any]:
         return _flatten_cell(value.tolist())
     return [value]
 
+
+def _normalize_val_to_items(val):
+    """Unify iteration: handle list, tuple, np.ndarray, scalar. Same logic for both paths."""
+    import pandas as pd
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return []
+    if isinstance(val, (list, tuple)):
+        return val
+    if hasattr(val, "__iter__") and not isinstance(val, str):
+        return list(val)
+    return [val]
+
+def _get_tables_per_model(model_ids: list) -> dict:
+    """
+    Legacy: load full parquet + per-model filter 
+
+    Deprecated: load parquet is slow
+    """
+    import pandas as pd
+    from src.config import RELATIONSHIP_PARQUET
+    df = pd.read_parquet(RELATIONSHIP_PARQUET)
+    list_cols = [c for c in df.columns if c != "modelId" and ("csv" in c.lower() or "table_list" in c.lower())][:4]
+    model_to_tables = {m: [] for m in model_ids}
+    for _, row in df[df["modelId"].isin(model_ids)].iterrows():
+        mid = str(row["modelId"])
+        for col in list_cols:
+            val = row.get(col)
+            items = _normalize_val_to_items(val)
+            for v in items:
+                if v is not None and str(v).strip():
+                    base = os.path.basename(str(v))
+                    if base and base not in model_to_tables[mid]:
+                        model_to_tables[mid].append(base)
+    return model_to_tables
+
+def _get_models_to_tables_batch_sql(model_ids: list) -> dict:
+    """DuckDB batch query."""
+    import duckdb
+    import pandas as pd
+    from src.config import RELATIONSHIP_PARQUET
+    
+    path_abs = os.path.abspath(RELATIONSHIP_PARQUET).replace("\\", "/")
+    conn = duckdb.connect(":memory:")
+    ids_sql = ",".join(repr(m) for m in model_ids)
+    try:
+        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
+    except Exception:
+        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
+    list_cols = [c[0] for c in cols if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())][:4]
+    if not list_cols:
+        conn.close()
+        return {}
+    select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
+    try:
+        full_df = conn.execute(f"""
+            SELECT {select_cols} FROM read_parquet(?)
+            WHERE modelId IN ({ids_sql})
+        """, [path_abs]).fetchdf()
+    except Exception:
+        full_df = conn.execute(f"""
+            SELECT {select_cols} FROM read_parquet('{path_abs}')
+            WHERE modelId IN ({ids_sql})
+        """).fetchdf()
+    conn.close()
+    model_to_tables = {m: [] for m in model_ids}
+    for _, row in full_df.iterrows():
+        mid = str(row["modelId"])
+        for col in list_cols:
+            val = row.get(col)
+            if val is None or (isinstance(val, float) and __import__("pandas").isna(val)):
+                continue
+            items = _normalize_val_to_items(val)
+            for v in items:
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if s:
+                    base = os.path.basename(s)
+                    if base and base not in model_to_tables[mid]:
+                        model_to_tables[mid].append(base)
+    return model_to_tables
+
+def _get_tables_to_models_batch_sql(csv_basenames: List[str]) -> Dict[str, List[str]]:
+    """DuckDB batch query for csv basename -> modelIds."""
+    normalized_basenames = []
+    seen = set()
+    for basename in csv_basenames:
+        if basename is None:
+            continue
+        base = os.path.basename(str(basename).strip())
+        if base and base not in seen:
+            seen.add(base)
+            normalized_basenames.append(base)
+    if not normalized_basenames:
+        return {}
+
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.register("input_basenames", pd.DataFrame({"csv_basename": normalized_basenames}))
+        sql = """
+        WITH exploded AS (
+            SELECT DISTINCT
+                modelId,
+                regexp_extract(csv_path, '[^/]+$') AS csv_basename
+            FROM read_parquet(?),
+            UNNEST(
+                list_concat(
+                    coalesce(hugging_table_list_dedup, []),
+                    coalesce(github_table_list_dedup, []),
+                    coalesce(html_table_list_mapped_dedup, []),
+                    coalesce(llm_table_list_mapped_dedup, [])
+                )
+            ) AS t(csv_path)
+            WHERE csv_path IS NOT NULL
+        )
+        SELECT
+            b.csv_basename,
+            list(DISTINCT e.modelId ORDER BY e.modelId) FILTER (WHERE e.modelId IS NOT NULL) AS model_ids
+        FROM input_basenames AS b
+        LEFT JOIN exploded AS e
+            ON e.csv_basename = b.csv_basename
+        GROUP BY b.csv_basename
+        """
+        rows = conn.execute(sql, [RELATIONSHIP_PARQUET]).fetchall()
+    finally:
+        conn.close()
+
+    basename_to_models: Dict[str, List[str]] = {basename: [] for basename in normalized_basenames}
+    for basename, model_ids in rows:
+        basename_to_models[basename] = [str(model_id) for model_id in _normalize_val_to_items(model_ids) if str(model_id).strip()]
+    return basename_to_models
+
 def load_csvs_to_modelids(csv_basenames: List[str]) -> Dict[str, List[str]]:
     """
-    Input: csv_basenames, Output: modelIds list
+    Input: csv_basenames, Output: csv_basename -> modelIds list
     """
-    df_model_to_csv_expand = _load_modelid_to_csv_expand()
-    return df_model_to_csv_expand.loc[df_model_to_csv_expand["csv_basename"].isin(csv_basenames), "modelId"].dropna().unique().tolist()
+    return _get_tables_to_models_batch_sql(csv_basenames)
 
 def load_modelid_to_csvlist(model_id: str) -> List[str]:
     """
     Input: modelId, Output: csv_basenames list
     """
-    df_model_to_csv_expand = _load_modelid_to_csv_expand()
-    return df_model_to_csv_expand.loc[df_model_to_csv_expand["modelId"] == model_id, "csv_basename"].dropna().unique().tolist()
+    return _get_models_to_tables_batch_sql([model_id]).get(model_id, [])
 
 def _load_modelid_to_csv_expand() -> pd.DataFrame:
     """
     Default: load from RELATIONSHIP_PARQUET, Output: DataFrame with columns: modelId, csv_basename
+
+    Usage:
+    df_model_to_csv_expand = _load_modelid_to_csv_expand()
+    return df_model_to_csv_expand.loc[df_model_to_csv_expand["modelId"] == model_id, "csv_basename"].dropna().unique().tolist()
+
+    df_model_to_csv_expand = _load_modelid_to_csv_expand()
+    return df_model_to_csv_expand.loc[df_model_to_csv_expand["csv_basename"].isin(csv_basenames), "modelId"].dropna().unique().tolist()
+
+    Deprecated: so slow, each time generate an intermediate dataframe
     """
     parquet_path = RELATIONSHIP_PARQUET
     sql = """
@@ -140,3 +309,77 @@ def load_table(csv_path: str) -> Optional[pd.DataFrame]:
         return pd.read_csv(resolved)
     print(f"⚠️  Table not found: {csv_path}")
     return None
+
+
+
+####################
+# deprecated functions
+####################
+
+def _build_basename_index() -> Dict[str, str]:
+    """
+    deprecated, used for building a cache of basename to path from local directories
+
+    Usage:
+    idx = _build_basename_index(dirs)
+    if base in idx:
+        return idx[base]
+    """
+    _CACHED_BASENAME_TO_PATH: Optional[Dict[str, str]] = None
+    from src.config import TABLE_BASE_DIRS
+    if _CACHED_BASENAME_TO_PATH is not None:
+        return _CACHED_BASENAME_TO_PATH
+    index: Dict[str, str] = {}
+    for base in TABLE_BASE_DIRS:
+        for f in os.listdir(base):
+            if f.lower().endswith(".csv"):
+                index[f] = os.path.join(base, f)
+    _CACHED_BASENAME_TO_PATH = index
+    return index
+
+def _load_table_from_db(
+    tableid: int,
+    index_table: str = "modellake_index",
+) -> Optional[pd.DataFrame]:
+    """
+    Load table content from modellake.db by tableid (no CSV).
+    modellake_index: (tableid, rowid, colid, tokenized). rowid=-1 = header.
+    Returns None if DB missing or schema not supported.
+
+    Deprecated, because column type can not be preserved.
+    """
+    from src.config import MODELLAKE_DB
+    db_path = MODELLAKE_DB
+    if not db_path or not os.path.isfile(db_path):
+        return None
+    con = duckdb.connect(db_path, read_only=True)
+    info = con.execute(f"DESCRIBE {index_table}").fetchall()
+    col_names = [r[0] for r in info]
+    if "tableid" not in col_names or "rowid" not in col_names or "colid" not in col_names:
+        con.close()
+        return None
+    value_col = "tokenized" if "tokenized" in col_names else ("value" if "value" in col_names else None)
+    if not value_col:
+        con.close()
+        return None
+    headers = con.execute(
+        f"SELECT colid, {value_col} FROM {index_table} WHERE tableid = ? AND rowid = -1 ORDER BY colid",
+        [tableid],
+    ).fetchall()
+    if not headers:
+        con.close()
+        return None
+    col_names_list = [str(h[1]) if h[1] is not None else f"col_{h[0]}" for h in headers]
+    rows = con.execute(
+        f"SELECT rowid, colid, {value_col} FROM {index_table} WHERE tableid = ? AND rowid >= 0 ORDER BY rowid, colid",
+        [tableid],
+    ).fetchall()
+    con.close()
+    if not rows:
+        return pd.DataFrame(columns=col_names_list)
+    row_data: Dict[int, Dict[int, Any]] = defaultdict(dict)
+    for rowid, colid, val in rows:
+        row_data[rowid][colid] = val
+    row_ids = sorted(row_data.keys())
+    data = [[row_data[rid].get(cid) for cid in [h[0] for h in headers]] for rid in row_ids]
+    return pd.DataFrame(data, columns=col_names_list)
