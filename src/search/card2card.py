@@ -25,7 +25,7 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 from src.utils import get_device
-from src.config import EMB_NPZ, SPARSE_INDEX, CARD2CARD_NEIGHBORS_JSON, ENCODE_MODEL, MODELCARD_STEP1_PARQUET    
+from src.config import EMB_NPZ, SPARSE_INDEX, CARD2CARD_NEIGHBORS_JSON, ENCODE_MODEL, MODELCARD_STEP1_PARQUET, CARD2CARD_SPARSE_CORPUS, CARD2CARD_CORPUS_JSONL
 
 _SQL_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
