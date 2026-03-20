@@ -101,10 +101,10 @@ Paths from `src.config`. Keyword = match column names; single_column = cell valu
 
 ```bash
 # keyword
-python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 > logs/tab2tab_keyword.log 2>&1
-python -m src.search.tab2tab --search_type single_column --query "val1,val2,val3" --k 10 > logs/tab2tab_single_column.log 2>&1
-python -m src.search.tab2tab --search_type multi_column --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_multi_column.log 2>&1
-python -m src.search.tab2tab --search_type unionable --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_unionable.log 2>&1
+python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type keyword --query "model_name,accuracy,task" --k 10 > logs/tab2tab_keyword.log 2>&1
+python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type single_column --query "val1,val2,val3" --k 10 > logs/tab2tab_single_column.log 2>&1
+python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 > logs/tab2tab_multi_column.log 2>&1
+python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 > logs/tab2tab_unionable.log 2>&1
 ```
 
 ## 2.4 card2tab2card (keyword, single_column, unionable)
