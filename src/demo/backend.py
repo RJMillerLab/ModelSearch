@@ -14,7 +14,7 @@ from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
-from src.utils import filter_results_by_classify_results
+#from src.utils import filter_results_by_classify_results
 
 def _sanitize_for_json(obj: Any) -> Any:
     """Replace float('nan') with None so JSON serialization produces null."""
@@ -212,47 +212,14 @@ def run_search_pipeline(
         logger.set_results(d)
 
     try:
-        _run_pipeline_body(
-            logger,
-            job_id,
-            job_dir,
-            start_time,
-            query,
-            top_k,
-            model_id,
-            table_search_k,
-            tab2tab_mode,
-            tab2tab_json,
-            card2card_retrieval_mode,
-            require_seed_has_tables,
-            use_by_type,
-            model_top_k=model_top_k,
-            table_resource_allowlist=table_resource_allowlist,
-        )
+        _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k=model_top_k, table_resource_allowlist=table_resource_allowlist)
     except Exception as e:
         logger.log(f"Pipeline crashed: {e}")
         _set_pipeline_error(f"Pipeline error: {e}", model_id)
         import traceback
         logger.log(traceback.format_exc())
 
-def _run_pipeline_body(
-    logger: "JobLogger",
-    job_id: str,
-    job_dir: str,
-    start_time: float,
-    query: Optional[str],
-    top_k: int,
-    model_id: Optional[str],
-    table_search_k: Optional[int],
-    tab2tab_mode: str,
-    tab2tab_json: Optional[str],
-    card2card_retrieval_mode: str,
-    require_seed_has_tables: bool = False,
-    use_by_type: bool = False,
-    *,
-    model_top_k: int = 5,
-    table_resource_allowlist: Optional[List[str]] = None,
-):
+def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], tab2tab_mode: str, tab2tab_json: Optional[str], card2card_retrieval_mode: str, require_seed_has_tables: bool = False, use_by_type: bool = False, *, model_top_k: int = 5, table_resource_allowlist: Optional[List[str]] = ['hugging']):
     # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
@@ -274,6 +241,46 @@ def _run_pipeline_body(
     )
     logger.set_status("running")
 
+    # Normalize resource selection once and reuse in all subprocess commands.
+    raw_resources = table_resource_allowlist or TABLE_RESOURCE_ALLOWLIST
+    model_resources = TABLE_RESOURCE_ALLOWLIST
+    table_resources = TABLE_RESOURCE_ALLOWLIST
+    logger.log(f"Resources: model={model_resources}, table={table_resources}")
+
+    def _with_resources(cmd: List[str], resources: List[str]) -> List[str]:
+        return cmd + ["--resources", *resources]
+
+    def _build_q2m_cmd(*, q: str, q_top_k: int, out_path: str) -> List[str]:
+        base = [
+            sys.executable, "-m", "src.search.query2modelcard",
+            "--query", q,
+            "--top_k", str(q_top_k),
+            "--retrieval_mode", card2card_retrieval_mode,
+            "--output_json", out_path,
+        ]
+        return _with_resources(base, model_resources)
+
+    def _build_card2card_cmd(*, mode: str, top_k_value: int, out_path: str) -> List[str]:
+        base = [
+            sys.executable, "-m", "src.search.card2card", "search",
+            "--model_ids_file", card2card_model_ids_file,
+            "--top_k", str(top_k_value),
+            "--retrieval_mode", mode,
+            "--output_json", out_path,
+        ]
+        return _with_resources(base, model_resources)
+
+    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str) -> List[str]:
+        base = [
+            sys.executable, "-m", "src.search.card2tab2card",
+            "--model_id", model_id,
+            "--search_type", st,
+            "--table_top_k", str(table_k_value),
+            "--model_top_k", str(model_top_k),
+            "--output_json", out_path,
+        ]
+        return _with_resources(base, table_resources)
+
     # Resolve model_id (query mode: from FAISS retrieval only; no default/hardcoded id)
     seed_no_tables_skip_table_search = False  # when True: use first model for Card2Card only, skip Card2Tab2Card and set reason
     valid_model_ids = None
@@ -284,7 +291,6 @@ def _run_pipeline_body(
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
         logger.log(f"query2modelcard input query: {query!r}")
         q2m_out = os.path.join(job_dir, "query2modelcard.json")
-        q2m_module = "src.search.query2modelcard"
 
         if require_seed_has_tables:
             assert valid_model_ids is not None
@@ -296,19 +302,7 @@ def _run_pipeline_body(
                 if phase == 2 and phase2_k <= phase1_k:
                     break
                 logger.log(f"query2modelcard phase {phase}: top_k={q2m_top_k}")
-                cmd = [
-                    sys.executable,
-                    "-m",
-                    q2m_module,
-                    "--query",
-                    query,
-                    "--top_k",
-                    str(q2m_top_k),
-                    "--retrieval_mode",
-                    card2card_retrieval_mode,
-                    "--output_json",
-                    q2m_out,
-                ]
+                cmd = _build_q2m_cmd(q=query, q_top_k=q2m_top_k, out_path=q2m_out)
                 t0 = time.time()
                 rc, out, err = _run_cmd(cmd, REPO_ROOT)
                 elapsed = time.time() - t0
@@ -346,19 +340,7 @@ def _run_pipeline_body(
                 logger.log(f"Table Search Seed Model: none of top-{len(results_list)} in valid set. Using top-1 for Card2Card only; Table Search skipped.")
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
         else:
-            cmd = [
-                sys.executable,
-                "-m",
-                q2m_module,
-                "--query",
-                query,
-                "--top_k",
-                "1",
-                "--retrieval_mode",
-                card2card_retrieval_mode,
-                "--output_json",
-                q2m_out,
-            ]
+            cmd = _build_q2m_cmd(q=query, q_top_k=1, out_path=q2m_out)
             t0 = time.time()
             rc, out, err = _run_cmd(cmd, REPO_ROOT)
             elapsed = time.time() - t0
@@ -445,20 +427,7 @@ def _run_pipeline_body(
 
     def run_card2card(mode: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2card_{mode}.json")
-        cmd = [
-            sys.executable,
-            "-m",
-            "src.search.card2card",
-            "search",
-            "--model_ids_file",
-            card2card_model_ids_file,
-            "--top_k",
-            str(card2card_top_k),
-            "--retrieval_mode",
-            mode,
-            "--output_json",
-            out_path,
-        ]
+        cmd = _build_card2card_cmd(mode=mode, top_k_value=card2card_top_k, out_path=out_path)
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT)
         elapsed = time.time() - t0
@@ -467,22 +436,9 @@ def _run_pipeline_body(
 
     def run_card2tab2card(st: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
-        c2t2c_module = "src.search.card2tab2card"
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
-        cmd = [
-            sys.executable,
-            "-m",
-            c2t2c_module,
-            "--model_id",
-            model_id,
-            "--search_type",
-            st,
-            "--k",
-            str(k_table),
-            "--output_json",
-            out_path,
-        ]
+        cmd = _build_card2tab2card_cmd(st=st, table_k_value=k_table, out_path=out_path)
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -498,22 +454,9 @@ def _run_pipeline_body(
         st = "by_type"
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         # Use simplified card2tab2card (no legacy depre).
-        c2t2c_module = "src.search.card2tab2card"
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        cmd = [
-            sys.executable,
-            "-m",
-            c2t2c_module,
-            "--model_id",
-            model_id,
-            "--search_type",
-            "keyword",
-            "--k",
-            str(k_table),
-            "--output_json",
-            out_path,
-        ]
+        cmd = _build_card2tab2card_cmd(st="keyword", table_k_value=k_table, out_path=out_path)
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -617,104 +560,6 @@ def _run_pipeline_body(
             "Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
         )
 
-    # Optional: filter Card2Tab2Card(tab2tab) retrieved tables by resource origin
-    # (based on ModelTables filename naming rules via classify_resource()).
-    table_resource_allowlist = list(TABLE_RESOURCE_ALLOWLIST) if TABLE_RESOURCE_ALLOWLIST else None
-    if table_resource_allowlist:
-        logger.log(f"Table resource filtering (tab2tab outputs): allowlist={table_resource_allowlist}")
-
-        def _filter_payload_tables_by_resource(payload: Dict[str, Any]) -> Dict[str, Any]:
-            if not isinstance(payload, dict):
-                return payload
-
-            intermediate = payload.get("intermediate", {})
-            if not isinstance(intermediate, dict):
-                return payload
-
-            searched_tables = payload.get("searched_tables")
-            if not isinstance(searched_tables, list):
-                searched_tables = intermediate.get("retrieved_table_filenames")
-
-            if not isinstance(searched_tables, list):
-                return payload
-
-            kept_tables = filter_results_by_classify_results(
-                searched_tables,
-                table_resource_allowlist,
-            )
-            # After filtering, we also cap to the user's final `table_search_k_input`.
-            # card2tab2card internally multiplies `k` by number of query_tables, so we
-            # mirror that behavior here to get a consistent "final" budget.
-            query_tables = payload.get("query_tables", [])
-            qn = len(query_tables) if isinstance(query_tables, list) and query_tables else 1
-            table_limit = int(table_search_k_input) * max(1, qn)
-            if table_limit > 0:
-                kept_tables = kept_tables[:table_limit]
-            kept_set = set(kept_tables)
-
-            # Keep payload.searched_tables in sync
-            if isinstance(payload.get("searched_tables"), list):
-                payload["searched_tables"] = kept_tables
-
-            # Filter intermediate.table_to_models and filename/ids lists
-            if isinstance(intermediate.get("table_to_models"), dict):
-                intermediate["table_to_models"] = {
-                    fname: mids
-                    for fname, mids in intermediate["table_to_models"].items()
-                    if fname in kept_set
-                }
-
-            if isinstance(intermediate.get("retrieved_table_filenames"), list):
-                intermediate["retrieved_table_filenames"] = [
-                    t for t in intermediate["retrieved_table_filenames"] if t in kept_set
-                ]
-
-            tid_map = intermediate.get("table_id_to_filename")
-            if isinstance(tid_map, dict):
-                intermediate["table_id_to_filename"] = {
-                    str(tid): fname
-                    for tid, fname in tid_map.items()
-                    if fname in kept_set
-                }
-
-            if isinstance(intermediate.get("retrieved_table_ids"), list) and isinstance(intermediate.get("table_id_to_filename"), dict):
-                kept_tids: List[int] = []
-                for tid in intermediate["retrieved_table_ids"]:
-                    fname = intermediate["table_id_to_filename"].get(str(tid))
-                    if fname in kept_set:
-                        kept_tids.append(int(tid))
-                intermediate["retrieved_table_ids"] = kept_tids
-
-            # Update payload.model_ids based on surviving tables
-            mids_set: set[str] = set()
-            table_to_models = intermediate.get("table_to_models")
-            if isinstance(table_to_models, dict):
-                for mids in table_to_models.values():
-                    if isinstance(mids, list):
-                        for mid in mids:
-                            if mid is not None:
-                                mids_set.add(str(mid))
-
-            if isinstance(payload.get("model_ids"), list):
-                payload["model_ids"] = [m for m in payload["model_ids"] if str(m) in mids_set]
-
-            payload["intermediate"] = intermediate
-            return payload
-
-        for st, payload in list(card2tab2card_all.items()):
-            if not isinstance(payload, dict):
-                continue
-            before_models = payload.get("model_ids", [])
-            before_tables = payload.get("intermediate", {}).get("retrieved_table_filenames", [])
-            card2tab2card_all[st] = _filter_payload_tables_by_resource(payload)
-
-            after_models = card2tab2card_all[st].get("model_ids", []) if isinstance(card2tab2card_all[st], dict) else []
-            after_tables = card2tab2card_all[st].get("intermediate", {}).get("retrieved_table_filenames", []) if isinstance(card2tab2card_all[st], dict) else []
-            logger.log(
-                f"  [{st}] tab2tab tables: {len(before_tables) if isinstance(before_tables, list) else '?'} -> {len(after_tables) if isinstance(after_tables, list) else '?'}; "
-                f"models: {len(before_models) if isinstance(before_models, list) else '?'} -> {len(after_models) if isinstance(after_models, list) else '?'}"
-            )
-
     # --- Enforce valid_model_ids for left/right model lists (top-5 stability) ---
     # If we filtered seed correctly, but downstream Card2Card / Card2Tab2Card returns non-valid models,
     # the UI/table integration can look inconsistent or fail to load the intended tables.
@@ -792,19 +637,7 @@ def _run_pipeline_body(
             out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
-            cmd = [
-                sys.executable,
-                "-m",
-                "src.search.card2tab2card",
-                "--model_id",
-                model_id,
-                "--search_type",
-                st,
-                "--k",
-                str(k_override),
-                "--output_json",
-                out_path,
-            ]
+            cmd = _build_card2tab2card_cmd(st=st, table_k_value=k_override, out_path=out_path)
             t0 = time.time()
             rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
             elapsed = time.time() - t0
@@ -815,10 +648,6 @@ def _run_pipeline_body(
                 logger.log(f"[Card2Tab2Card-{st}-rerun_k] No JSON at {out_path}; returning empty payload")
                 return {"model_ids": [], "intermediate": {}}
             payload = _normalize_card2tab2card_payload(data)
-            # Re-apply resource filter + table budget after rerun, so subsequent
-            # model selection stays consistent with the postprocess stage.
-            if table_resource_allowlist:
-                payload = _filter_payload_tables_by_resource(payload)
             payload = _filter_card2tab2card_payload(st, payload)
             return payload
 
@@ -847,20 +676,7 @@ def _run_pipeline_body(
             rerun_top_k = 500
             logger.log(f"Card2Card dense filtered too short ({len(dense_list)}<{model_top_k}); re-running Card2Card dense with top_k={rerun_top_k}")
             out_path = os.path.join(job_dir, "card2card_dense.json")
-            cmd = [
-                sys.executable,
-                "-m",
-                "src.search.card2card",
-                "search",
-                "--model_ids_file",
-                card2card_model_ids_file,
-                "--top_k",
-                str(rerun_top_k),
-                "--retrieval_mode",
-                "dense",
-                "--output_json",
-                out_path,
-            ]
+            cmd = _build_card2card_cmd(mode="dense", top_k_value=rerun_top_k, out_path=out_path)
             t0 = time.time()
             rc, out, err = _run_cmd(cmd, REPO_ROOT, env=None, timeout=CARD2TAB2CARD_TIMEOUT)
             elapsed = time.time() - t0
@@ -1116,19 +932,7 @@ def search():
 
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(
-            job_id,
-            query,
-            top_k,
-            model_id,
-            table_search_k,
-            tab2tab_mode,
-            tab2tab_json,
-            card2card_retrieval_mode,
-            require_seed_has_tables,
-            use_by_type,
-            model_top_k,
-        ),
+        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
     )
     thread.daemon = True
     thread.start()

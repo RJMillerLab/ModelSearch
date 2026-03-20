@@ -23,6 +23,7 @@ V2_SUFFIX = "_v2"
 
 # --- modellake.db ---
 MODELLAKE_DB = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117.db")
+MODELLAKE_DB_HUGGING = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117_hugging.db")
 INDEX_TABLE = "modellake_index"
 
 DEDUPED_HUGGING_CSVS =  os.path.join(PROCESSED_DIR, f"deduped_hugging_csvs{V2_SUFFIX}{DATA_TAG}")
@@ -73,12 +74,7 @@ CARD2CARD_MODES = ["dense", "sparse", "hybrid"]
 CARD2TAB2CARD_TYPES = ["keyword", "single_column", "unionable"]
 
 # Table search / Card2Tab2Card post-filtering by table filename source.
-# These labels must match `src.utils.classify_resource()` return values:
-#   - "github"
-#   - "arxiv"
-#   - "hugging"
-#   - "llm"
-#   - "unknown"
+# "github", "arxiv", "hugging"
 TABLE_RESOURCE_ALLOWLIST = ["hugging"]
 
 # --- Data Structures ---

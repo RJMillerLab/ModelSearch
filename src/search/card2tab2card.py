@@ -15,34 +15,14 @@ import argparse
 from typing import Any, Dict, List, Optional
 
 import duckdb
-import pandas as pd
 
-from src.config import MODELLAKE_DB, CARD2TAB2CARD_OUTPUT_JSON
+#from src.config import MODELLAKE_DB, CARD2TAB2CARD_OUTPUT_JSON
+from src.config import *
 from src.search.tab2tab import search_table2table
 from src.utils import load_modelid_to_csvlist, load_csvs_to_modelids, resolve_table_path
 
 
-def _get_csv_headers(csv_path: str) -> List[str]:
-    df = pd.read_csv(csv_path, nrows=0)
-    return [str(c).strip().lower() for c in df.columns if str(c).strip()]
-
-
-def _build_query_from_csv(csv_path: str, search_type: str) -> Any:
-    if search_type == "keyword":
-        headers = _get_csv_headers(csv_path)
-        return headers if headers else [os.path.basename(csv_path)]
-    if search_type == "single_column":
-        df = pd.read_csv(csv_path, nrows=100)
-        if len(df.columns) == 0:
-            return [os.path.basename(csv_path)]
-        vals = df[df.columns[0]].dropna().astype(str).tolist()
-        return vals if vals else [os.path.basename(csv_path)]
-    if search_type in ("multi_column", "unionable"):
-        return pd.read_csv(csv_path)
-    raise ValueError(f"Unsupported search_type: {search_type}")
-
-
-def _table_ids_to_filenames(table_ids: List[int]) -> Dict[int, str]:
+def _table_ids_to_filenames(table_ids: List[int], db_path_use: str) -> Dict[int, str]:
     if not table_ids:
         return {}
     sql = f"""
@@ -50,20 +30,22 @@ def _table_ids_to_filenames(table_ids: List[int]) -> Dict[int, str]:
         FROM modellake_index
         WHERE rowid = -1 AND tableid IN ({",".join(["?"] * len(table_ids))})
     """
-    with duckdb.connect(MODELLAKE_DB, read_only=True) as con:
+    with duckdb.connect(db_path_use, read_only=True) as con:
         rows = con.execute(sql, table_ids).fetchall()
     return {int(tid): str(fname) for tid, fname in rows}
 
 
 def search_card2tab2card(   
     model_id: str,
-    query: Optional[Any] = None,
     search_type: str = "keyword",
-    k: int = 10,
-    output_json: str = CARD2TAB2CARD_OUTPUT_JSON,
+    output_json: str = "",
+    db_path_use: str = MODELLAKE_DB,
+    table_top_k: int = 10,
+    model_top_k: int = 20,
 ) -> List[str]:
     """Simplified card->tab->card search using relationship parquet + tab2tab import."""
-    print(f"[Card2Tab2Card] model_id={model_id} search_type={search_type} k={k}")
+    print(f"[Card2Tab2Card] model_id={model_id} search_type={search_type} table_top_k={table_top_k} model_top_k={model_top_k}")
+    # model_id -> csv_basenames
     query_table_basenames = load_modelid_to_csvlist(model_id)
     # utils returns csv basenames; resolve to local csv paths for reading.
     query_tables: List[str] = []
@@ -79,19 +61,17 @@ def search_card2tab2card(
             with open(output_json, "w", encoding="utf-8") as f:
                 json.dump({"query_model": model_id, "query_tables": [], "searched_tables": [], "model_ids": [], "intermediate": {"retrieved_table_ids": [], "retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}}}, f, ensure_ascii=False, indent=2)
         return []
-
-    similar_table_ids: List[int] = []
-    if query is not None:
-        ids = search_table2table(query, search_type, k)
-        similar_table_ids.extend(ids if ids else [])
     else:
-        for csv_path in query_tables:
-            if not os.path.exists(csv_path):
-                continue
-            tquery = _build_query_from_csv(csv_path, search_type)
-            ids = search_table2table(tquery, search_type, k)
-            if ids:
-                similar_table_ids.extend(ids)
+        print(f"query_tables example: {query_tables[0]}")
+
+    # table2table search
+    similar_table_ids: List[int] = []
+    for csv_path in query_tables:
+        if not os.path.exists(csv_path):
+            continue
+        ids = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path_use)
+        if ids:
+            similar_table_ids.extend(ids)
 
     if not similar_table_ids:
         print("⚠️ No similar tables returned by tab2tab.")
@@ -100,7 +80,7 @@ def search_card2tab2card(
         if output_json:
             os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
             with open(output_json, "w", encoding="utf-8") as f:
-                '''json.dump(
+                json.dump(
                     {
                         "query_model": model_id,
                         "query_tables": query_tables,
@@ -116,48 +96,26 @@ def search_card2tab2card(
                     f,
                     ensure_ascii=False,
                     indent=2,
-                )'''
-                json.dump([], f, ensure_ascii=False, indent=2)
+                )
             print(f"✅ Results saved to {output_json} (empty)")
         return []
 
-    seen_tid = set()
-    unique_tids: List[int] = []
-    for tid in similar_table_ids:
-        itid = int(tid)
-        if itid not in seen_tid:
-            seen_tid.add(itid)
-            unique_tids.append(itid)
-    unique_tids = unique_tids[: max(k, 1) * max(len(query_tables), 1)]
+    # map table ids to tables name (dedupe while preserving order)
+    unique_tids = list(dict.fromkeys(int(tid) for tid in similar_table_ids))
+    unique_tids = unique_tids[: max(table_top_k, 1) * max(len(query_tables), 1)]
+    table_id_to_filename = _table_ids_to_filenames(unique_tids, db_path_use)
+    retrieved_tables = list(dict.fromkeys(table_id_to_filename.get(tid) for tid in unique_tids if table_id_to_filename.get(tid)))
 
-    table_id_to_filename = _table_ids_to_filenames(unique_tids)
-    retrieved_filenames: List[str] = []
-    seen_file = set()
-    for tid in unique_tids:
-        fname = table_id_to_filename.get(tid)
-        if fname and fname not in seen_file:
-            seen_file.add(fname)
-            retrieved_filenames.append(fname)
-
-    reverse = load_csvs_to_modelids(retrieved_filenames)
-    similar_models: List[str] = []
-    seen_mid = set()
-    table_to_models: Dict[str, List[str]] = {}
-    for fname in retrieved_filenames:
-        base = os.path.basename(fname)
-        mids = [mid for mid in reverse.get(base, []) if mid != model_id]
-        table_to_models[fname] = mids
-        for mid in mids:
-            if mid not in seen_mid:
-                seen_mid.add(mid)
-                similar_models.append(mid)
+    reverse = load_csvs_to_modelids([os.path.basename(fname) for fname in retrieved_tables])
+    table_to_models = {table: [mid for mid in reverse.get(os.path.basename(table), []) if mid != model_id] for table in retrieved_tables}
+    similar_models = list(dict.fromkeys(mid for mids in table_to_models.values() for mid in mids))
     # `k` in this pipeline is controlled by the frontend's per-table top-k.
     # Many different model_ids can be related to a single retrieved table,
     # so we should not cap the number of returned model_ids to `k`.
     # Keep UI-consistent cap: models capped at 50.
-    final_results = similar_models[:50] if k > 0 else similar_models
+    final_results = similar_models[:model_top_k] if model_top_k > 0 else similar_models
 
-    print(f"✅ query_tables={len(query_tables)} retrieved_tables={len(retrieved_filenames)} model_ids={len(final_results)}")
+    print(f"✅ query_tables={len(query_tables)} retrieved_tables={len(retrieved_tables)} model_ids={len(final_results)}")
     if output_json:
         os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
@@ -165,11 +123,11 @@ def search_card2tab2card(
                 {
                     "query_model": model_id,
                     "query_tables": query_tables,
-                    "searched_tables": retrieved_filenames,
+                    "searched_tables": retrieved_tables,
                     "model_ids": final_results,
                     "intermediate": {
                         "retrieved_table_ids": unique_tids,
-                        "retrieved_table_filenames": retrieved_filenames,
+                        "retrieved_table_filenames": retrieved_tables,
                         "table_id_to_filename": {str(k_): v for k_, v in table_id_to_filename.items()},
                         "table_to_models": table_to_models,
                     },
@@ -184,29 +142,31 @@ def search_card2tab2card(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Card -> Tab -> Card search (simplified)")
     parser.add_argument("--model_id", required=True, help="Query model id")
-    parser.add_argument("--query", default=None, help="Optional query (csv path or comma-separated list by search_type)")
     parser.add_argument("--search_type", choices=["single_column", "multi_column", "keyword", "unionable"], default="keyword")
-    parser.add_argument("--k", type=int, default=10, help="Top-k model ids")
-    parser.add_argument("--output_json", default=CARD2TAB2CARD_OUTPUT_JSON)
+    parser.add_argument("--output_json", default="")
+    parser.add_argument("--resources", nargs="+", default=["hugging"], choices=["hugging", "github", "arxiv", "llm"], help="Optional table resource filter on card2tab2card results.")
+    parser.add_argument("--table_top_k", type=int, default=10, help="Top-k table ids")
+    parser.add_argument("--model_top_k", type=int, default=20, help="Top-k model ids")
     args = parser.parse_args()
 
-    t0 = time.time()
-    parsed_query: Optional[Any] = None
-    if args.query:
-        if args.search_type in ("multi_column", "unionable"):
-            parsed_query = pd.read_csv(args.query)
-        else:
-            if os.path.exists(args.query):
-                parsed_query = _build_query_from_csv(args.query, args.search_type)
-            else:
-                parsed_query = [x.strip() for x in str(args.query).split(",") if x.strip()]
+    resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
+    resource_set = set(resources)
+    if resource_set == {'hugging'}:
+        db_path_use = MODELLAKE_DB_HUGGING
+    elif resource_set == {'hugging', 'github', 'arxiv'}:
+        db_path_use = MODELLAKE_DB
+    else:
+        raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
+    t0 = time.time()
+    
     results = search_card2tab2card(
         model_id=args.model_id,
-        query=parsed_query,
         search_type=args.search_type,
-        k=args.k,
+        table_top_k=args.table_top_k,
         output_json=args.output_json,
+        db_path_use=db_path_use,
+        model_top_k=args.model_top_k,
     )
     print(f"Found {len(results)} model ids for {args.model_id}")
     for i, mid in enumerate(results[:20], 1):

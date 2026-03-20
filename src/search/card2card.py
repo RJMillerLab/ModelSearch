@@ -442,23 +442,15 @@ def main():
             raise RuntimeError(f"No model_ids found in file: {args.model_ids_file}")
         
         resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
-        normalized = []
-        for r in resources:
-            if r in {'huggingface', 'hf'}:
-                normalized.append('hugging')
-            elif r == 'html':
-                normalized.append('arxiv')
-            else:
-                normalized.append(r)
-
-        if set(normalized) == {'hugging'}:
+        resource_set = set(resources)
+        if resource_set == {'hugging'}:
             emb_npz = EMB_NPZ_HUGGING
             sparse_idx = SPARSE_INDEX_HUGGING
-        elif set(normalized) == {'hugging', 'github', 'arxiv'}:
+        elif resource_set == {'hugging', 'github', 'arxiv'}:
             emb_npz = EMB_NPZ
             sparse_idx = SPARSE_INDEX
         else:
-            raise NotImplementedError(f"Unsupported resource combination: {set(normalized)}")
+            raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
         if args.retrieval_mode == 'dense':
             results = search_dense_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k, embeddings_npz_path=emb_npz)

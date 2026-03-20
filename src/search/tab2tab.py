@@ -18,10 +18,40 @@ from typing import Any, Iterable, List, Optional
 
 import pandas as pd
 
-from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON, BLEND_INTERNAL_REPO, INDEX_TABLE
+#from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON, BLEND_INTERNAL_REPO, INDEX_TABLE
+from src.config import *
+from src.utils import resolve_table_path
 
 # Guard Blend_internal config.ini mutation (it is shared on disk).
 _blend_subprocess_lock = threading.Lock()
+
+
+def _extract_keyword_query_from_table(table_path: str) -> List[str]:
+    """Build keyword query from table headers."""
+    out: List[str] = []
+    seen = set()
+    try:
+        df = pd.read_csv(table_path, nrows=0)
+    except Exception:
+        return []
+    for c in df.columns:
+        s = str(c).strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _extract_single_column_query_from_table(table_path: str, max_rows_per_table: int = 100) -> List[str]:
+    """Build single-column query from first-column values."""
+    try:
+        df = pd.read_csv(table_path, nrows=max_rows_per_table)
+    except Exception:
+        return []
+    if len(df.columns) == 0:
+        return []
+    vals = df[df.columns[0]].dropna().astype(str).tolist()
+    return [v for v in vals if str(v).strip()]
 
 
 def _blend_file_lock_path() -> str:
@@ -77,7 +107,7 @@ def _ensure_blend_exists() -> None:
         )
 
 
-def _run_blend_tab2tab_subprocess(
+def search_table2table(
     *,
     search_type: str,
     query: Any,
@@ -91,8 +121,6 @@ def _run_blend_tab2tab_subprocess(
     """
     _ensure_blend_exists()
 
-    db_path_use = db_path or MODELLAKE_DB
-
     # Use caller-provided output path (deterministic) or a temp file (isolated).
     out_path: str
     if output_json:
@@ -104,40 +132,28 @@ def _run_blend_tab2tab_subprocess(
         out_fd, out_path = tempfile.mkstemp(prefix="tab2tab_", suffix=".json")
         os.close(out_fd)
 
-    # For multi_column/unionable, query must be a CSV path.
-    temp_query_csv_path: Optional[str] = None
-
     try:
+        if not isinstance(query, str):
+            raise ValueError("query must be a table name/path string")
+        table_path = resolve_table_path(query) or (query if os.path.exists(query) else None)
+        if not table_path:
+            raise ValueError(f"No existing table found for query: {query!r}")
+
         if search_type in ("single_column", "keyword"):
-            if not isinstance(query, (list, tuple, pd.Series)):
-                raise ValueError(f"For {search_type}, query must be an iterable of strings.")
-            query_str = ",".join(str(x) for x in query)
-            query_arg = query_str
+            if search_type == "keyword":
+                query_tokens = _extract_keyword_query_from_table(table_path)
+            else:
+                query_tokens = _extract_single_column_query_from_table(table_path)
+            if not query_tokens:
+                raise ValueError(f"Empty extracted query from table path: {table_path!r}")
+            query_arg = ",".join(query_tokens)
         elif search_type in ("multi_column", "unionable"):
-            if not isinstance(query, pd.DataFrame):
-                raise ValueError(f"For {search_type}, query must be a pandas DataFrame.")
-            tmp_dir = tempfile.mkdtemp(prefix="tab2tab_query_")
-            temp_query_csv_path = os.path.join(tmp_dir, "query.csv")
-            query.to_csv(temp_query_csv_path, index=False, encoding="utf-8")
-            query_arg = temp_query_csv_path
+            # Blend expects query csv path for these modes.
+            query_arg = table_path
         else:
             raise ValueError(f"Unknown search_type: {search_type}")
 
-        cmd = [
-            "python",
-            "-m",
-            _blend_module(),
-            "--db_path",
-            db_path_use,
-            "--output_json",
-            out_path,
-            "--search_type",
-            search_type,
-            "--query",
-            str(query_arg),
-            "--k",
-            str(k),
-        ]
+        cmd = ["python", "-m", _blend_module(), "--db_path", db_path_use, "--output_json", out_path, "--search_type", search_type, "--query", str(query_arg), "--k", str(k)]
 
         # Serialize to avoid concurrent writes to Blend_internal config.ini.
         # This must be a cross-process lock, not only a thread lock.
@@ -190,7 +206,7 @@ def _run_blend_tab2tab_subprocess(
 
             import duckdb
 
-            conn = duckdb.connect(MODELLAKE_DB, read_only=True)
+            conn = duckdb.connect(db_path_use, read_only=True)
             try:
                 placeholders = ",".join(["?"] * len(filenames))
                 query_sql = f"""
@@ -221,125 +237,42 @@ def _run_blend_tab2tab_subprocess(
                 os.remove(out_path)
         except Exception:
             pass
-        if temp_query_csv_path:
-            try:
-                # temp_query_csv_path is inside a tmp dir; remove best-effort.
-                tmp_dir = os.path.dirname(temp_query_csv_path)
-                if os.path.isdir(tmp_dir):
-                    for fn in os.listdir(tmp_dir):
-                        try:
-                            os.remove(os.path.join(tmp_dir, fn))
-                        except Exception:
-                            pass
-                    os.rmdir(tmp_dir)
-            except Exception:
-                pass
-
-
-def search_single_column(query_values: Iterable[Any], k: int = 10, db_path: Optional[str] = None) -> List[int]:
-    return _run_blend_tab2tab_subprocess(search_type="single_column", query=list(query_values), k=k, db_path=db_path)
-
-
-def search_keyword(query_values: List[str], k: int = 10, db_path: Optional[str] = None) -> List[int]:
-    return _run_blend_tab2tab_subprocess(search_type="keyword", query=list(query_values), k=k, db_path=db_path)
-
-
-def search_multi_column(query_dataset: pd.DataFrame, k: int = 10, db_path: Optional[str] = None) -> List[int]:
-    return _run_blend_tab2tab_subprocess(search_type="multi_column", query=query_dataset, k=k, db_path=db_path)
-
-
-def search_unionable(query_dataset: pd.DataFrame, k: int = 10, db_path: Optional[str] = None) -> List[int]:
-    return _run_blend_tab2tab_subprocess(search_type="unionable", query=query_dataset, k=k, db_path=db_path)
-
-
-def search_table2table(
-    query: Any,
-    search_type: str = "single_column",
-    k: int = 10,
-    db_path: Optional[str] = None,
-    output_json: Optional[str] = None,
-) -> List[int]:
-    """
-    Unified interface for the 4 supported table-to-table search types.
-    This mirrors the old in-process wrapper API but uses subprocess.
-    """
-    if search_type == "single_column":
-        if not isinstance(query, (list, tuple, pd.Series)):
-            raise ValueError("For single_column search, query must be an iterable of values")
-        return _run_blend_tab2tab_subprocess(
-            search_type="single_column",
-            query=list(query),
-            k=k,
-            db_path=db_path,
-            output_json=output_json,
-        )
-    if search_type == "multi_column":
-        if not isinstance(query, pd.DataFrame):
-            raise ValueError("For multi_column search, query must be a pandas DataFrame")
-        return _run_blend_tab2tab_subprocess(
-            search_type="multi_column",
-            query=query,
-            k=k,
-            db_path=db_path,
-            output_json=output_json,
-        )
-    if search_type == "keyword":
-        if not isinstance(query, list) or not all(isinstance(x, str) for x in query):
-            raise ValueError("For keyword search, query must be a list of strings")
-        return _run_blend_tab2tab_subprocess(
-            search_type="keyword",
-            query=list(query),
-            k=k,
-            db_path=db_path,
-            output_json=output_json,
-        )
-    if search_type == "unionable":
-        if not isinstance(query, pd.DataFrame):
-            raise ValueError("For unionable search, query must be a pandas DataFrame")
-        return _run_blend_tab2tab_subprocess(
-            search_type="unionable",
-            query=query,
-            k=k,
-            db_path=db_path,
-            output_json=output_json,
-        )
-    raise ValueError("Unknown search_type: must be 'single_column', 'multi_column', 'keyword', or 'unionable'")
-
 
 def main() -> None:
     """
     Minimal CLI for local testing (kept consistent with build_index.md usage).
     """
     import argparse
-    start = None
+    import time
     parser = argparse.ArgumentParser(description="Table to Table Search using Blend_internal (subprocess wrapper)")
     parser.add_argument("--search_type", choices=["single_column", "multi_column", "keyword", "unionable"], required=True)
-    parser.add_argument("--query", default=None, required=True, help="CSV path for multi_column/unionable, comma-separated values for others.")
+    parser.add_argument(
+        "--query",
+        default=None,
+        required=True,
+        help="Input table path/name. keyword extracts headers; single_column extracts first-column values; multi_column/unionable pass table path directly.",
+    )
     parser.add_argument("--k", type=int, default=10)
-    parser.add_argument("--output_json", default=None, help="Optional output json path to write Blend_internal results.")
+    parser.add_argument("--output_json", default="", help="Optional output json path to write Blend_internal results.")
+    parser.add_argument("--resources", nargs="+", default=["hugging"], choices=["hugging", "github", "arxiv"], help="Optional table resource filter on tab2tab results.")
     args = parser.parse_args()
 
-    if args.search_type in ("single_column", "keyword"):
-        query: Any = [x.strip() for x in str(args.query).split(",") if x.strip()]
+    resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
+    resource_set = set(resources)
+    if resource_set == {'hugging'}:
+        db_path_use = MODELLAKE_DB_HUGGING
+    elif resource_set == {'hugging', 'github', 'arxiv'}:
+        db_path_use = MODELLAKE_DB
     else:
-        query = pd.read_csv(args.query)
+        raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
-    start = __import__("time").time()
-    # If caller provides --output_json, Blend_internal will already write it.
-    # In that case we skip parsing payload to avoid extra work.
-    parse_payload = args.output_json is None
-    results = _run_blend_tab2tab_subprocess(
-        search_type=args.search_type,
-        query=query,
-        k=args.k,
-        output_json=args.output_json,
-        parse_payload=parse_payload,
-    )
+    start = time.time()
+    results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, db_path=db_path_use, output_json=args.output_json)
     if args.output_json:
         print(f"Saved json: {args.output_json}")
     else:
         print(f"Found {len(results)} tables: {results}")
-    print(f"Total time: {__import__('time').time() - start:.2f}s")
+    print(f"Total time: {time.time() - start:.2f}s")
 
 
 if __name__ == "__main__":

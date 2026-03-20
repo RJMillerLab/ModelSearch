@@ -26,14 +26,11 @@ git clone git@github.com:RJMillerLab/ModelTables.git
 # build index for dense retrieval (FAISS) and sparse retrieval (Pyserini Lucene) from modelcard_step1.parquet
 python -m src.search.card2card build-dense-index
 python -m src.search.card2card build-sparse-index
-# (Optional) Build dense + sparse subset for "hugging" (dense npz + sparse lucene index)
-python -m src.utils.build_card2card_subset_from_embeddings_and_ids \
-  --model_ids_txt data_251117/valid_model_ids_with_tables_hugging.txt \
-  --threads 4
 
-# (Optional) Example: dense/sparse search on the subset artifacts
-# python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode dense --embeddings_npz_path data_251117/card2card_embeddings_hugging.npz --output_json data_251117/card2card_dense_hugging.json
-# python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse --sparse_index_path data_251117/card2card_sparse_index_hugging --output_json data_251117/card2card_sparse_hugging.json
+# (Optional) Build dense + sparse subset for "hugging" (dense npz + sparse lucene index)
+python -m src.utils.build_card2card_subset_from_embeddings_and_ids --model_ids_txt data_251117/valid_model_ids_with_tables_hugging.txt --threads 4
+# Test numbers of filtered files
+# python -c "from pyserini.search.lucene import LuceneSearcher; s=LuceneSearcher('data_251117/card2card_sparse_index_hugging'); print('index_docs=', s.num_docs)"
 ```
 
 ## 1.2 Blend + data
@@ -43,6 +40,8 @@ python -m src.utils.build_card2card_subset_from_embeddings_and_ids \
 git clone git@github.com:DoraDong-2023/Blend_internal.git 
 ln -s ../Blend_internal others/Blend_internal
 # create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117.db
+# python -m scripts.create_index_duckdb --db_path modellake_v2_251117_hugging.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/*.csv" --mask ../ModelTables/data/analysis/all_valid_title_valid_v2_251117.txt
+# optional: create subset of duckdb index for later search
 ```
 
 
@@ -66,9 +65,9 @@ python -m src.search.classification --mode batch --output_json data/table_classi
 ## 2.1 query2modelcard
 
 ```bash
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode dense --output_json data_251117/query2modelcard_dense.json > logs/query2modelcard_dense.log 2>&1
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode sparse --output_json data_251117/query2modelcard_sparse.json > logs/query2modelcard_sparse.log 2>&1 # tested
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode hybrid --output_json data_251117/query2modelcard_hybrid.json > logs/query2modelcard_hybrid.log 2>&1
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode dense --resources hugging --output_json data_251117/query2modelcard_dense_hugging.json > logs/query2modelcard_dense_hugging.log 2>&1
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode sparse --resources hugging --output_json data_251117/query2modelcard_sparse_hugging.json > logs/query2modelcard_sparse_hugging.log 2>&1 # tested
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode hybrid --resources hugging --output_json data_251117/query2modelcard_hybrid_hugging.json > logs/query2modelcard_hybrid_hugging.log 2>&1
 ```
 
 ## 2.2 card2card (dense, sparse, hybrid)
@@ -80,11 +79,11 @@ python -m src.search.query2modelcard --query "transformer model for code generat
 echo "google-bert/bert-base-uncased" > data_251117/card2card_model_ids.txt
 # dense (FAISS only)
 # python -m src.search.card2card search --model_id ... is deprecated; use --model_ids_file instead
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode dense --output_json data_251117/card2card_dense.json > logs/card2card_dense.log 2>&1
+python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode dense --resources hugging --output_json data_251117/card2card_dense_hugging.json > logs/card2card_dense_hugging.log 2>&1
 # sparse (Pyserini Lucene index from 1.1b)
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse --output_json data_251117/card2card_sparse.json > logs/card2card_sparse.log 2>&1 # tested
+python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse --resources hugging --output_json data_251117/card2card_sparse_hugging.json > logs/card2card_sparse_hugging.log 2>&1 # tested
 # hybrid (sparse + FAISS)
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode hybrid --output_json data_251117/card2card_hybrid.json > logs/card2card_hybrid.log 2>&1
+python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode hybrid --resources hugging --output_json data_251117/card2card_hybrid_hugging.json > logs/card2card_hybrid_hugging.log 2>&1
 ```
 
 ## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable)
@@ -105,19 +104,20 @@ They are wrapped in below scripts.
 </details>
 
 ```bash
-python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 --output_json results/tab2tab_keyword.json > logs/tab2tab_keyword.log 2>&1
-python -m src.search.tab2tab --search_type single_column --query "val1,val2,val3" --k 10 --output_json results/tab2tab_single_column.json > logs/tab2tab_single_column.log 2>&1
-python -m src.search.tab2tab --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_multi_column.json > logs/tab2tab_multi_column.log 2>&1
-python -m src.search.tab2tab --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json > logs/tab2tab_unionable.log 2>&1
+# unified input as table query
+python -m src.search.tab2tab --resources hugging --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_keyword.json > logs/tab2tab_keyword.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_single_column.json > logs/tab2tab_single_column.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_multi_column.json > logs/tab2tab_multi_column.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json > logs/tab2tab_unionable.log 2>&1
 ```
 
 ## 2.4 card2tab2card (keyword, single_column, unionable)
 
 ```bash
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type single_column --k 10 > logs/card2tab2card_single_column.log 2>&1
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type multi_column --k 10 > logs/card2tab2card_multi_column.log 2>&1
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type unionable --k 10 > logs/card2tab2card_unionable.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type single_column --k 10 > logs/card2tab2card_single_column_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type multi_column --k 10 > logs/card2tab2card_multi_column_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type unionable --k 10 > logs/card2tab2card_unionable_hugging.log 2>&1
 ```
 
 <details><summary>Optional 2.5 tab2tab_by_type</summary>

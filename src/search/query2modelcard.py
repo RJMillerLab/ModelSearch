@@ -21,18 +21,20 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from src.utils import get_device
-from src.config import EMB_NPZ, ENCODE_MODEL, SPARSE_INDEX
 from src.search.card2card import _build_faiss_index_in_memory, _get_pyserini_searcher_and_reader
+#from src.config import EMB_NPZ, ENCODE_MODEL, SPARSE_INDEX
+from src.config import *
 
 def _search_sparse_query(
     query_text: str,
     *,
     top_k: int,
+    sparse_index_path: str = SPARSE_INDEX,
 ) -> Tuple[List[str], List[float]]:
     """
     Sparse retrieval: run BM25 over Lucene index using raw query text.
     """
-    searcher, _index_reader = _get_pyserini_searcher_and_reader(SPARSE_INDEX)
+    searcher, _index_reader = _get_pyserini_searcher_and_reader(sparse_index_path)
     hits = searcher.search(query_text, k=top_k)
     docids = [h.docid for h in hits]
     scores = [float(h.score) for h in hits]
@@ -46,6 +48,8 @@ def search_query2modelcard(
     output_json: Optional[str] = None,
     retrieval_mode: str = "dense",
     candidate_factor: int = 10,
+    emb_npz_path: str = EMB_NPZ,
+    sparse_index_path: str = SPARSE_INDEX,
 ) -> List[str]:
     """
     Search for model cards using a text query.
@@ -60,13 +64,13 @@ def search_query2modelcard(
 
     # Dense and hybrid need embeddings.
     # Backward compatible: older EMB_NPZ may have stored `ids` as dtype=object.
-    data = np.load(EMB_NPZ, allow_pickle=True) if retrieval_mode in {"dense", "hybrid"} else None
+    data = np.load(emb_npz_path, allow_pickle=True) if retrieval_mode in {"dense", "hybrid"} else None
     ids = data["ids"].tolist() if data is not None else None
     embs = np.asarray(data["embeddings"], dtype=np.float32) if data is not None else None
     results: List[str]
     scores: List[float]
     if retrieval_mode == "sparse":
-        results, scores = _search_sparse_query(query, top_k=top_k)
+        results, scores = _search_sparse_query(query, top_k=top_k, sparse_index_path=sparse_index_path)
     else:
         # Encode query for dense and hybrid.
         model = SentenceTransformer(ENCODE_MODEL, device=get_device())
@@ -81,7 +85,7 @@ def search_query2modelcard(
         else:
             # hybrid
             sparse_k = top_k * candidate_factor
-            candidate_ids, _ = _search_sparse_query(query, top_k=sparse_k)
+            candidate_ids, _ = _search_sparse_query(query, top_k=sparse_k, sparse_index_path=sparse_index_path)
 
             # Filter candidates to those present in embeddings, preserve order, drop duplicates.
             seen = set()
@@ -119,12 +123,24 @@ def main():
     parser.add_argument('--top_k', type=int, default=20, help='Number of results to return (default: 20)')
     parser.add_argument('--output_json', default=None, help='Optional path to save results as JSON')
     parser.add_argument('--retrieval_mode', choices=['dense', 'sparse', 'hybrid'], required=True, help='Retrieval mode.')
+    parser.add_argument('--resources', nargs='+', default=['hugging', 'github', 'arxiv'], choices=['hugging', 'github', 'arxiv'], help='Resource labels. If and only if hugging/hf is selected alone, use hugging subset indexes.')
     parser.add_argument('--candidate_factor', type=int, default=10, help='Hybrid: sparse topk multiplier.')
     
     args = parser.parse_args()
     start_time = time.time()
 
-    results = search_query2modelcard(query=args.query, top_k=args.top_k, output_json=args.output_json, retrieval_mode=args.retrieval_mode, candidate_factor=args.candidate_factor)
+    resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
+    resource_set = set(resources)
+    if resource_set == {'hugging'}:
+        emb_npz_path = EMB_NPZ_HUGGING
+        sparse_index_path = SPARSE_INDEX_HUGGING
+    elif resource_set == {'hugging', 'github', 'arxiv'}:
+        emb_npz_path = EMB_NPZ
+        sparse_index_path = SPARSE_INDEX
+    else:
+        raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
+
+    results = search_query2modelcard(query=args.query, top_k=args.top_k, output_json=args.output_json, retrieval_mode=args.retrieval_mode, candidate_factor=args.candidate_factor, emb_npz_path=emb_npz_path, sparse_index_path=sparse_index_path)
     
     print(f"Found {len(results)} model cards for query: '{args.query}'")
     for i, model_id in enumerate(results, 1):
