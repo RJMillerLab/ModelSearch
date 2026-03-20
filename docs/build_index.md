@@ -159,6 +159,10 @@ python -m src.demo.frontend
 ```
 
 
+## 3. mimic user for batch running
+```bash
+python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 --preset_path config/preset_queries.json --run_integration
+```
 
 
 ---

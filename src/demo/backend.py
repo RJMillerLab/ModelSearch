@@ -232,7 +232,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
         logger.log(f"query2modelcard input query: {query!r}")
         q2m_out = os.path.join(job_dir, "query2modelcard.json")
-        q2m_script = os.path.join(REPO_ROOT, "src", "search", "query2modelcard.py")
+        q2m_module = "src.search.query2modelcard"
 
         if require_seed_has_tables:
             valid_model_ids = _get_valid_modelids_with_tables()
@@ -246,7 +246,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 logger.log(f"query2modelcard phase {phase}: top_k={q2m_top_k}")
                 cmd = [
                     sys.executable,
-                    q2m_script,
+                    "-m",
+                    q2m_module,
                     "--query",
                     query,
                     "--top_k",
@@ -295,7 +296,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         else:
             cmd = [
                 sys.executable,
-                q2m_script,
+                "-m",
+                q2m_module,
                 "--query",
                 query,
                 "--top_k",
@@ -377,11 +379,22 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     def run_card2tab2card(st: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
-        # Run as script to avoid RuntimeWarning (src.search pre-import) and unpredictable behaviour
-        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
+        c2t2c_module = "src.search.card2tab2card"
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
-        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--search_type", st, "--k", str(k_table), "--output_json", out_path]
+        cmd = [
+            sys.executable,
+            "-m",
+            c2t2c_module,
+            "--model_id",
+            model_id,
+            "--search_type",
+            st,
+            "--k",
+            str(k_table),
+            "--output_json",
+            out_path,
+        ]
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -397,12 +410,13 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         st = "by_type"
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         # Use simplified card2tab2card (no legacy depre).
-        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
+        c2t2c_module = "src.search.card2tab2card"
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         cmd = [
             sys.executable,
-            c2t2c_script,
+            "-m",
+            c2t2c_module,
             "--model_id",
             model_id,
             "--search_type",
