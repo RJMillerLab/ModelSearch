@@ -106,10 +106,13 @@ python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/data
 python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 > logs/tab2tab_multi_column.log 2>&1
 python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 > logs/tab2tab_unionable.log 2>&1
 ```
-Or
+They are wrapped in below scripts.
 
 ```bash
 python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 --output_json results/tab2tab_keyword.json > logs/tab2tab_keyword.log 2>&1
+python -m src.search.tab2tab --search_type single_column --query "val1,val2,val3" --k 10 --output_json results/tab2tab_single_column.json > logs/tab2tab_single_column.log 2>&1
+python -m src.search.tab2tab --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_multi_column.json > logs/tab2tab_multi_column.log 2>&1
+python -m src.search.tab2tab --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json > logs/tab2tab_unionable.log 2>&1
 ```
 
 ## 2.4 card2tab2card (keyword, single_column, unionable)
@@ -117,6 +120,7 @@ python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,
 ```bash
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type single_column --k 10 > logs/card2tab2card_single_column.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type multi_column --k 10 > logs/card2tab2card_multi_column.log 2>&1
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type unionable --k 10 > logs/card2tab2card_unionable.log 2>&1
 ```
 
@@ -138,10 +142,10 @@ If **multi_column** fails with `Scalar Function with name to_bitstring does not 
 Generate markdown to view/compare tables by table ID or model ID; or from all logs (query + search results → md/).
 
 ```bash
-python -m src.postprocess.generate_table_md --table_ids 3690 46228 26307 --output table_comparison.md
-python -m src.postprocess.generate_table_md --model_id google-bert/bert-base-uncased --output model_tables.md
-python -m src.postprocess.generate_md_from_logs --logs_dir logs --output_dir md
-python -m src.postprocess.generate_md_from_logs --log_file logs/card2tab2card_by_type.log --output_dir md
+python -m src.utils.generate_table_md --table_ids 3690 46228 26307 --output table_comparison.md
+python -m src.utils.generate_table_md --model_id google-bert/bert-base-uncased --output model_tables.md
+python -m src.utils.generate_md_from_logs --logs_dir logs --output_dir md
+python -m src.utils.generate_md_from_logs --log_file logs/card2tab2card_by_type.log --output_dir md
 ```
 
 **Outputs:** `logs/` (input); `md/<log_basename>.md` (one per log); `md/<log_basename>_materials/csv_integrated/integrated.csv` when integration finds CSVs. **Generated** = md file written for that log; **Failed** = no result JSON path in log (run that search with `--output_json` to fix). Pipeline: model-search = models first, then tables; table-search = tables only.

@@ -24,7 +24,7 @@ def _sanitize_for_json(obj: Any) -> Any:
     return obj
 
 # Paths from config.py (relative to repo root)
-from src.config import EMB_NPZ, FAISS_INDEX, SPARSE_INDEX, PRESET_QUERIES_PATH, REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON
+from src.config import PRESET_QUERIES_PATH, REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON
 
 def _generate_job_id() -> str:
     """Generate human-readable job ID: YYYY-MM-DD_HH-MM-SS_xxxx (time + 4-char suffix for uniqueness)."""
@@ -245,7 +245,18 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 if phase == 2 and phase2_k <= phase1_k:
                     break
                 logger.log(f"query2modelcard phase {phase}: top_k={q2m_top_k}")
-                cmd = [sys.executable, q2m_script, "--query", query, "--top_k", str(q2m_top_k), "--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX, "--output_json", q2m_out]
+                cmd = [
+                    sys.executable,
+                    q2m_script,
+                    "--query",
+                    query,
+                    "--top_k",
+                    str(q2m_top_k),
+                    "--retrieval_mode",
+                    card2card_retrieval_mode,
+                    "--output_json",
+                    q2m_out,
+                ]
                 t0 = time.time()
                 rc, out, err = _run_cmd(cmd, REPO_ROOT)
                 elapsed = time.time() - t0
@@ -283,7 +294,18 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 logger.log(f"Table Search Seed Model: none of top-{len(results_list)} in valid set. Using top-1 for Card2Card only; Table Search skipped.")
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
         else:
-            cmd = [sys.executable, q2m_script, "--query", query, "--top_k", "1", "--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX, "--output_json", q2m_out]
+            cmd = [
+                sys.executable,
+                q2m_script,
+                "--query",
+                query,
+                "--top_k",
+                "1",
+                "--retrieval_mode",
+                card2card_retrieval_mode,
+                "--output_json",
+                q2m_out,
+            ]
             t0 = time.time()
             rc, out, err = _run_cmd(cmd, REPO_ROOT)
             elapsed = time.time() - t0
@@ -317,38 +339,37 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             logger.set_results({"error": "Model ID is required (empty input)", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
             return
         logger.log(f"Using model_id: {model_id}")
-        # User-provided ID must exist in our dataset; otherwise fail before any downstream
-        check_cmd = [sys.executable, os.path.join(REPO_ROOT, "scripts", "check_model_in_index.py"), "--model_id", model_id, "--emb_npz", EMB_NPZ]
-        t0 = time.time()
-        rc, out, err = _run_cmd(check_cmd, REPO_ROOT, timeout=60)
-        elapsed = time.time() - t0
-        logger.log_cmd("check_model_in_index", check_cmd, None, elapsed, rc)
-        if rc != 0:
-            msg = (err or out or "Model ID not in dataset").strip()
-            if "not in dataset" not in msg and "not in " not in msg:
-                msg = f"Model ID '{model_id}' not found in dataset (not in card2card index). Cannot run downstream."
-            logger.log(msg)
-            logger.set_status("error")
-            logger.set_results({"error": msg, "model_id": model_id, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
-            return
-        logger.log("Model ID found in dataset, proceeding.")
+        # NOTE: This repo snapshot may not include legacy `scripts/check_model_in_index.py`.
+        # We let downstream scripts produce empty results if the model id is missing.
 
     k_table = table_search_k if table_search_k is not None else 1  # Per-table k: how many each table searches (default 1)
     # Card2Card top_k: use high default (100) so we have enough; will truncate to right's max for alignment
     card2card_top_k = 100
+
+    # card2card (src/search/card2card.py) expects `--model_ids_file` + `--output_json`.
+    card2card_model_ids_file = os.path.join(job_dir, "card2card_model_ids.txt")
+    with open(card2card_model_ids_file, "w", encoding="utf-8") as f:
+        f.write(str(model_id).strip() + "\n")
 
     # Step 2: Run Card2Card (dense, sparse, hybrid) and Card2Tab2Card in parallel via CLI
     logger.log("Step 2: Running Card2Card + Card2Tab2Card (parallel CLI)...")
 
     def run_card2card(mode: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2card_{mode}.json")
-        cmd = [sys.executable, "-m", "src.search.card2card", "search", "--model_id", model_id, "--retrieval_mode", mode, "--top_k", str(card2card_top_k), "--output_json", out_path]
-        if mode == "dense":
-            cmd.extend(["--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX])
-        elif mode == "sparse":
-            cmd.extend(["--sparse_index_path", SPARSE_INDEX])
-        else:
-            cmd.extend(["--emb_npz", EMB_NPZ, "--faiss_index", FAISS_INDEX, "--sparse_index_path", SPARSE_INDEX, "--hybrid_method", "rrf"])
+        cmd = [
+            sys.executable,
+            "-m",
+            "src.search.card2card",
+            "search",
+            "--model_ids_file",
+            card2card_model_ids_file,
+            "--top_k",
+            str(card2card_top_k),
+            "--retrieval_mode",
+            mode,
+            "--output_json",
+            out_path,
+        ]
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT)
         elapsed = time.time() - t0
@@ -369,22 +390,32 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         return (st, rc, out_path, out, err, elapsed)
 
     def run_card2tab2card_by_type() -> tuple:
-        """Run card2tab2card with --mode by_type (table type classification). Paths from src.config."""
+        """Run card2tab2card by_type request.
+
+        Note: simplified `src/search/card2tab2card.py` does not support `--mode by_type`.
+        So we run the simplified pipeline and store results into the per-job output JSON.
+        """
         st = "by_type"
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
-        # card2tab2card.py (simplified) does not support --mode=by_type; use the legacy implementation.
-        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card_depre.py")
+        # Use simplified card2tab2card (no legacy depre).
+        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        # NOTE: card2tab2card_depre.py does not expose --output_json; it writes to CARD2TAB2CARD_OUTPUT_JSON.
-        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--mode", "by_type", "--search_type", "keyword", "--k", str(k_table), "--modelcard_k", "0"]
+        cmd = [
+            sys.executable,
+            c2t2c_script,
+            "--model_id",
+            model_id,
+            "--search_type",
+            "keyword",
+            "--k",
+            str(k_table),
+            "--output_json",
+            out_path,
+        ]
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
-        # Copy global output to job_dir so downstream uses a stable per-job path.
-        if os.path.exists(CARD2TAB2CARD_OUTPUT_JSON):
-            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-            shutil.copyfile(CARD2TAB2CARD_OUTPUT_JSON, out_path)
         logger.log_cmd("Card2Tab2Card-by_type", cmd, out_path, elapsed, rc)
         return (st, rc, out_path, out, err, elapsed)
 
@@ -421,8 +452,19 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             else:
                 data = _read_json(out_path)
                 if data is not None:
-                    # CLI writes "neighbors" (list of model_id); legacy used "results"
-                    card2card_all[mode] = data.get("neighbors", data.get("results", []))
+                    # `src/search/card2card.py` CLI saves a dict like:
+                    #   { "<seed_model_id>": ["neighbor1", "neighbor2", ...] }
+                    # When we pass a file with a single model_id, we return that one neighbor list.
+                    if isinstance(data, dict):
+                        if "neighbors" in data:
+                            card2card_all[mode] = data.get("neighbors", [])
+                        elif "results" in data:
+                            card2card_all[mode] = data.get("results", [])
+                        else:
+                            vals = list(data.values())
+                            card2card_all[mode] = vals[0] if vals and isinstance(vals[0], list) else []
+                    else:
+                        card2card_all[mode] = []
                 else:
                     card2card_all[mode] = []
         else:

@@ -385,9 +385,9 @@ RAW_HTML_TEMPLATE = """
                         <span style="font-size: 16px;">ⓘ</span> Run options &amp; what gets logged
                     </summary>
                     <div style="padding: 10px 12px; font-size: 12px; color: #555; border-top: 1px solid #b8d4e8;">
-                        <p style="margin: 0 0 6px 0;"><strong>One-click:</strong> Card2Card (Dense/Sparse/Hybrid), Card2Tab2Card (single_column, keyword, unionable, …). If “Use table type classification” is checked, by_type run is added and logged.</p>
-                        <p style="margin: 0 0 6px 0;"><strong>Log:</strong> Run settings (top_k, per_table_search_k, card2card mode, <strong>table type classification on/off</strong>, require_seed_has_tables) appear at start. Time ⏱️ per step.</p>
-                        <p style="margin: 0;">When loading saved results, the folder list shows <strong>by_type ✓/✗</strong> and K so you can compare same query with different settings.</p>
+                        <p style="margin: 0 0 6px 0;"><strong>One-click:</strong> Card2Card (Dense/Sparse/Hybrid), Card2Tab2Card (single_column, keyword, unionable).</p>
+                        <p style="margin: 0 0 6px 0;"><strong>Log:</strong> Run settings (top_k, per_table_search_k, card2card mode, require_seed_has_tables) appear at start. Time ⏱️ per step.</p>
+                        <p style="margin: 0;">When loading saved results, compare runs by their settings (e.g. K and retrieval mode).</p>
                     </div>
                 </details>
             </div>
@@ -412,13 +412,6 @@ RAW_HTML_TEMPLATE = """
                 <div>
                     <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>
                 </div>
-            </div>
-            <div style="margin-top: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: flex; align-items: center; cursor: pointer; gap: 6px; font-size: 13px;">
-                    <input type="checkbox" id="use_by_type" style="width: 16px; height: 16px;">
-                    <span style="font-weight: 500;">Use table type classification (by_type) for Card2Tab2Card</span>
-                </label>
-                <span style="font-size: 11px; color: #666; display: block; margin-top: 2px; margin-left: 22px;">Filter Card2Tab2Card results by table type. Requires table_classifications.json (see docs/build_index.md section 1.4).</span>
             </div>
             </div>
         </div>

@@ -141,7 +141,7 @@
                         searches.forEach(search => {
                             const opt = document.createElement('option');
                             opt.value = search.folder_name || search.id || '';
-                            const settingsPart = [search.use_by_type ? 'by_type✓' : 'by_type✗', 'K=' + (search.top_k || '-'), search.card2card_retrieval_mode || ''].filter(Boolean).join(' ');
+                            const settingsPart = ['K=' + (search.top_k || '-'), search.card2card_retrieval_mode || ''].filter(Boolean).join(' ');
                             const label = (search.timestamp_str || '') + ' ' + (search.query ? search.query.substring(0, 40) + (search.query.length > 40 ? '...' : '') : search.model_id || search.folder_name || opt.value) + (settingsPart ? ' | ' + settingsPart : '');
                             opt.textContent = label;
                             selectEl.appendChild(opt);
@@ -152,14 +152,13 @@
                     } else {
                         const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                         searches.forEach(search => {
-                            const byTypeLabel = search.use_by_type ? 'by_type ✓' : 'by_type ✗';
-                            const settingsLabel = [byTypeLabel, 'K=' + (search.top_k || '-'), (search.card2card_retrieval_mode || '')].filter(Boolean).join(', ');
+                            const settingsLabel = ['K=' + (search.top_k || '-'), (search.card2card_retrieval_mode || '')].filter(Boolean).join(', ');
                             const qShort = search.query ? (search.query.length > 45 ? search.query.substring(0, 45) + '...' : search.query) : '';
                             const oneLine = search.query
                                 ? `${search.timestamp_str || ''} - ${qShort} | K: ${search.top_k || '-'} | ${settingsLabel}`
                                 : `${search.timestamp_str || ''} - ${search.model_id || ''} | K: ${search.top_k || '-'} | ${settingsLabel}`;
                             const folder = (search.folder_name || search.id || '').replace(/'/g, "\\'").replace(/\\/g, '\\\\');
-                            const titleText = [search.query || search.model_id || '', 'by_type: ' + (search.use_by_type ? 'ON' : 'OFF'), 'top_k: ' + (search.top_k || '-'), 'card2card: ' + (search.card2card_retrieval_mode || '-')].join(' | ');
+                            const titleText = [search.query || search.model_id || '', 'top_k: ' + (search.top_k || '-'), 'card2card: ' + (search.card2card_retrieval_mode || '-')].join(' | ');
                             const titleSafe = escapeHtml(titleText.substring(0, 200));
                             const oneLineSafe = escapeHtml(oneLine);
                             html += `
@@ -432,7 +431,6 @@
                     tab2tab_mode: 'search',
                     table_search_k: tableSearchK,
                     card2card_retrieval_mode: card2cardRetrievalMode,
-                    use_by_type: document.getElementById('use_by_type').checked
                 };
                 
                 if (mode === 'query') {
@@ -576,7 +574,7 @@
             let queryTables = [];
             let searchedTables = [];
             const c2t2c = results.card2tab2card_results || {};
-            const searchTypeOrder = ['single_column', 'keyword', 'by_type'];
+            const searchTypeOrder = ['single_column', 'keyword'];
             for (const st of searchTypeOrder) {
                 const data = c2t2c[st];
                 if (!data) continue;
@@ -700,15 +698,14 @@
                     <div class="result-card" style="min-width: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
                         <h3 style="margin-top: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #343a40;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
                         ${(() => {
-                            // Filter: show keyword, unionable, joinable, and by_type (table type classification)
-                            const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column', 'by_type'];
+                            // Filter: show keyword, unionable, and joinable types
+                            const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
                             // Map joinable types to display names
                             const typeDisplayNames = {
                                 'single_column': 'joinable (single_column)',
                                 'multi_column': 'joinable (multi_column)',
                                 'keyword': 'keyword',
-                                'unionable': 'unionable',
-                                'by_type': 'by type (classification)'
+                                'unionable': 'unionable'
                             };
                             const entries = Object.entries(card2tab2cardResults)
                                 .filter(([type, data]) => allowedTypes.includes(type))
@@ -876,7 +873,6 @@
                                     <option value="keyword">Keyword</option>
                                     <option value="unionable">Unionable</option>
                                     <!--
-                                    <option value="by_type">By Type</option>
                                     <option value="multi_column">Multi Column</option>
                                     <option value="complex">Complex</option>
                                     <option value="correlation">Correlation</option>
@@ -1476,7 +1472,7 @@
             if (!btn) return;
             const integrationTypes = ['union', 'intersection', 'alite', 'outer_join'];
             const modelModes = ['dense', 'sparse', 'hybrid'];
-            const tableSearchTypes = ['single_column','keyword','by_type','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'];
+            const tableSearchTypes = ['single_column','keyword','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'];
             btn.disabled = true;
             const originalText = btn.textContent;
             btn.textContent = '⏳ Running all...';
