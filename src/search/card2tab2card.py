@@ -100,7 +100,7 @@ def search_card2tab2card(
         if output_json:
             os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
             with open(output_json, "w", encoding="utf-8") as f:
-                json.dump(
+                '''json.dump(
                     {
                         "query_model": model_id,
                         "query_tables": query_tables,
@@ -116,7 +116,8 @@ def search_card2tab2card(
                     f,
                     ensure_ascii=False,
                     indent=2,
-                )
+                )'''
+                json.dump([], f, ensure_ascii=False, indent=2)
             print(f"✅ Results saved to {output_json} (empty)")
         return []
 
@@ -150,7 +151,11 @@ def search_card2tab2card(
             if mid not in seen_mid:
                 seen_mid.add(mid)
                 similar_models.append(mid)
-    final_results = similar_models[:k] if k > 0 else similar_models
+    # `k` in this pipeline is controlled by the frontend's per-table top-k.
+    # Many different model_ids can be related to a single retrieved table,
+    # so we should not cap the number of returned model_ids to `k`.
+    # Keep UI-consistent cap: models capped at 50.
+    final_results = similar_models[:50] if k > 0 else similar_models
 
     print(f"✅ query_tables={len(query_tables)} retrieved_tables={len(retrieved_filenames)} model_ids={len(final_results)}")
     if output_json:
