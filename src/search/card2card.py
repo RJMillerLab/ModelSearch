@@ -25,7 +25,8 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 from src.utils import get_device
-from src.config import EMB_NPZ, SPARSE_INDEX, CARD2CARD_NEIGHBORS_JSON, ENCODE_MODEL, MODELCARD_STEP1_PARQUET, CARD2CARD_SPARSE_CORPUS, CARD2CARD_CORPUS_JSONL
+#from src.config import EMB_NPZ, SPARSE_INDEX, CARD2CARD_NEIGHBORS_JSON, ENCODE_MODEL, MODELCARD_STEP1_PARQUET, CARD2CARD_SPARSE_CORPUS, CARD2CARD_CORPUS_JSONL
+from src.config import *
 
 _SQL_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -149,6 +150,7 @@ def search_dense_neighbors_queries(
     *,
     query_model_ids: List[str],
     top_k: int = 20,
+    embeddings_npz_path: str = EMB_NPZ,
 ) -> Dict[str, List[str]]:
     """
     Dense query batch: build FAISS in-memory once, then search only provided query ids.
@@ -157,7 +159,7 @@ def search_dense_neighbors_queries(
         return {}
 
     # Backward compatible: older EMB_NPZ may have stored `ids` as dtype=object.
-    data = np.load(EMB_NPZ, allow_pickle=True)
+    data = np.load(embeddings_npz_path, allow_pickle=True)
     embs = np.asarray(data["embeddings"], dtype=np.float32)
     ids = data["ids"].tolist()
     id_to_idx = {mid: i for i, mid in enumerate(ids)}
@@ -187,17 +189,18 @@ def search_sparse_neighbors_queries(
     *,
     query_model_ids: List[str],
     top_k: int = 20,
+    sparse_index_path: str = SPARSE_INDEX,
 ) -> Dict[str, List[str]]:
     """
     Sparse query batch: load Lucene index once, then search only provided query ids.
     """
     if not query_model_ids:
         return {}
-    if not os.path.isdir(SPARSE_INDEX):
+    if not os.path.isdir(sparse_index_path):
         raise ValueError(
             f"Sparse mode requires --sparse_index_path to a Pyserini Lucene index directory. "
-            f"Got: {SPARSE_INDEX!r}")
-    searcher, index_reader = _get_pyserini_searcher_and_reader(SPARSE_INDEX)
+            f"Got: {sparse_index_path!r}")
+    searcher, index_reader = _get_pyserini_searcher_and_reader(sparse_index_path)
     neighbors: Dict[str, List[str]] = {}
     for mid in tqdm(query_model_ids, desc="Sparse searching", unit="model"):
         sparse_results = _sparse_search_pyserini(mid, searcher, index_reader, top_k)
@@ -209,6 +212,8 @@ def search_hybrid_neighbors_queries(
     query_model_ids: List[str],
     top_k: int = 20,
     candidate_factor: int = 10,
+    embeddings_npz_path: str = EMB_NPZ,
+    sparse_index_path: str = SPARSE_INDEX,
 ) -> Dict[str, List[str]]:
     """
     Hybrid batch search (candidate re-ranking, no RRF):
@@ -219,11 +224,11 @@ def search_hybrid_neighbors_queries(
     """
     if not query_model_ids:
         return {}
-    if not os.path.isdir(SPARSE_INDEX):
-        raise ValueError(f"Hybrid mode requires --sparse_index_path to a Pyserini Lucene index directory. Got: {SPARSE_INDEX!r}")
+    if not os.path.isdir(sparse_index_path):
+        raise ValueError(f"Hybrid mode requires --sparse_index_path to a Pyserini Lucene index directory. Got: {sparse_index_path!r}")
 
     # Backward compatible: older EMB_NPZ may have stored `ids` as dtype=object.
-    data = np.load(EMB_NPZ, allow_pickle=True)
+    data = np.load(embeddings_npz_path, allow_pickle=True)
     embs = np.asarray(data["embeddings"], dtype=np.float32)
     ids = data["ids"].tolist()
     id_to_idx = {mid: i for i, mid in enumerate(ids)}
@@ -232,7 +237,7 @@ def search_hybrid_neighbors_queries(
     embs_norm = np.array(embs, copy=True, dtype=np.float32)
     faiss.normalize_L2(embs_norm)
 
-    searcher, index_reader = _get_pyserini_searcher_and_reader(SPARSE_INDEX)
+    searcher, index_reader = _get_pyserini_searcher_and_reader(sparse_index_path)
     neighbors: Dict[str, List[str]] = {}
     sparse_k = top_k * candidate_factor
 
@@ -408,6 +413,13 @@ def main():
     
     # Search (inference)
     search_parser = subparsers.add_parser('search', help='Search for similar model cards')
+    search_parser.add_argument(
+        '--resources',
+        nargs='+',
+        default=['hugging', 'github', 'arxiv'],
+        choices=['hugging', 'huggingface', 'hf', 'github', 'arxiv', 'html', 'llm'],
+        help='Resource labels. If and only if hugging/hf is selected alone, use hugging subset indexes.',
+    )
     search_parser.add_argument('--model_ids_file', required=True, help='File with one model_id per line (one line also works).')
     search_parser.add_argument('--top_k', type=int, default=20)
     search_parser.add_argument('--retrieval_mode', choices=['sparse', 'dense', 'hybrid'], default='dense', help='Retrieval mode.')
@@ -428,13 +440,32 @@ def main():
             model_ids_list = [line.strip() for line in f if line.strip()]
         if not model_ids_list:
             raise RuntimeError(f"No model_ids found in file: {args.model_ids_file}")
+        
+        resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
+        normalized = []
+        for r in resources:
+            if r in {'huggingface', 'hf'}:
+                normalized.append('hugging')
+            elif r == 'html':
+                normalized.append('arxiv')
+            else:
+                normalized.append(r)
+
+        if set(normalized) == {'hugging'}:
+            emb_npz = EMB_NPZ_HUGGING
+            sparse_idx = SPARSE_INDEX_HUGGING
+        elif set(normalized) == {'hugging', 'github', 'arxiv'}:
+            emb_npz = EMB_NPZ
+            sparse_idx = SPARSE_INDEX
+        else:
+            raise NotImplementedError(f"Unsupported resource combination: {set(normalized)}")
 
         if args.retrieval_mode == 'dense':
-            results = search_dense_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k)
+            results = search_dense_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k, embeddings_npz_path=emb_npz)
         elif args.retrieval_mode == 'sparse':
-            results = search_sparse_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k)
+            results = search_sparse_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k, sparse_index_path=sparse_idx)
         else:
-            results = search_hybrid_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k)
+            results = search_hybrid_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k, embeddings_npz_path=emb_npz, sparse_index_path=sparse_idx)
         # save results to json
         with open(args.output_json, 'w', encoding='utf-8') as f:
             json.dump(results, f, ensure_ascii=False, indent=2)

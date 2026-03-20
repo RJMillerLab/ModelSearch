@@ -26,6 +26,14 @@ git clone git@github.com:RJMillerLab/ModelTables.git
 # build index for dense retrieval (FAISS) and sparse retrieval (Pyserini Lucene) from modelcard_step1.parquet
 python -m src.search.card2card build-dense-index
 python -m src.search.card2card build-sparse-index
+# (Optional) Build dense + sparse subset for "hugging" (dense npz + sparse lucene index)
+python -m src.utils.build_card2card_subset_from_embeddings_and_ids \
+  --model_ids_txt data_251117/valid_model_ids_with_tables_hugging.txt \
+  --threads 4
+
+# (Optional) Example: dense/sparse search on the subset artifacts
+# python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode dense --embeddings_npz_path data_251117/card2card_embeddings_hugging.npz --output_json data_251117/card2card_dense_hugging.json
+# python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse --sparse_index_path data_251117/card2card_sparse_index_hugging --output_json data_251117/card2card_sparse_hugging.json
 ```
 
 ## 1.2 Blend + data
