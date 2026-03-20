@@ -153,7 +153,7 @@ def search_table2table(
         else:
             raise ValueError(f"Unknown search_type: {search_type}")
 
-        cmd = ["python", "-m", _blend_module(), "--db_path", db_path_use, "--output_json", out_path, "--search_type", search_type, "--query", str(query_arg), "--k", str(k)]
+        cmd = ["python", "-m", _blend_module(), "--db_path", db_path, "--output_json", out_path, "--search_type", search_type, "--query", str(query_arg), "--k", str(k)]
 
         # Serialize to avoid concurrent writes to Blend_internal config.ini.
         # This must be a cross-process lock, not only a thread lock.
@@ -206,7 +206,7 @@ def search_table2table(
 
             import duckdb
 
-            conn = duckdb.connect(db_path_use, read_only=True)
+            conn = duckdb.connect(db_path, read_only=True)
             try:
                 placeholders = ",".join(["?"] * len(filenames))
                 query_sql = f"""
@@ -260,14 +260,14 @@ def main() -> None:
     resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
     resource_set = set(resources)
     if resource_set == {'hugging'}:
-        db_path_use = MODELLAKE_DB_HUGGING
+        db_path = MODELLAKE_DB_HUGGING
     elif resource_set == {'hugging', 'github', 'arxiv'}:
-        db_path_use = MODELLAKE_DB
+        db_path = MODELLAKE_DB
     else:
         raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
     start = time.time()
-    results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, db_path=db_path_use, output_json=args.output_json)
+    results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, db_path=db_path, output_json=args.output_json)
     if args.output_json:
         print(f"Saved json: {args.output_json}")
     else:

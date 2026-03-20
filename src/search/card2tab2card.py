@@ -22,7 +22,7 @@ from src.search.tab2tab import search_table2table
 from src.utils import load_modelid_to_csvlist, load_csvs_to_modelids, resolve_table_path
 
 
-def _table_ids_to_filenames(table_ids: List[int], db_path_use: str) -> Dict[int, str]:
+def _table_ids_to_filenames(table_ids: List[int], db_path: str) -> Dict[int, str]:
     if not table_ids:
         return {}
     sql = f"""
@@ -30,7 +30,7 @@ def _table_ids_to_filenames(table_ids: List[int], db_path_use: str) -> Dict[int,
         FROM modellake_index
         WHERE rowid = -1 AND tableid IN ({",".join(["?"] * len(table_ids))})
     """
-    with duckdb.connect(db_path_use, read_only=True) as con:
+    with duckdb.connect(db_path, read_only=True) as con:
         rows = con.execute(sql, table_ids).fetchall()
     return {int(tid): str(fname) for tid, fname in rows}
 
@@ -39,7 +39,7 @@ def search_card2tab2card(
     model_id: str,
     search_type: str = "keyword",
     output_json: str = "",
-    db_path_use: str = MODELLAKE_DB,
+    db_path: str = MODELLAKE_DB,
     table_top_k: int = 10,
     model_top_k: int = 20,
 ) -> List[str]:
@@ -69,7 +69,7 @@ def search_card2tab2card(
     for csv_path in query_tables:
         if not os.path.exists(csv_path):
             continue
-        ids = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path_use)
+        ids = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path)
         if ids:
             similar_table_ids.extend(ids)
 
@@ -103,7 +103,7 @@ def search_card2tab2card(
     # map table ids to tables name (dedupe while preserving order)
     unique_tids = list(dict.fromkeys(int(tid) for tid in similar_table_ids))
     unique_tids = unique_tids[: max(table_top_k, 1) * max(len(query_tables), 1)]
-    table_id_to_filename = _table_ids_to_filenames(unique_tids, db_path_use)
+    table_id_to_filename = _table_ids_to_filenames(unique_tids, db_path)
     retrieved_tables = list(dict.fromkeys(table_id_to_filename.get(tid) for tid in unique_tids if table_id_to_filename.get(tid)))
 
     reverse = load_csvs_to_modelids([os.path.basename(fname) for fname in retrieved_tables])
@@ -152,9 +152,9 @@ def main() -> None:
     resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
     resource_set = set(resources)
     if resource_set == {'hugging'}:
-        db_path_use = MODELLAKE_DB_HUGGING
+        db_path = MODELLAKE_DB_HUGGING
     elif resource_set == {'hugging', 'github', 'arxiv'}:
-        db_path_use = MODELLAKE_DB
+        db_path = MODELLAKE_DB
     else:
         raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
@@ -165,7 +165,7 @@ def main() -> None:
         search_type=args.search_type,
         table_top_k=args.table_top_k,
         output_json=args.output_json,
-        db_path_use=db_path_use,
+        db_path=db_path,
         model_top_k=args.model_top_k,
     )
     print(f"Found {len(results)} model ids for {args.model_id}")
