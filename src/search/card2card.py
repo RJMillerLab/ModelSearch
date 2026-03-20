@@ -408,6 +408,7 @@ def main():
     search_parser.add_argument('--model_ids_file', required=True, help='File with one model_id per line (one line also works).')
     search_parser.add_argument('--top_k', type=int, default=20)
     search_parser.add_argument('--retrieval_mode', choices=['sparse', 'dense', 'hybrid'], default='dense', help='Retrieval mode.')
+    search_parser.add_argument('--output_json', default=None, help='Optional path to save results as JSON.')
     
     args = parser.parse_args()
     start_time = time.time()
@@ -432,7 +433,7 @@ def main():
         else:
             results = search_hybrid_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k)
         # save results to json
-        with open(CARD2CARD_NEIGHBORS_JSON, 'w', encoding='utf-8') as f:
+        with open(args.output_json, 'w', encoding='utf-8') as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
         print(f"\nTotal time: {time.time() - start_time:.2f}s (device: {get_device()})")
     else:
