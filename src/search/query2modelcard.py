@@ -14,12 +14,15 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
+# Ensure repo root is on sys.path for `from src...` imports even when
+# this module is launched from a different working directory.
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 from src.utils import get_device
 from src.config import EMB_NPZ, ENCODE_MODEL, SPARSE_INDEX
 from src.search.card2card import _build_faiss_index_in_memory, _get_pyserini_searcher_and_reader
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 def _search_sparse_query(
     query_text: str,

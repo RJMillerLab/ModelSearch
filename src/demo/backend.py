@@ -352,6 +352,34 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     with open(card2card_model_ids_file, "w", encoding="utf-8") as f:
         f.write(str(model_id).strip() + "\n")
 
+    def _normalize_card2tab2card_payload(payload: Any) -> Dict[str, Any]:
+        """
+        Normalize historical/variant card2tab2card output formats into:
+          { "model_ids": [...], "intermediate": {...}, "query_tables": [...]? }
+        The frontend/integration expects at least `model_ids` + `intermediate`.
+        """
+        if payload is None:
+            return {"model_ids": [], "intermediate": {}}
+        # Current schema: dict with model_ids + intermediate
+        if isinstance(payload, dict) and "model_ids" in payload:
+            if "intermediate" not in payload or not isinstance(payload.get("intermediate"), dict):
+                payload["intermediate"] = payload.get("intermediate") or {}
+            return payload
+        # Variant: just a list of model_ids
+        if isinstance(payload, list):
+            return {"model_ids": payload, "intermediate": {}}
+        # Historical batch schema: { queryKey: [...]} or { queryKey: {...} }
+        if isinstance(payload, dict):
+            for v in payload.values():
+                if isinstance(v, dict) and "model_ids" in v:
+                    if "intermediate" not in v or not isinstance(v.get("intermediate"), dict):
+                        v["intermediate"] = v.get("intermediate") or {}
+                    return v
+                if isinstance(v, list):
+                    return {"model_ids": v, "intermediate": {}}
+        # Fallback
+        return {"model_ids": [], "intermediate": {}}
+
     # Step 2: Run Card2Card (dense, sparse, hybrid) and Card2Tab2Card in parallel via CLI
     logger.log("Step 2: Running Card2Card + Card2Tab2Card (parallel CLI)...")
 
@@ -491,12 +519,13 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                         logger.log(f"  | {line.strip()}")
             # Always try to read JSON from disk: CLI may write results then exit(1) e.g. due to get_device() in another process env
             data = _read_json(out_path)
-            if data is not None and isinstance(data, dict):
-                # CLI writes {"model_ids": [...], "query_tables": [...], "intermediate": {...}}
-                card2tab2card_all[st] = data
-                mid = data.get("model_ids", [])
+            if data is not None:
+                # CLI should write card2tab2card payload; normalize historical variants.
+                payload = _normalize_card2tab2card_payload(data)
+                card2tab2card_all[st] = payload
+                mid = payload.get("model_ids", [])
                 lst = list(mid) if isinstance(mid, (list, np.ndarray)) else []
-                qty = len(data.get("query_tables", []))
+                qty = len(payload.get("query_tables", []))
                 logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
                 if rc != 0:
                     logger.log(f"[Card2Tab2Card-{st}] Used on-disk JSON despite exit code {rc} (CLI may have failed after writing)")

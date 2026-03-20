@@ -95,6 +95,29 @@ def search_card2tab2card(
 
     if not similar_table_ids:
         print("⚠️ No similar tables returned by tab2tab.")
+        # Downstream expects `--output_json` to always be written so that
+        # backend/frontend don't fail with "No JSON at ...".
+        if output_json:
+            os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
+            with open(output_json, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "query_model": model_id,
+                        "query_tables": query_tables,
+                        "searched_tables": [],
+                        "model_ids": [],
+                        "intermediate": {
+                            "retrieved_table_ids": [],
+                            "retrieved_table_filenames": [],
+                            "table_id_to_filename": {},
+                            "table_to_models": {},
+                        },
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            print(f"✅ Results saved to {output_json} (empty)")
         return []
 
     seen_tid = set()
