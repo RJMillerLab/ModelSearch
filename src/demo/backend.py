@@ -15,6 +15,7 @@ from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
+from src.utils import model_id_has_resolvable_local_tables
 #from src.utils import filter_results_by_classify_results
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -263,8 +264,12 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     # Normalize resource selection once and reuse in all subprocess commands.
     raw_resources = list(table_resource_allowlist or TABLE_RESOURCE_ALLOWLIST)
-    model_resources = list(TABLE_RESOURCE_ALLOWLIST)
-    table_resources = list(TABLE_RESOURCE_ALLOWLIST)
+    model_resources = [r for r in raw_resources if r in ("hugging", "github", "arxiv")]
+    table_resources = [r for r in raw_resources if r in ("hugging", "github", "arxiv")]
+    if not model_resources:
+        model_resources = list(TABLE_RESOURCE_ALLOWLIST)
+    if not table_resources:
+        table_resources = list(TABLE_RESOURCE_ALLOWLIST)
     logger.log(f"Resources: model={model_resources}, table={table_resources}")
 
     def _with_resources(cmd: List[str], resources: List[str]) -> List[str]:
@@ -307,7 +312,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     if require_seed_has_tables:
         valid_model_ids = _valid_model_ids_for_table_resources(table_resources)
         logger.log(
-            f"Valid model IDs (relationship parquet, table_resources={table_resources}) = {len(valid_model_ids)}"
+            f"Valid model IDs (parquet lists ≥1 path for table_resources={table_resources}) = {len(valid_model_ids)} "
+            "(seed picker also requires local CSV under TABLE_BASE_DIRS)"
         )
     if query:
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
@@ -317,8 +323,10 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         if require_seed_has_tables:
             assert valid_model_ids is not None
             logger.log(
-                f"Narrow down: valid model IDs (same sources as Card2Tab2Card) = {len(valid_model_ids)}"
+                f"Narrow down: parquet allowlist size = {len(valid_model_ids)}; "
+                "picking first hit that also has resolvable local table files"
             )
+            _res_key = tuple(sorted(table_resources))
             # Two-phase: try 2× top_k first; if no valid model, run again with 5× (cap 200)
             phase1_k = min(100, 2 * top_k)
             phase2_k = min(200, 5 * top_k)
@@ -348,10 +356,19 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                     mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
                     if not mid:
                         continue
-                    if str(mid).strip() in valid_model_ids:
-                        chosen = str(mid).strip()
-                        logger.log(f"Narrow down: first result in valid set is #{i+1}: {chosen} (phase {phase})")
-                        break
+                    mid_s = str(mid).strip()
+                    if mid_s not in valid_model_ids:
+                        continue
+                    if not model_id_has_resolvable_local_tables(mid_s, _res_key):
+                        logger.log(
+                            f"Narrow down: skip #{i+1} {mid_s!r} (in parquet allowlist but no local CSV under TABLE_BASE_DIRS)"
+                        )
+                        continue
+                    chosen = mid_s
+                    logger.log(
+                        f"Narrow down: first result with local tables is #{i+1}: {chosen} (phase {phase})"
+                    )
+                    break
                 if chosen is not None:
                     model_id = chosen
                     stored_query = data.get("query", "")
@@ -361,7 +378,10 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 first = data["results"][0]
                 model_id = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
                 seed_no_tables_skip_table_search = True
-                logger.log(f"Table Search Seed Model: none of top-{len(results_list)} in valid set. Using top-1 for Card2Card only; Table Search skipped.")
+                logger.log(
+                    f"Table Search Seed Model: none of top-{len(results_list)} have both parquet paths and local CSV files. "
+                    "Using top-1 for Card2Card only; Table Search skipped."
+                )
                 logger.log(f"Extracted model (no tables): {model_id} (from query2modelcard JSON)")
         else:
             cmd = _build_q2m_cmd(q=query, q_top_k=1, out_path=q2m_out)
