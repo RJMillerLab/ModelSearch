@@ -228,6 +228,10 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     # Resolve model_id (query mode: from FAISS retrieval only; no default/hardcoded id)
     seed_no_tables_skip_table_search = False  # when True: use first model for Card2Card only, skip Card2Tab2Card and set reason
+    valid_model_ids = None
+    if require_seed_has_tables:
+        valid_model_ids = _get_valid_modelids_with_tables()
+        logger.log(f"Valid model IDs (have tables) = {len(valid_model_ids)} (from {VALID_MODEL_IDS_TXT})")
     if query:
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
         logger.log(f"query2modelcard input query: {query!r}")
@@ -235,7 +239,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         q2m_module = "src.search.query2modelcard"
 
         if require_seed_has_tables:
-            valid_model_ids = _get_valid_modelids_with_tables()
+            assert valid_model_ids is not None
             logger.log(f"Narrow down: valid model IDs (have tables) = {len(valid_model_ids)} (from {VALID_MODEL_IDS_TXT})")
             # Two-phase: try 2× top_k first; if no valid model, run again with 5× (cap 200)
             phase1_k = min(100, 2 * top_k)
@@ -556,6 +560,167 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             "None of the top-20 models from the query have tables in the dataset. "
             "Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
         )
+
+    # --- Enforce valid_model_ids for left/right model lists (top-5 stability) ---
+    # If we filtered seed correctly, but downstream Card2Card / Card2Tab2Card returns non-valid models,
+    # the UI/table integration can look inconsistent or fail to load the intended tables.
+    if require_seed_has_tables and valid_model_ids:
+        # 1) Filter Card2Card model lists
+        for mode in card2card_modes:
+            val = card2card_all.get(mode)
+            if isinstance(val, list):
+                before = len(val)
+                card2card_all[mode] = [mid for mid in val if mid in valid_model_ids]
+                logger.log(f"[Card2Card-{mode.upper()}] Filtered valid models: {before} -> {len(card2card_all[mode])}")
+
+        # 2) Filter Card2Tab2Card payloads + keep only tables that map to valid models
+        #    If after filtering a payload has < model_top_k models, we re-run tab search with k=100
+        #    to pull more candidate tables (so after mapping we can still get top-5 valid models).
+        rerun_table_k = 100
+        did_rerun_table_k = False
+
+        def _filter_card2tab2card_payload(st: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(payload, dict):
+                return payload
+            mids = payload.get("model_ids", [])
+            if not isinstance(mids, list):
+                mids = []
+            mids = [mid for mid in mids if mid in valid_model_ids]
+            payload["model_ids"] = mids
+
+            intermediate = payload.get("intermediate", {})
+            if isinstance(intermediate, dict):
+                table_to_models = intermediate.get("table_to_models", {})
+                if isinstance(table_to_models, dict):
+                    new_table_to_models: Dict[str, List[str]] = {}
+                    for tname, model_list in table_to_models.items():
+                        if not isinstance(model_list, list):
+                            continue
+                        kept = [m for m in model_list if m in valid_model_ids]
+                        if kept:
+                            new_table_to_models[tname] = kept
+                    intermediate["table_to_models"] = new_table_to_models
+
+                    # Update retrieved filenames/ids/table mapping to match surviving tables
+                    kept_tables = set(new_table_to_models.keys())
+                    for key in ("retrieved_table_filenames", "searched_tables"):
+                        if key == "searched_tables":
+                            if "searched_tables" in payload and isinstance(payload["searched_tables"], list):
+                                payload["searched_tables"] = [x for x in payload["searched_tables"] if x in kept_tables]
+                        else:
+                            if key in intermediate and isinstance(intermediate[key], list):
+                                intermediate[key] = [x for x in intermediate[key] if x in kept_tables]
+
+                    if "table_id_to_filename" in intermediate and isinstance(intermediate["table_id_to_filename"], dict):
+                        tid_map = intermediate["table_id_to_filename"]
+                        intermediate["table_id_to_filename"] = {
+                            str(tid): fname
+                            for tid, fname in tid_map.items()
+                            if fname in kept_tables
+                        }
+
+                    if "retrieved_table_ids" in intermediate and isinstance(intermediate["retrieved_table_ids"], list):
+                        # Rebuild by filenames we kept; preserve ordering from original retrieved_table_ids.
+                        fname_map = intermediate.get("table_id_to_filename", {})
+                        intermediate["retrieved_table_ids"] = [
+                            tid for tid in intermediate["retrieved_table_ids"]
+                            if str(tid) in fname_map
+                        ]
+            payload["intermediate"] = intermediate
+            return payload
+
+        for st, payload in list(card2tab2card_all.items()):
+            if not isinstance(payload, dict):
+                continue
+            card2tab2card_all[st] = _filter_card2tab2card_payload(st, payload)
+
+        def _rerun_card2tab2card(st: str, k_override: int) -> Dict[str, Any]:
+            out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            cmd = [
+                sys.executable,
+                "-m",
+                "src.search.card2tab2card",
+                "--model_id",
+                model_id,
+                "--search_type",
+                st,
+                "--k",
+                str(k_override),
+                "--output_json",
+                out_path,
+            ]
+            t0 = time.time()
+            rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
+            elapsed = time.time() - t0
+            logger.log_cmd(f"Card2Tab2Card-{st}-rerun_k", cmd, out_path, elapsed, rc)
+
+            data = _read_json(out_path)
+            if data is None:
+                logger.log(f"[Card2Tab2Card-{st}-rerun_k] No JSON at {out_path}; returning empty payload")
+                return {"model_ids": [], "intermediate": {}}
+            payload = _normalize_card2tab2card_payload(data)
+            payload = _filter_card2tab2card_payload(st, payload)
+            return payload
+
+        # Re-run tab search only for the short payloads.
+        short_sts: List[str] = []
+        for st, payload in card2tab2card_all.items():
+            if isinstance(payload, dict):
+                mids = payload.get("model_ids", [])
+                if isinstance(mids, list) and len(mids) < model_top_k:
+                    short_sts.append(st)
+
+        if short_sts and k_table < rerun_table_k:
+            did_rerun_table_k = True
+            logger.log(f"Rescaling per-table k from {k_table} -> {rerun_table_k} for st(s)={short_sts} to recover top-{model_top_k} valid models")
+            k_table = rerun_table_k
+            for st in short_sts:
+                card2tab2card_all[st] = _rerun_card2tab2card(st, k_override=k_table)
+
+        if did_rerun_table_k:
+            logger.log("Card2Tab2Card rerun complete; model_ids and intermediate have been re-filtered.")
+
+        # 3) If dense list is still short after filtering, re-run Card2Card dense for more candidates.
+        #    (Card2Card already runs with top_k=100; we only expand when filtering caused shortage.)
+        dense_list = card2card_all.get("dense")
+        if isinstance(dense_list, list) and len(dense_list) < model_top_k and card2card_top_k < 500:
+            rerun_top_k = 500
+            logger.log(f"Card2Card dense filtered too short ({len(dense_list)}<{model_top_k}); re-running Card2Card dense with top_k={rerun_top_k}")
+            out_path = os.path.join(job_dir, "card2card_dense.json")
+            cmd = [
+                sys.executable,
+                "-m",
+                "src.search.card2card",
+                "search",
+                "--model_ids_file",
+                card2card_model_ids_file,
+                "--top_k",
+                str(rerun_top_k),
+                "--retrieval_mode",
+                "dense",
+                "--output_json",
+                out_path,
+            ]
+            t0 = time.time()
+            rc, out, err = _run_cmd(cmd, REPO_ROOT, env=None, timeout=CARD2TAB2CARD_TIMEOUT)
+            elapsed = time.time() - t0
+            logger.log_cmd("Card2Card-DENSE-rerun", cmd, out_path, elapsed, rc)
+
+            data = _read_json(out_path)
+            if data is not None:
+                if isinstance(data, dict):
+                    if "neighbors" in data:
+                        card2card_all["dense"] = data.get("neighbors", [])
+                    elif "results" in data:
+                        card2card_all["dense"] = data.get("results", [])
+                    else:
+                        vals = list(data.values())
+                        card2card_all["dense"] = vals[0] if vals and isinstance(vals[0], list) else []
+                else:
+                    card2card_all["dense"] = []
+                card2card_all["dense"] = [mid for mid in card2card_all["dense"] if mid in valid_model_ids]
 
     # Adaptive model-topk:
     # - Card2Card: cap by model_top_k (left side ordering preserved)

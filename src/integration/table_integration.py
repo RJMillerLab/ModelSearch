@@ -13,6 +13,7 @@ Test: python -m tests.test_integration
 import os
 import sys
 import time
+import re
 import io
 from contextlib import redirect_stdout, redirect_stderr
 import pandas as pd
@@ -217,6 +218,11 @@ def integrate_tables(table_paths: List[str], integration_type: str = "union", k:
     
     for table_path in table_paths:
         basename = os.path.basename(table_path)
+        # Safety: only load actual table CSVs.
+        # If an upstream payload accidentally contains command/log strings, we should not treat them as CSV inputs.
+        if not re.search(r"_table_\d+\.csv$", basename, flags=re.IGNORECASE):
+            print(f"⚠️  Skipping non-table input for integration: {basename}")
+            continue
         tid = filename_to_tableid.get(basename) if filename_to_tableid else None
         resolved_table_path = resolve_table_path(table_path) or table_path
         df = load_table(table_path)
