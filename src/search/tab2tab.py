@@ -24,6 +24,43 @@ from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON, BLEND_INTERNAL_REPO, I
 _blend_subprocess_lock = threading.Lock()
 
 
+def _blend_file_lock_path() -> str:
+    """
+    Cross-process lock file path for Blend_internal config.ini mutation.
+
+    We need an inter-process lock because backend runs multiple card2tab2card
+    search types concurrently, and each one spawns its own Python subprocess
+    that calls Blend_internal (another repo) and writes shared config.ini.
+    """
+    lock_dir = os.path.join(BLEND_INTERNAL_REPO or "", "config")
+    if not lock_dir:
+        # Fall back to repo-local temp (should never happen if config is valid).
+        lock_dir = tempfile.gettempdir()
+    os.makedirs(lock_dir, exist_ok=True)
+    return os.path.join(lock_dir, ".tab2tab_filelock")
+
+
+class _BlendFileLock:
+    def __enter__(self):
+        # Only used on Unix-like platforms (macOS/Linux).
+        import fcntl
+
+        self._lock_fh = open(_blend_file_lock_path(), "w", encoding="utf-8")
+        fcntl.flock(self._lock_fh, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        import fcntl
+
+        try:
+            fcntl.flock(self._lock_fh, fcntl.LOCK_UN)
+        finally:
+            try:
+                self._lock_fh.close()
+            except Exception:
+                pass
+
+
 def _blend_module() -> str:
     """
     Module path used by build_index.md examples.
@@ -103,13 +140,15 @@ def _run_blend_tab2tab_subprocess(
         ]
 
         # Serialize to avoid concurrent writes to Blend_internal config.ini.
+        # This must be a cross-process lock, not only a thread lock.
         with _blend_subprocess_lock:
-            proc = subprocess.run(
-                cmd,
-                cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
-                capture_output=True,
-                text=True,
-            )
+            with _BlendFileLock():
+                proc = subprocess.run(
+                    cmd,
+                    cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
+                    capture_output=True,
+                    text=True,
+                )
 
         if proc.returncode != 0:
             raise RuntimeError(
