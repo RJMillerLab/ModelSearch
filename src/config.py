@@ -9,9 +9,10 @@ from pathlib import Path
 
 # Repo root (ModelSearchDemo)
 REPO_ROOT = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
 # --- Base data root (relative to repo root by default) ---
-MODELTABLES_DATA = "../ModelTables/data"
+MODELTABLES_DATA = os.path.join(ROOT_DIR, "ModelTables", "data")
 PROCESSED_DIR = os.path.join(MODELTABLES_DATA, "processed")
 RAW_DIR = os.path.join(MODELTABLES_DATA, "raw")
 ENCODE_MODEL = "all-MiniLM-L6-v2"
@@ -21,7 +22,7 @@ DATA_TAG = "_251117"
 V2_SUFFIX = "_v2"
 
 # --- modellake.db ---
-MODELLAKE_DB = os.path.join('../Blend_internal/database_251117', "modellake_v2_251117.db")
+MODELLAKE_DB = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117.db")
 INDEX_TABLE = "modellake_index"
 
 DEDUPED_HUGGING_CSVS =  os.path.join(PROCESSED_DIR, f"deduped_hugging_csvs{V2_SUFFIX}{DATA_TAG}")
@@ -40,7 +41,7 @@ RELATIONSHIP_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step3_dedup{V2_SU
 OUTPUT_DIR = str(REPO_ROOT / f"data{DATA_TAG}")
 # Repo-local outputs (e.g. card2card build-index, search results, temp artifacts)
 CLASSIFICATION_JSON                       = os.path.join(OUTPUT_DIR, "table_classifications.json")
-SCHEMA_LOG                                = os.path.join("../ModelTables", "logs", "parquet_schema.log")
+SCHEMA_LOG                                = os.path.join(ROOT_DIR, "ModelTables", "logs", "parquet_schema.log")
 CARD2TAB2CARD_OUTPUT_JSON                 = os.path.join(OUTPUT_DIR, "card2tab2card_results.json")
 TAB2TAB_OUTPUT_JSON                       = os.path.join(OUTPUT_DIR, "tab2tab_results.json")
 TAB2TAB_BY_TYPE_OUTPUT_JSON               = os.path.join(OUTPUT_DIR, "tab2tab_by_type_results.json")

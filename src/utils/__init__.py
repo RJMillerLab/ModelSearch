@@ -286,16 +286,9 @@ def resolve_table_path(csv_path: str) -> Optional[str]:
     """
     Resolve CSV basename to full path. Used by integration when only filename is known."""
     base = os.path.basename(csv_path)
-    # TABLE_BASE_DIRS in src.config are repo-relative paths; resolve them
-    # against REPO_ROOT so this helper works regardless of current working dir.
-    from src.config import REPO_ROOT
-
     dirs = TABLE_BASE_DIRS
     for base_dir in dirs:
-        if isinstance(base_dir, str) and os.path.isabs(base_dir):
-            p = os.path.join(base_dir, base)
-        else:
-            p = os.path.join(REPO_ROOT, base_dir, base)
+        p = os.path.join(base_dir, base)
         if os.path.exists(p):
             return os.path.abspath(p)
     # or classify the resource and get the corresponding directory
