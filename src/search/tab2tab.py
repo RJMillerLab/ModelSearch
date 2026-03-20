@@ -47,6 +47,7 @@ def _run_blend_tab2tab_subprocess(
     k: int,
     db_path: Optional[str] = None,
     output_json: Optional[str] = None,
+    parse_payload: bool = True,
 ) -> List[int]:
     """
     Run Blend_internal tab2tab script in an isolated subprocess and return [tableid, ...].
@@ -118,6 +119,10 @@ def _run_blend_tab2tab_subprocess(
                 f"stderr:\n{proc.stderr}\n"
             )
 
+        if not parse_payload:
+            # Caller only wants the json file written by Blend_internal.
+            return []
+
         with open(out_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
 
@@ -144,19 +149,17 @@ def _run_blend_tab2tab_subprocess(
             if not filenames:
                 return []
 
-            # Keep order: map filename -> tableid, then convert in the original order.
             import duckdb
 
             conn = duckdb.connect(MODELLAKE_DB, read_only=True)
             try:
-                # k is small (default 10); safe to inline.
                 placeholders = ",".join(["?"] * len(filenames))
-                query = f"""
+                query_sql = f"""
                     SELECT DISTINCT tableid, filename
                     FROM {INDEX_TABLE}
                     WHERE rowid = -1 AND filename IN ({placeholders})
                 """
-                rows = conn.execute(query, filenames).fetchall()
+                rows = conn.execute(query_sql, filenames).fetchall()
             finally:
                 conn.close()
 
@@ -283,8 +286,20 @@ def main() -> None:
         query = pd.read_csv(args.query)
 
     start = __import__("time").time()
-    results = search_table2table(query, args.search_type, args.k, output_json=args.output_json)
-    print(f"Found {len(results)} tables: {results}")
+    # If caller provides --output_json, Blend_internal will already write it.
+    # In that case we skip parsing payload to avoid extra work.
+    parse_payload = args.output_json is None
+    results = _run_blend_tab2tab_subprocess(
+        search_type=args.search_type,
+        query=query,
+        k=args.k,
+        output_json=args.output_json,
+        parse_payload=parse_payload,
+    )
+    if args.output_json:
+        print(f"Saved json: {args.output_json}")
+    else:
+        print(f"Found {len(results)} tables: {results}")
     print(f"Total time: {__import__('time').time() - start:.2f}s")
 
 
