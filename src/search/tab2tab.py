@@ -18,7 +18,7 @@ from typing import Any, Iterable, List, Optional
 
 import pandas as pd
 
-from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON, BLEND_INTERNAL_REPO
+from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON, BLEND_INTERNAL_REPO, INDEX_TABLE
 
 # Guard Blend_internal config.ini mutation (it is shared on disk).
 _blend_subprocess_lock = threading.Lock()
@@ -121,6 +121,9 @@ def _run_blend_tab2tab_subprocess(
         with open(out_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
 
+        # Blend_internal might output either:
+        # - dict: {"results": [tableid,...]} or similar
+        # - list: [tableid,...] or [filename,...]
         if isinstance(payload, dict):
             if "results" in payload and isinstance(payload["results"], list):
                 return [int(x) for x in payload["results"]]
@@ -128,6 +131,47 @@ def _run_blend_tab2tab_subprocess(
                 return [int(x) for x in payload["table_ids"]]
             if "tableid" in payload and isinstance(payload["tableid"], list):
                 return [int(x) for x in payload["tableid"]]
+
+        if isinstance(payload, list):
+            # Case A: list of ints (or int-like strings)
+            if all(isinstance(x, (int, float)) for x in payload):
+                return [int(x) for x in payload]
+            if all(isinstance(x, str) and x.strip().isdigit() for x in payload):
+                return [int(str(x).strip()) for x in payload]
+
+            # Case B: list of filenames / basenames -> map to tableid via DuckDB
+            filenames = [os.path.basename(str(x).strip()) for x in payload if str(x).strip()]
+            if not filenames:
+                return []
+
+            # Keep order: map filename -> tableid, then convert in the original order.
+            import duckdb
+
+            conn = duckdb.connect(MODELLAKE_DB, read_only=True)
+            try:
+                # k is small (default 10); safe to inline.
+                placeholders = ",".join(["?"] * len(filenames))
+                query = f"""
+                    SELECT DISTINCT tableid, filename
+                    FROM {INDEX_TABLE}
+                    WHERE rowid = -1 AND filename IN ({placeholders})
+                """
+                rows = conn.execute(query, filenames).fetchall()
+            finally:
+                conn.close()
+
+            filename_to_tid = {os.path.basename(str(fname)).strip(): int(tid) for tid, fname in rows}
+            out: List[int] = []
+            seen = set()
+            for fn in filenames:
+                tid = filename_to_tid.get(fn)
+                if tid is None:
+                    continue
+                if tid not in seen:
+                    seen.add(tid)
+                    out.append(tid)
+            return out
+
         raise ValueError(f"Unexpected Blend_internal output JSON format: {payload!r}")
     finally:
         try:
