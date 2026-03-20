@@ -8,7 +8,8 @@ Minimal imports for fast startup.
 
 import os, sys, json, random, string, threading, subprocess, time, math, re, shutil, numpy as np, pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Any
+from functools import lru_cache
+from typing import Dict, List, Optional, Any, Tuple
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
@@ -175,11 +176,30 @@ def _write_json_job(job_id: str, filename: str, data: Dict):
     with open(os.path.join(JOBS_DIR, job_id, filename), "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# Valid model IDs (have tables): built by scripts/build_valid_model_ids_txt.py (Part 1); inference only loads
-def _get_valid_modelids_with_tables() -> set:
-    """Cached set of model_id that have tables. Fast O(1) lookup; loads from txt once per backend lifetime."""
-    with open(VALID_MODEL_IDS_TXT, "r", encoding="utf-8") as f:
-        return {line.strip() for line in f if line.strip()}
+@lru_cache(maxsize=16)
+def _cached_valid_model_ids_from_parquet(frozen_table_resources: Tuple[str, ...]) -> frozenset:
+    """
+    Model IDs with ≥1 table path in RELATIONSHIP_PARQUET for the given resource columns
+    (same definition as card2tab2card --resources / load_modelid_to_csvlist).
+    Cached per resource tuple for the backend process lifetime.
+    """
+    from src.utils import _load_modelid_to_csv_expand
+
+    res_list = list(frozen_table_resources)
+    df = _load_modelid_to_csv_expand(res_list if res_list else None)
+    if df.empty or "modelId" not in df.columns:
+        return frozenset()
+    s = df["modelId"].dropna().astype(str).str.strip()
+    return frozenset(x for x in s if x)
+
+
+def _valid_model_ids_for_table_resources(table_resources: List[str]) -> set:
+    """Align require_seed_has_tables with card2tab2card table source (not a broader txt built for all columns)."""
+    tr = [str(x).strip().lower() for x in table_resources if str(x).strip()]
+    key = tuple(sorted(tr))
+    if not key:
+        key = tuple(sorted(TABLE_RESOURCE_ALLOWLIST))
+    return set(_cached_valid_model_ids_from_parquet(key))
 
 def run_search_pipeline(
     job_id: str,
@@ -242,9 +262,9 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     logger.set_status("running")
 
     # Normalize resource selection once and reuse in all subprocess commands.
-    raw_resources = table_resource_allowlist or TABLE_RESOURCE_ALLOWLIST
-    model_resources = TABLE_RESOURCE_ALLOWLIST
-    table_resources = TABLE_RESOURCE_ALLOWLIST
+    raw_resources = list(table_resource_allowlist or TABLE_RESOURCE_ALLOWLIST)
+    model_resources = list(TABLE_RESOURCE_ALLOWLIST)
+    table_resources = list(TABLE_RESOURCE_ALLOWLIST)
     logger.log(f"Resources: model={model_resources}, table={table_resources}")
 
     def _with_resources(cmd: List[str], resources: List[str]) -> List[str]:
@@ -285,8 +305,10 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     seed_no_tables_skip_table_search = False  # when True: use first model for Card2Card only, skip Card2Tab2Card and set reason
     valid_model_ids = None
     if require_seed_has_tables:
-        valid_model_ids = _get_valid_modelids_with_tables()
-        logger.log(f"Valid model IDs (have tables) = {len(valid_model_ids)} (from {VALID_MODEL_IDS_TXT})")
+        valid_model_ids = _valid_model_ids_for_table_resources(table_resources)
+        logger.log(
+            f"Valid model IDs (relationship parquet, table_resources={table_resources}) = {len(valid_model_ids)}"
+        )
     if query:
         logger.log("Step 1: Extracting model card from query (query2modelcard)...")
         logger.log(f"query2modelcard input query: {query!r}")
@@ -294,7 +316,9 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
         if require_seed_has_tables:
             assert valid_model_ids is not None
-            logger.log(f"Narrow down: valid model IDs (have tables) = {len(valid_model_ids)} (from {VALID_MODEL_IDS_TXT})")
+            logger.log(
+                f"Narrow down: valid model IDs (same sources as Card2Tab2Card) = {len(valid_model_ids)}"
+            )
             # Two-phase: try 2× top_k first; if no valid model, run again with 5× (cap 200)
             phase1_k = min(100, 2 * top_k)
             phase2_k = min(200, 5 * top_k)

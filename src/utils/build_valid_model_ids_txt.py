@@ -1,9 +1,12 @@
 """
 Build a txt file of model_id that have tables (non-empty csv_basename in relationship parquet).
-Used by the demo backend "Narrow down" (require_seed_has_tables): inference only loads this txt.
+
+Note: The demo backend `require_seed_has_tables` now derives the allowlist from RELATIONSHIP_PARQUET
+with the same `--resources` columns as Card2Tab2Card (cached in memory), so it stays consistent
+when you run hugging-only vs multi-source. This script is still useful for offline lists / debugging.
 
 Usage:
-  python scripts/build_valid_model_ids_txt.py --output data/valid_model_ids_with_tables.txt
+  python -m src.utils.build_valid_model_ids_txt --output data/valid_model_ids_with_tables_hugging.txt --resources hugging
 """
 
 import os

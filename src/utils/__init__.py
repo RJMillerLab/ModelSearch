@@ -140,8 +140,33 @@ def _get_tables_per_model(model_ids: list) -> dict:
                         model_to_tables[mid].append(base)
     return model_to_tables
 
-def _get_models_to_tables_batch_sql(model_ids: list) -> dict:
-    """DuckDB batch query."""
+def _relationship_table_list_column_names(
+    resources: Optional[List[str]],
+    *,
+    available_in_parquet: set[str],
+) -> List[str]:
+    """
+    Ordered list of relationship-parquet list columns to read.
+    When resources is None/empty, use all canonical columns that exist (same union as _load_modelid_to_csv_expand).
+    """
+    col_by_key = {
+        "hugging": "hugging_table_list_dedup",
+        "github": "github_table_list_dedup",
+        "arxiv": "html_table_list_mapped_dedup",
+        "llm": "llm_table_list_mapped_dedup",
+    }
+    order = ["hugging", "github", "arxiv", "llm"]
+    if not resources:
+        keys = order
+    else:
+        norm = _normalize_allowed_resource_labels(resources)
+        keys = [k for k in order if k in norm]
+    out = [col_by_key[k] for k in keys if col_by_key[k] in available_in_parquet]
+    return out
+
+
+def _get_models_to_tables_batch_sql(model_ids: list, resources: Optional[List[str]] = None) -> dict:
+    """DuckDB batch query. If resources is set, only unnest those sources (must match card2tab2card / valid-id filter)."""
     import duckdb
     import pandas as pd
     from src.config import RELATIONSHIP_PARQUET
@@ -153,7 +178,8 @@ def _get_models_to_tables_batch_sql(model_ids: list) -> dict:
         cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
     except Exception:
         cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
-    list_cols = [c[0] for c in cols if c[0] != "modelId" and ("csv" in c[0].lower() or "table_list" in c[0].lower())][:4]
+    available = {c[0] for c in cols}
+    list_cols = _relationship_table_list_column_names(resources, available_in_parquet=available)
     if not list_cols:
         conn.close()
         return {}
@@ -243,11 +269,12 @@ def load_csvs_to_modelids(csv_basenames: List[str]) -> Dict[str, List[str]]:
     """
     return _get_tables_to_models_batch_sql(csv_basenames)
 
-def load_modelid_to_csvlist(model_id: str) -> List[str]:
+def load_modelid_to_csvlist(model_id: str, resources: Optional[List[str]] = None) -> List[str]:
     """
-    Input: modelId, Output: csv_basenames list
+    Input: modelId, Output: csv_basenames list.
+    If resources is set (e.g. ['hugging']), only paths from those relationship-parquet columns are returned.
     """
-    return _get_models_to_tables_batch_sql([model_id]).get(model_id, [])
+    return _get_models_to_tables_batch_sql([model_id], resources=resources).get(model_id, [])
 
 def _load_modelid_to_csv_expand(resources: Optional[List[str]] = None) -> pd.DataFrame:
     """

@@ -42,11 +42,12 @@ def search_card2tab2card(
     db_path: str = MODELLAKE_DB,
     table_top_k: int = 10,
     model_top_k: int = 20,
+    table_resources: Optional[List[str]] = None,
 ) -> List[str]:
     """Simplified card->tab->card search using relationship parquet + tab2tab import."""
-    print(f"[Card2Tab2Card] model_id={model_id} search_type={search_type} table_top_k={table_top_k} model_top_k={model_top_k}")
-    # model_id -> csv_basenames
-    query_table_basenames = load_modelid_to_csvlist(model_id)
+    print(f"[Card2Tab2Card] model_id={model_id} search_type={search_type} table_top_k={table_top_k} model_top_k={model_top_k} table_resources={table_resources!r}")
+    # model_id -> csv_basenames (only columns for --resources, e.g. hugging-only)
+    query_table_basenames = load_modelid_to_csvlist(model_id, resources=table_resources)
     # utils returns csv basenames; resolve to local csv paths for reading.
     query_tables: List[str] = []
     for base in query_table_basenames:
@@ -167,6 +168,7 @@ def main() -> None:
         output_json=args.output_json,
         db_path=db_path,
         model_top_k=args.model_top_k,
+        table_resources=resources,
     )
     print(f"Found {len(results)} model ids for {args.model_id}")
     for i, mid in enumerate(results[:20], 1):
