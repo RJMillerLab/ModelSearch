@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MODELTABLES_DATA = "../ModelTables/data"
 PROCESSED_DIR = os.path.join(MODELTABLES_DATA, "processed")
 RAW_DIR = os.path.join(MODELTABLES_DATA, "raw")
+ENCODE_MODEL = "all-MiniLM-L6-v2"
 
 # --- Version/tag for processed artifacts ---
 DATA_TAG = "_251117"
@@ -28,6 +29,9 @@ DEDUPED_GITHUB_CSVS =   os.path.join(PROCESSED_DIR, f"deduped_github_csvs{V2_SUF
 TABLES_OUTPUT = os.path.join(PROCESSED_DIR, f"tables_output{V2_SUFFIX}{DATA_TAG}")
 TABLE_BASE_DIRS = [DEDUPED_HUGGING_CSVS, DEDUPED_GITHUB_CSVS, TABLES_OUTPUT]
 
+# --- Model card text (step1) — used for card_readme dense index build ---
+MODELCARD_STEP1_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step1{V2_SUFFIX}{DATA_TAG}.parquet")
+
 # --- Relationship parquet (model–table mapping) ---
 RELATIONSHIP_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step3_dedup{V2_SUFFIX}{DATA_TAG}.parquet")
 
@@ -35,19 +39,20 @@ RELATIONSHIP_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step3_dedup{V2_SU
 # Default outputs go to ModelSearchDemo/data rather than ../ModelTables/data.
 OUTPUT_DIR = str(REPO_ROOT / "data")
 # Repo-local outputs (e.g. card2card build-index, search results, temp artifacts)
-CLASSIFICATION_JSON            = os.path.join(OUTPUT_DIR, "table_classifications.json")
-SCHEMA_LOG                     = os.path.join(os.path.dirname(MODELTABLES_DATA), "logs", "parquet_schema.log")
-CARD2TAB2CARD_OUTPUT_JSON      = os.path.join(OUTPUT_DIR, "card2tab2card_results.json")
-TAB2TAB_OUTPUT_JSON            = os.path.join(OUTPUT_DIR, "tab2tab_results.json")
-TAB2TAB_BY_TYPE_OUTPUT_JSON    = os.path.join(OUTPUT_DIR, "tab2tab_by_type_results.json")
-CARD2TAB2CARD_BY_TYPE_STANDALONE_JSON = os.path.join(OUTPUT_DIR, "card2tab2card_by_type_standalone.json")
-CLASSIFICATION_OUTPUT_JSON     = CLASSIFICATION_JSON
-EMB_NPZ                        = os.path.join(OUTPUT_DIR, "card2card_embeddings.npz")
-FAISS_INDEX                    = os.path.join(OUTPUT_DIR, "card2card.faiss")
-SPARSE_INDEX                   = os.path.join(OUTPUT_DIR, "card2card_sparse_index")
-CARD2CARD_CORPUS_JSONL         = os.path.join(OUTPUT_DIR, "card2card_corpus.jsonl")
-CARD2CARD_SPARSE_CORPUS        = os.path.join(OUTPUT_DIR, "card2card_sparse_corpus")
-CARD2CARD_NEIGHBORS_JSON       = os.path.join(OUTPUT_DIR, "card2card_neighbors.json")
+CLASSIFICATION_JSON                       = os.path.join(OUTPUT_DIR, "table_classifications.json")
+SCHEMA_LOG                                = os.path.join("../ModelTables", "logs", "parquet_schema.log")
+CARD2TAB2CARD_OUTPUT_JSON                 = os.path.join(OUTPUT_DIR, "card2tab2card_results.json")
+TAB2TAB_OUTPUT_JSON                       = os.path.join(OUTPUT_DIR, "tab2tab_results.json")
+TAB2TAB_BY_TYPE_OUTPUT_JSON               = os.path.join(OUTPUT_DIR, "tab2tab_by_type_results.json")
+CARD2TAB2CARD_BY_TYPE_STANDALONE_JSON     = os.path.join(OUTPUT_DIR, "card2tab2card_by_type_standalone.json")
+CLASSIFICATION_OUTPUT_JSON                = os.path.join(OUTPUT_DIR, "table_classifications_output.json")
+EMB_NPZ                                   = os.path.join(OUTPUT_DIR, "card2card_embeddings.npz")
+#FAISS_INDEX                               = os.path.join(OUTPUT_DIR, "card2card.faiss")
+SPARSE_INDEX                              = os.path.join(OUTPUT_DIR, "card2card_sparse_index")
+CARD2CARD_CORPUS_JSONL                    = os.path.join(OUTPUT_DIR, "card2card_corpus.jsonl")
+CARD2CARD_SPARSE_CORPUS                   = os.path.join(OUTPUT_DIR, "card2card_sparse_corpus")
+CARD2CARD_NEIGHBORS_JSON                  = os.path.join(OUTPUT_DIR, "card2card_neighbors.json")
+MODEL_CSVS_PARQUET                        = os.path.join(OUTPUT_DIR, "model_csvs.parquet")
 
 PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
 

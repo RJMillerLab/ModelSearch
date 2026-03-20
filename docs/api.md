@@ -7,7 +7,9 @@ All search functions can be imported and used programmatically:
 ```python
 from src.search import (
     build_card_index,
-    search_card2card,
+    search_dense_neighbors_queries,
+    search_sparse_neighbors_queries,
+    search_hybrid_neighbors_queries,
     search_table2table,
     search_query2modelcard,
     search_card2tab2card
@@ -41,7 +43,6 @@ build_card_index(
 ```python
 results = search_query2modelcard(
     query="transformer model for NLP",
-    faiss_index="data/card2card.faiss",
     top_k=20
 )
 ```
@@ -49,11 +50,13 @@ results = search_query2modelcard(
 ## 3. Card to Card Search
 
 ```python
-neighbors = search_card2card(
-    model_id="Salesforce/codet5-base",
-    faiss_index="data/card2card.faiss",
-    top_k=20
+neighbors_map = search_dense_neighbors_queries(
+    query_model_ids=["Salesforce/codet5-base"],
+    emb_npz="data/card2card_embeddings.npz",
+    top_k=20,
 )
+neighbors = neighbors_map["Salesforce/codet5-base"]
+ 
 ```
 
 ## 4. Table to Table Search (Testing)
@@ -83,14 +86,11 @@ similar_models = search_card2tab2card(
 For batch evaluation, you can use the batch search functions:
 
 ```python
-from src.search import search_card2card_batch
-
-# Search all models at once
-all_neighbors = search_card2card_batch(
+neighbors_map = search_hybrid_neighbors_queries(
+    query_model_ids=["Salesforce/codet5-base", "gpt2"],
     emb_npz="data/card2card_embeddings.npz",
-    faiss_index="data/card2card.faiss",
+    sparse_index_path="data/card2card_sparse_index",
     top_k=20,
-    output_json="data/card2card_neighbors.json"
 )
 ```
 

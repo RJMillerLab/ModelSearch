@@ -18,8 +18,9 @@ if _repo_root not in sys.path:
 
 from src.search.card2card import (
     build_card_index,
-    search_card2card,
-    search_card2card_batch,
+    search_dense_neighbors_queries,
+    search_sparse_neighbors_queries,
+    search_hybrid_neighbors_queries,
 )
 from src.search.query2modelcard import search_query2modelcard
 from src.search.card2tab2card import (
@@ -64,8 +65,9 @@ def __getattr__(name):
 __all__ = [
     # card2card
     'build_card_index',
-    'search_card2card',
-    'search_card2card_batch',
+    'search_dense_neighbors_queries',
+    'search_sparse_neighbors_queries',
+    'search_hybrid_neighbors_queries',
     # tab2tab (lazy imported via __getattr__)
     'search_single_column',
     'search_multi_column',

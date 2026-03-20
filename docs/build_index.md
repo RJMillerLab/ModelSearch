@@ -26,38 +26,26 @@
 
 # Part 1 — Must run (in order)
 
+```bash
+git clone git@github.com:RJMillerLab/ModelTables.git
+# Install dependencies and download data, as remaining steps depend on it
+```
+
 ## 1.1 Modelcard index (dense)
 
-Paths from `src.config` (e.g. `RAW_DIR`). Override with env if needed.
-
 ```bash
-python -m src.search.card2card build-index --field card
-```
-
-Optional 3-step (baseline1): `build_modelcard_jsonl` → `table_retrieval_pipeline encode` → `table_retrieval_pipeline build_faiss`.
-
-## 1.1b Sparse index (for card2card sparse/hybrid)
-
-Uses **Pyserini** (Lucene BM25), same as ModelTables baseline2. **Train** = build Lucene index once. **Inference** = load index + search only (top-k, no full corpus scan).
-
-**Train (run once):**
-
-```bash
+# build index for dense retrieval (FAISS) and sparse retrieval (Pyserini Lucene) from modelcard_step1.parquet
+python -m src.search.card2card build-dense-index
 python -m src.search.card2card build-sparse-index
 ```
-
-This copies the JSONL into `corpus_dir` and runs `pyserini.index.lucene` (JsonCollection, DefaultLuceneDocumentGenerator, --storeRaw). Output is a Lucene index directory at `output_index`.
-
-**Inference (per query):** Load the index with `LuceneSearcher(index_path)`, `set_bm25()`; get query document text from the index (`doc_raw`/`doc_contents`); truncate query if needed; `searcher.search(query_text, k=top_k+1)`. No corpus re-read, no re-indexing. Sparse and hybrid both use this path when `--sparse_index_path` points to the built index.
 
 ## 1.2 Blend + data
 
 ```bash
-# clone or symlink Blend_internal; symlink data if needed
+# Build DuckDB index from csvs, for later search
 git clone git@github.com:DoraDong-2023/Blend_internal.git 
-git clone git@github.com:RJMillerLab/ModelTables.git
-ln -s ../Blend_internal src/Blend_internal
-# reuse data from ModelTables
+ln -s ../Blend_internal others/Blend_internal
+# create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117.db
 ```
 
 ## 1.2b Valid model IDs for Table Search (optional; for demo “Narrow down”)
@@ -68,23 +56,7 @@ Extract model_id that have tables (non-empty `csv_basename` in relationship parq
 python -m src.utils.build_valid_model_ids_txt --output data/valid_model_ids_with_tables.txt
 ```
 
-Output: `data/valid_model_ids_with_tables.txt` (one model_id per line). Demo backend “Narrow down” reads this file only; it does not read parquet at request time.
-
-## 1.3 DuckDB table index
-
-Paths from `src.config`. Use `scripts/get_config_paths.py` for shell:
-
-```bash
-DB=$(python scripts/get_config_paths.py modellake_db)
-GITHUB=$(python scripts/get_config_paths.py deduped_github_csvs)
-HUGGING=$(python scripts/get_config_paths.py deduped_hugging_csvs)
-TABLES=$(python scripts/get_config_paths.py tables_output)
-python -m src.Blend_internal.scripts.create_index_duckdb --db_path "$DB" \
-  --data_glob "$GITHUB/*.csv" --data_glob "$HUGGING/*.csv" --data_glob "$TABLES/*.csv" \
-  --table modellake_index
-```
-
-## 1.4 Table classification (optional; for by_type flows)
+## (Optional) 1.3 Table classification (optional; for by_type flows)
 
 Train vs inference = explicit arg only, no fallback. Train = run below with `--mode batch`. Inference = run 2.3 by_type / 2.5 with `--classification_json data/table_classifications.json`. Same `--db_path` for 1.4 and 2.3/2.5.
 
@@ -97,12 +69,12 @@ python -m src.search.classification --mode batch --output_json data/table_classi
 
 ---
 
-# Part 2 — Inference (test all modes per tool)
+# Part 2 — Inference
 
 ## 2.1 query2modelcard
 
 ```bash
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 > logs/query2modelcard.log 2>&1
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode dense > logs/query2modelcard.log 2>&1
 ```
 
 ## 2.2 card2card (dense, sparse, hybrid)
@@ -110,25 +82,18 @@ python -m src.search.query2modelcard --query "transformer model for code generat
 **Train vs inference:** Part 1 (1.1, 1.1b) = train: build modelcard index and sparse Lucene index. Part 2 = inference: only load those artifacts and run retrieval. Sparse uses Pyserini (same as ModelTables baseline2).
 
 ```bash
+# model ids file (single query also works)
+echo "google-bert/bert-base-uncased" > data/tmp/card2card_model_ids.txt
 # dense (FAISS only)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
+# python -m src.search.card2card search --model_id ... is deprecated; use --model_ids_file instead
+python -m src.search.card2card search --model_ids_file data/tmp/card2card_model_ids.txt --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
 # sparse (Pyserini Lucene index from 1.1b)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
+python -m src.search.card2card search --model_ids_file data/tmp/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
 # hybrid (sparse + FAISS)
-python -m src.search.card2card search --model_id google-bert/bert-base-uncased --top_k 20 --retrieval_mode hybrid --hybrid_method rrf > logs/card2card_hybrid.log 2>&1
+python -m src.search.card2card search --model_ids_file data/tmp/card2card_model_ids.txt --top_k 20 --retrieval_mode hybrid > logs/card2card_hybrid.log 2>&1
 ```
 
-## 2.3 card2tab2card (keyword, all, by_type)
-
-Paths (db, relationship parquet, classification JSON, output) from `src.config`. Only `--model_id`, `--query` (for mode=all), `--search_type`, `--k`, `--mode` are passed.
-
-```bash
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all --query ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0000e35dae_table1.csv > logs/card2tab2card_all.log 2>&1
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type > logs/card2tab2card_by_type.log 2>&1
-```
-
-## 2.4 tab2tab (test all modes: keyword, single_column, multi_column, unionable)
+## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable)
 
 Paths from `src.config`. Keyword = match column names; single_column = cell values; multi_column/unionable = CSV path.
 
@@ -140,7 +105,17 @@ python -m src.search.tab2tab --search_type multi_column --query "$(python script
 python -m src.search.tab2tab --search_type unionable --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_unionable.log 2>&1
 ```
 
-## 2.5 tab2tab_by_type (test all modes; needs 1.4)
+## 2.4 card2tab2card (keyword, all, by_type)
+
+Paths (db, relationship parquet, classification JSON, output) from `src.config`. Only `--model_id`, `--query` (for mode=all), `--search_type`, `--k`, `--mode` are passed.
+
+```bash
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all --query ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0000e35dae_table1.csv > logs/card2tab2card_all.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type > logs/card2tab2card_by_type.log 2>&1
+```
+
+## (Optional) 2.5 tab2tab_by_type (test all modes; needs 1.3)
 
 Same modes as tab2tab, filtered by table type. Paths from `src.config`. **--query** = table ID or CSV path.
 
@@ -174,18 +149,8 @@ python -m src.demo.frontend
 # open http://localhost:5001
 ```
 
-## 2.8 baseline2 / baseline3 (table retrieval; from ModelTables)
 
-Copy from ModelTables then run. Full flow: **ModelTables/docs/scripts.md** Section 7.
 
-```bash
-cp -r ../ModelTables/src/baseline2 src/
-cp -r ../ModelTables/src/baseline3 src/
-# symlinks for data/tmp, data/analysis, data/processed, etc. as in ModelTables
-# TAG=251117 bash src/baseline2/get_metadata.sh > logs/baseline2_get_metadata_251117.log 2>&1
-# TAG=251117 bash src/baseline2/sparse_search.sh > logs/baseline2_sparse_search_251117.log 2>&1
-# baseline3: build dense index then search_with_pyserini_hybrid.py or hybrid_search.sh
-```
 
 ---
 
