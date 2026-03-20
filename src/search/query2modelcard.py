@@ -56,7 +56,8 @@ def search_query2modelcard(
         raise ValueError(f"retrieval_mode must be one of dense|sparse|hybrid, got {retrieval_mode!r}")
 
     # Dense and hybrid need embeddings.
-    data = np.load(EMB_NPZ) if retrieval_mode in {"dense", "hybrid"} else None
+    # Backward compatible: older EMB_NPZ may have stored `ids` as dtype=object.
+    data = np.load(EMB_NPZ, allow_pickle=True) if retrieval_mode in {"dense", "hybrid"} else None
     ids = data["ids"].tolist() if data is not None else None
     embs = np.asarray(data["embeddings"], dtype=np.float32) if data is not None else None
     results: List[str]

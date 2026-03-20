@@ -127,7 +127,8 @@ def build_card_index(batch_size: int = 256) -> None:
         print("No embeddings generated, skipping save.")
         return
     embs_array = np.vstack(all_embs).astype(np.float32, copy=False)
-    np.savez_compressed(EMB_NPZ, embeddings=embs_array, ids=np.array(ids, dtype=object))
+    # ids is a list[str]; store as non-object numpy dtype to avoid allow_pickle issues.
+    np.savez_compressed(EMB_NPZ, embeddings=embs_array, ids=np.array(ids, dtype=str))
     print(f"Saved embeddings: {EMB_NPZ}, shape={embs_array.shape}, n_ids={len(ids)}")
 
 def _build_faiss_index_in_memory(embs: np.ndarray) -> Tuple[faiss.Index, np.ndarray]:
@@ -155,7 +156,8 @@ def search_dense_neighbors_queries(
     if not query_model_ids:
         return {}
 
-    data = np.load(EMB_NPZ)
+    # Backward compatible: older EMB_NPZ may have stored `ids` as dtype=object.
+    data = np.load(EMB_NPZ, allow_pickle=True)
     embs = np.asarray(data["embeddings"], dtype=np.float32)
     ids = data["ids"].tolist()
     id_to_idx = {mid: i for i, mid in enumerate(ids)}
@@ -220,7 +222,8 @@ def search_hybrid_neighbors_queries(
     if not os.path.isdir(SPARSE_INDEX):
         raise ValueError(f"Hybrid mode requires --sparse_index_path to a Pyserini Lucene index directory. Got: {SPARSE_INDEX!r}")
 
-    data = np.load(EMB_NPZ)
+    # Backward compatible: older EMB_NPZ may have stored `ids` as dtype=object.
+    data = np.load(EMB_NPZ, allow_pickle=True)
     embs = np.asarray(data["embeddings"], dtype=np.float32)
     ids = data["ids"].tolist()
     id_to_idx = {mid: i for i, mid in enumerate(ids)}
