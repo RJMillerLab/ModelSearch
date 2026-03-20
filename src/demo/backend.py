@@ -12,7 +12,8 @@ from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
-from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON
+from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST
+from src.utils import filter_results_by_classify_results
 
 def _sanitize_for_json(obj: Any) -> Any:
     """Replace float('nan') with None so JSON serialization produces null."""
@@ -179,7 +180,20 @@ def _get_valid_modelids_with_tables() -> set:
     with open(VALID_MODEL_IDS_TXT, "r", encoding="utf-8") as f:
         return {line.strip() for line in f if line.strip()}
 
-def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None, tab2tab_mode: str = "search", tab2tab_json: Optional[str] = None, card2card_retrieval_mode: str = "dense", require_seed_has_tables: bool = False, use_by_type: bool = False, model_top_k: int = 5):
+def run_search_pipeline(
+    job_id: str,
+    query: Optional[str] = None,
+    top_k: int = 20,
+    model_id: Optional[str] = None,
+    table_search_k: Optional[int] = None,
+    tab2tab_mode: str = "search",
+    tab2tab_json: Optional[str] = None,
+    card2card_retrieval_mode: str = "dense",
+    require_seed_has_tables: bool = False,
+    use_by_type: bool = False,
+    model_top_k: int = 5,
+    table_resource_allowlist: Optional[List[str]] = None,
+):
     """Run pipeline by calling CLI commands (build_index.md). All outputs under job_dir."""
     logger = jobs.get(job_id)
     if not logger:
@@ -197,14 +211,47 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         logger.set_results(d)
 
     try:
-        _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k=model_top_k)
+        _run_pipeline_body(
+            logger,
+            job_id,
+            job_dir,
+            start_time,
+            query,
+            top_k,
+            model_id,
+            table_search_k,
+            tab2tab_mode,
+            tab2tab_json,
+            card2card_retrieval_mode,
+            require_seed_has_tables,
+            use_by_type,
+            model_top_k=model_top_k,
+            table_resource_allowlist=table_resource_allowlist,
+        )
     except Exception as e:
         logger.log(f"Pipeline crashed: {e}")
         _set_pipeline_error(f"Pipeline error: {e}", model_id)
         import traceback
         logger.log(traceback.format_exc())
 
-def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], tab2tab_mode: str, tab2tab_json: Optional[str], card2card_retrieval_mode: str, require_seed_has_tables: bool = False, use_by_type: bool = False, *, model_top_k: int = 5):
+def _run_pipeline_body(
+    logger: "JobLogger",
+    job_id: str,
+    job_dir: str,
+    start_time: float,
+    query: Optional[str],
+    top_k: int,
+    model_id: Optional[str],
+    table_search_k: Optional[int],
+    tab2tab_mode: str,
+    tab2tab_json: Optional[str],
+    card2card_retrieval_mode: str,
+    require_seed_has_tables: bool = False,
+    use_by_type: bool = False,
+    *,
+    model_top_k: int = 5,
+    table_resource_allowlist: Optional[List[str]] = None,
+):
     # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
@@ -347,9 +394,17 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         # NOTE: This repo snapshot may not include legacy `scripts/check_model_in_index.py`.
         # We let downstream scripts produce empty results if the model id is missing.
 
-    k_table = table_search_k if table_search_k is not None else 1  # Per-table k: how many each table searches (default 1)
-    # Card2Card top_k: use high default (100) so we have enough; will truncate to right's max for alignment
-    card2card_top_k = 100
+    # Table Search:
+    # - user-provided `table_search_k` is the "final" per-table budget (default 1)
+    # - during search we expand it by 20x to generate more candidates
+    table_search_k_input = int(table_search_k) if table_search_k is not None else 1
+    table_search_k_input = max(1, table_search_k_input)
+    k_table = table_search_k_input * 20  # Per-table k passed into card2tab2card/tab2tab
+
+    # Model Search:
+    # - user-provided `model_top_k` is the "final" model budget
+    # - during Card2Card retrieval we expand it by 100x to generate more candidates
+    card2card_top_k = max(100, int(model_top_k) * 100)
 
     # card2card (src/search/card2card.py) expects `--model_ids_file` + `--output_json`.
     card2card_model_ids_file = os.path.join(job_dir, "card2card_model_ids.txt")
@@ -561,6 +616,104 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             "Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
         )
 
+    # Optional: filter Card2Tab2Card(tab2tab) retrieved tables by resource origin
+    # (based on ModelTables filename naming rules via classify_resource()).
+    table_resource_allowlist = list(TABLE_RESOURCE_ALLOWLIST) if TABLE_RESOURCE_ALLOWLIST else None
+    if table_resource_allowlist:
+        logger.log(f"Table resource filtering (tab2tab outputs): allowlist={table_resource_allowlist}")
+
+        def _filter_payload_tables_by_resource(payload: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(payload, dict):
+                return payload
+
+            intermediate = payload.get("intermediate", {})
+            if not isinstance(intermediate, dict):
+                return payload
+
+            searched_tables = payload.get("searched_tables")
+            if not isinstance(searched_tables, list):
+                searched_tables = intermediate.get("retrieved_table_filenames")
+
+            if not isinstance(searched_tables, list):
+                return payload
+
+            kept_tables = filter_results_by_classify_results(
+                searched_tables,
+                table_resource_allowlist,
+            )
+            # After filtering, we also cap to the user's final `table_search_k_input`.
+            # card2tab2card internally multiplies `k` by number of query_tables, so we
+            # mirror that behavior here to get a consistent "final" budget.
+            query_tables = payload.get("query_tables", [])
+            qn = len(query_tables) if isinstance(query_tables, list) and query_tables else 1
+            table_limit = int(table_search_k_input) * max(1, qn)
+            if table_limit > 0:
+                kept_tables = kept_tables[:table_limit]
+            kept_set = set(kept_tables)
+
+            # Keep payload.searched_tables in sync
+            if isinstance(payload.get("searched_tables"), list):
+                payload["searched_tables"] = kept_tables
+
+            # Filter intermediate.table_to_models and filename/ids lists
+            if isinstance(intermediate.get("table_to_models"), dict):
+                intermediate["table_to_models"] = {
+                    fname: mids
+                    for fname, mids in intermediate["table_to_models"].items()
+                    if fname in kept_set
+                }
+
+            if isinstance(intermediate.get("retrieved_table_filenames"), list):
+                intermediate["retrieved_table_filenames"] = [
+                    t for t in intermediate["retrieved_table_filenames"] if t in kept_set
+                ]
+
+            tid_map = intermediate.get("table_id_to_filename")
+            if isinstance(tid_map, dict):
+                intermediate["table_id_to_filename"] = {
+                    str(tid): fname
+                    for tid, fname in tid_map.items()
+                    if fname in kept_set
+                }
+
+            if isinstance(intermediate.get("retrieved_table_ids"), list) and isinstance(intermediate.get("table_id_to_filename"), dict):
+                kept_tids: List[int] = []
+                for tid in intermediate["retrieved_table_ids"]:
+                    fname = intermediate["table_id_to_filename"].get(str(tid))
+                    if fname in kept_set:
+                        kept_tids.append(int(tid))
+                intermediate["retrieved_table_ids"] = kept_tids
+
+            # Update payload.model_ids based on surviving tables
+            mids_set: set[str] = set()
+            table_to_models = intermediate.get("table_to_models")
+            if isinstance(table_to_models, dict):
+                for mids in table_to_models.values():
+                    if isinstance(mids, list):
+                        for mid in mids:
+                            if mid is not None:
+                                mids_set.add(str(mid))
+
+            if isinstance(payload.get("model_ids"), list):
+                payload["model_ids"] = [m for m in payload["model_ids"] if str(m) in mids_set]
+
+            payload["intermediate"] = intermediate
+            return payload
+
+        for st, payload in list(card2tab2card_all.items()):
+            if not isinstance(payload, dict):
+                continue
+            before_models = payload.get("model_ids", [])
+            before_tables = payload.get("intermediate", {}).get("retrieved_table_filenames", [])
+            card2tab2card_all[st] = _filter_payload_tables_by_resource(payload)
+
+            after_models = card2tab2card_all[st].get("model_ids", []) if isinstance(card2tab2card_all[st], dict) else []
+            after_tables = card2tab2card_all[st].get("intermediate", {}).get("retrieved_table_filenames", []) if isinstance(card2tab2card_all[st], dict) else []
+            logger.log(
+                f"  [{st}] tab2tab tables: {len(before_tables) if isinstance(before_tables, list) else '?'} -> {len(after_tables) if isinstance(after_tables, list) else '?'}; "
+                f"models: {len(before_models) if isinstance(before_models, list) else '?'} -> {len(after_models) if isinstance(after_models, list) else '?'}"
+            )
+
     # --- Enforce valid_model_ids for left/right model lists (top-5 stability) ---
     # If we filtered seed correctly, but downstream Card2Card / Card2Tab2Card returns non-valid models,
     # the UI/table integration can look inconsistent or fail to load the intended tables.
@@ -661,6 +814,10 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 logger.log(f"[Card2Tab2Card-{st}-rerun_k] No JSON at {out_path}; returning empty payload")
                 return {"model_ids": [], "intermediate": {}}
             payload = _normalize_card2tab2card_payload(data)
+            # Re-apply resource filter + table budget after rerun, so subsequent
+            # model selection stays consistent with the postprocess stage.
+            if table_resource_allowlist:
+                payload = _filter_payload_tables_by_resource(payload)
             payload = _filter_card2tab2card_payload(st, payload)
             return payload
 
@@ -722,11 +879,86 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                     card2card_all["dense"] = []
                 card2card_all["dense"] = [mid for mid in card2card_all["dense"] if mid in valid_model_ids]
 
-    # Adaptive model-topk:
-    # - Card2Card: cap by model_top_k (left side ordering preserved)
-    # - Card2Tab2Card: if model_ids > model_top_k, rerank candidates by Card2Card dense order.
+    # Effective model-topk:
+    # - right-side table search (Card2Tab2Card) may return fewer models after filtering
+    # - we expand search upstream, then finally return min(input_model_top_k, right_max_models)
+    right_max_models = 0
+    for st, payload in card2tab2card_all.items():
+        if not isinstance(payload, dict):
+            continue
+        mids = payload.get("model_ids", [])
+        if isinstance(mids, list):
+            right_max_models = max(right_max_models, len(mids))
+
+    effective_model_top_k = min(int(model_top_k), int(right_max_models)) if isinstance(model_top_k, int) else right_max_models
+    if effective_model_top_k < 0:
+        effective_model_top_k = 0
+
+    logger.log(f"Adaptive effective_model_top_k: input={model_top_k}, right_max_models={right_max_models} => effective={effective_model_top_k}")
+
     dense_order = card2card_all.get("dense") if isinstance(card2card_all.get("dense"), list) else []
     rank_map = {mid: i for i, mid in enumerate(dense_order)}
+
+    def _sync_payload_intermediate_to_model_ids(payload: Dict[str, Any], keep_model_ids: List[str]) -> None:
+        """Ensure intermediate tables also correspond to kept model_ids."""
+        intermediate = payload.get("intermediate")
+        if not isinstance(intermediate, dict):
+            return
+        keep_set = set(str(m) for m in keep_model_ids if m is not None)
+        if not keep_set:
+            # Keep payload structure but drop tables.
+            if isinstance(payload.get("searched_tables"), list):
+                payload["searched_tables"] = []
+            if isinstance(intermediate.get("retrieved_table_filenames"), list):
+                intermediate["retrieved_table_filenames"] = []
+            if isinstance(intermediate.get("table_to_models"), dict):
+                intermediate["table_to_models"] = {}
+            if isinstance(intermediate.get("table_id_to_filename"), dict):
+                intermediate["table_id_to_filename"] = {}
+            if isinstance(intermediate.get("retrieved_table_ids"), list):
+                intermediate["retrieved_table_ids"] = []
+            return
+
+        table_to_models = intermediate.get("table_to_models")
+        if not isinstance(table_to_models, dict):
+            return
+
+        new_table_to_models: Dict[str, List[str]] = {}
+        for tname, model_list in table_to_models.items():
+            if not isinstance(model_list, list):
+                continue
+            kept = [m for m in model_list if str(m) in keep_set]
+            if kept:
+                new_table_to_models[tname] = kept
+
+        kept_tables = set(new_table_to_models.keys())
+        intermediate["table_to_models"] = new_table_to_models
+
+        if isinstance(payload.get("searched_tables"), list):
+            payload["searched_tables"] = [t for t in payload["searched_tables"] if t in kept_tables]
+
+        if isinstance(intermediate.get("retrieved_table_filenames"), list):
+            intermediate["retrieved_table_filenames"] = [
+                t for t in intermediate["retrieved_table_filenames"] if t in kept_tables
+            ]
+
+        tid_map = intermediate.get("table_id_to_filename")
+        if isinstance(tid_map, dict):
+            intermediate["table_id_to_filename"] = {str(tid): fname for tid, fname in tid_map.items() if fname in kept_tables}
+
+        if isinstance(intermediate.get("retrieved_table_ids"), list) and isinstance(intermediate.get("table_id_to_filename"), dict):
+            fname_map = intermediate.get("table_id_to_filename", {})
+            kept_tids: List[int] = []
+            for tid in intermediate["retrieved_table_ids"]:
+                fname = fname_map.get(str(tid))
+                if fname in kept_tables:
+                    try:
+                        kept_tids.append(int(tid))
+                    except Exception:
+                        pass
+            intermediate["retrieved_table_ids"] = kept_tids
+
+        payload["intermediate"] = intermediate
 
     # Rerank/cap right side (Card2Tab2Card)
     for st, payload in card2tab2card_all.items():
@@ -735,23 +967,29 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         mids = payload.get("model_ids", [])
         if not isinstance(mids, list):
             continue
-        if len(mids) > model_top_k:
+        if len(mids) > effective_model_top_k and effective_model_top_k > 0:
             big = len(rank_map) + 100000
             reranked = sorted(mids, key=lambda mid: rank_map.get(mid, big))
-            payload["model_ids"] = reranked[:model_top_k]
-            logger.log(f"[Card2Tab2Card-{st}] Adaptive rerank: {len(mids)} -> {model_top_k} (dense order)")
-        elif len(mids) > model_top_k:
-            payload["model_ids"] = mids[:model_top_k]
+            payload["model_ids"] = reranked[:effective_model_top_k]
+            logger.log(f"[Card2Tab2Card-{st}] Adaptive rerank: {len(mids)} -> {effective_model_top_k} (dense order)")
+        elif len(mids) > effective_model_top_k and effective_model_top_k == 0:
+            payload["model_ids"] = []
+        elif len(mids) > effective_model_top_k:
+            payload["model_ids"] = mids[:effective_model_top_k]
+
+        # Keep intermediate tables consistent with the truncated model_ids.
+        final_mids = payload.get("model_ids", [])
+        if isinstance(final_mids, list):
+            _sync_payload_intermediate_to_model_ids(payload, final_mids)
 
     # Cap left side (Card2Card)
     for mode in card2card_modes:
         val = card2card_all.get(mode)
-        if isinstance(val, list) and len(val) > model_top_k:
-            card2card_all[mode] = val[:model_top_k]
-            logger.log(f"[Card2Card-{mode.upper()}] Truncated to model_top_k={model_top_k}")
+        if isinstance(val, list) and len(val) > effective_model_top_k:
+            card2card_all[mode] = val[:effective_model_top_k]
+            logger.log(f"[Card2Card-{mode.upper()}] Truncated to effective_model_top_k={effective_model_top_k}")
 
     # Primary Card2Card list is strictly the configured retrieval_mode ("dense" by default).
-    # If that mode failed or produced no usable list, do not silently fall back to another mode.
     primary = card2card_all.get("dense")
     if not isinstance(primary, list):
         logger.log("[Card2Card] Primary retrieval mode 'dense' missing or errored; returning empty primary list.")
@@ -760,7 +998,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     elapsed_total = time.time() - start_time
     logger.log(f"Step 3: Done. Total time: {elapsed_total:.2f}s")
 
-    results_data = {"job_id": job_id, "query": query, "model_id": model_id, "top_k": top_k, "model_top_k": model_top_k, "table_search_k": k_table, "card2card_retrieval_mode": card2card_retrieval_mode, "use_by_type": use_by_type, "require_seed_has_tables": require_seed_has_tables, "card2card_results": primary, "card2card_all_modes": card2card_all, "card2tab2card_results": card2tab2card_all, "timestamp": datetime.fromtimestamp(start_time).isoformat(), "folder_path": job_dir, "run_log_path": run_log_path, "running_time_seconds": round(elapsed_total, 3)}
+    results_data = {"job_id": job_id, "query": query, "model_id": model_id, "top_k": top_k, "model_top_k": model_top_k, "effective_model_top_k": effective_model_top_k, "right_max_models": right_max_models, "table_search_k": table_search_k_input, "card2card_retrieval_mode": card2card_retrieval_mode, "use_by_type": use_by_type, "require_seed_has_tables": require_seed_has_tables, "card2card_results": primary, "card2card_all_modes": card2card_all, "card2tab2card_results": card2tab2card_all, "timestamp": datetime.fromtimestamp(start_time).isoformat(), "folder_path": job_dir, "run_log_path": run_log_path, "running_time_seconds": round(elapsed_total, 3)}
     if table_search_empty_reason:
         results_data["table_search_reason"] = table_search_empty_reason
 
@@ -874,9 +1112,22 @@ def search():
 
     job_id = _generate_job_id()
     jobs[job_id] = JobLogger(job_id)
+
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
+        args=(
+            job_id,
+            query,
+            top_k,
+            model_id,
+            table_search_k,
+            tab2tab_mode,
+            tab2tab_json,
+            card2card_retrieval_mode,
+            require_seed_has_tables,
+            use_by_type,
+            model_top_k,
+        ),
     )
     thread.daemon = True
     thread.start()

@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS
 
-__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "load_modelid_to_csvlist", "load_csvs_to_modelids", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db",
+__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "classify_results", "filter_results_by_classify_results", "load_modelid_to_csvlist", "load_csvs_to_modelids", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db",
     "is_model_search_log",
     "is_table_search_log",
     "get_repo_root",
@@ -307,6 +307,68 @@ def classify_resource(basename: str) -> str:
     if re.fullmatch(r"[0-9a-f]{10}_table\d+\.csv", b) or re.fullmatch(r".+_table\d+\.csv", b):
         return "hugging"
     raise ValueError(f"Unknown resource: {basename}")
+
+
+def classify_results(name: str) -> str:
+    """
+    Classify a table filename (or any path-like string) into a resource origin.
+
+    This is a convenience wrapper around `classify_resource()` so callers can
+    pass raw `name` strings (paths/basenames) and still reuse the same logic.
+    """
+    return classify_resource(os.path.basename(str(name)))
+
+
+def _normalize_allowed_resource_labels(resources: List[str] | set[str]) -> set[str]:
+    """
+    Normalize user-facing resource names to `classify_resource()` return values.
+    """
+    out: set[str] = set()
+    for r in resources:
+        rr = str(r).strip().lower()
+        if not rr:
+            continue
+        if rr in {"github", "gh"}:
+            out.add("github")
+        elif rr in {"arxiv", "html"}:
+            out.add("arxiv")
+        elif rr in {"hugging", "huggingface", "hf"}:
+            out.add("hugging")
+        elif rr in {"unknown"}:
+            out.add("unknown")
+        else:
+            # Keep unknown labels as-is; they will just not match.
+            out.add(rr)
+    return out
+
+
+def filter_results_by_classify_results(
+    items: List[str],
+    allowed_resources: List[str] | set[str],
+    *,
+    keep_unknown: bool = False,
+) -> List[str]:
+    """
+    Filter `items` by calling `classify_results(item)` for each element.
+
+    If `classify_resource()` can't classify an item, it is treated as `unknown`
+    (and kept only if `keep_unknown=True` or `allowed_resources` includes `unknown`).
+    """
+    allowed = _normalize_allowed_resource_labels(allowed_resources)
+    wants_unknown = keep_unknown or ("unknown" in allowed)
+
+    out: List[str] = []
+    for it in items:
+        try:
+            label = classify_results(it)
+        except ValueError:
+            label = "unknown"
+        if label in allowed:
+            out.append(it)
+        elif label == "unknown" and wants_unknown:
+            out.append(it)
+    return out
+
 
 def load_table(csv_path: str) -> Optional[pd.DataFrame]:
     """

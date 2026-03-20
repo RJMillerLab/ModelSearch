@@ -68,6 +68,15 @@ TAB2KNOW_REPO = os.path.join(REPO_ROOT, "others", "tab2know")
 CARD2CARD_MODES = ["dense", "sparse", "hybrid"]
 CARD2TAB2CARD_TYPES = ["keyword", "single_column", "unionable"]
 
+# Table search / Card2Tab2Card post-filtering by table filename source.
+# These labels must match `src.utils.classify_resource()` return values:
+#   - "github"
+#   - "arxiv"
+#   - "hugging"
+#   - "llm"
+#   - "unknown"
+TABLE_RESOURCE_ALLOWLIST = ["hugging"]
+
 # --- Data Structures ---
 RESULT_DIR = os.path.join(OUTPUT_DIR, f"results{DATA_TAG}")
 QUERY_RESULT_PATH = os.path.join(RESULT_DIR, "query_to_modelids.parquet")
