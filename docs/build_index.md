@@ -88,11 +88,11 @@ python -m src.search.query2modelcard --query "transformer model for code generat
 echo "google-bert/bert-base-uncased" > data_251117/card2card_model_ids.txt
 # dense (FAISS only)
 # python -m src.search.card2card search --model_id ... is deprecated; use --model_ids_file instead
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode dense > logs/card2card_dense.log 2>&1
+python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode dense --output_json data_251117/card2card_dense.json > logs/card2card_dense.log 2>&1
 # sparse (Pyserini Lucene index from 1.1b)
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse > logs/card2card_sparse.log 2>&1
+python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse --output_json data_251117/card2card_sparse.json > logs/card2card_sparse.log 2>&1 # tested
 # hybrid (sparse + FAISS)
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode hybrid > logs/card2card_hybrid.log 2>&1
+python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode hybrid --output_json data_251117/card2card_hybrid.json > logs/card2card_hybrid.log 2>&1
 ```
 
 ## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable)
