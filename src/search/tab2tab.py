@@ -46,6 +46,7 @@ def _run_blend_tab2tab_subprocess(
     query: Any,
     k: int,
     db_path: Optional[str] = None,
+    output_json: Optional[str] = None,
 ) -> List[int]:
     """
     Run Blend_internal tab2tab script in an isolated subprocess and return [tableid, ...].
@@ -54,9 +55,16 @@ def _run_blend_tab2tab_subprocess(
 
     db_path_use = db_path or MODELLAKE_DB
 
-    # Create isolated temp output file for this call.
-    out_fd, out_path = tempfile.mkstemp(prefix="tab2tab_", suffix=".json")
-    os.close(out_fd)
+    # Use caller-provided output path (deterministic) or a temp file (isolated).
+    out_path: str
+    if output_json:
+        out_path = output_json
+        parent = os.path.dirname(os.path.abspath(out_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    else:
+        out_fd, out_path = tempfile.mkstemp(prefix="tab2tab_", suffix=".json")
+        os.close(out_fd)
 
     # For multi_column/unionable, query must be a CSV path.
     temp_query_csv_path: Optional[str] = None
@@ -123,7 +131,7 @@ def _run_blend_tab2tab_subprocess(
         raise ValueError(f"Unexpected Blend_internal output JSON format: {payload!r}")
     finally:
         try:
-            if os.path.exists(out_path):
+            if not output_json and os.path.exists(out_path):
                 os.remove(out_path)
         except Exception:
             pass
@@ -163,6 +171,7 @@ def search_table2table(
     search_type: str = "single_column",
     k: int = 10,
     db_path: Optional[str] = None,
+    output_json: Optional[str] = None,
 ) -> List[int]:
     """
     Unified interface for the 4 supported table-to-table search types.
@@ -171,19 +180,43 @@ def search_table2table(
     if search_type == "single_column":
         if not isinstance(query, (list, tuple, pd.Series)):
             raise ValueError("For single_column search, query must be an iterable of values")
-        return search_single_column(query, k, db_path=db_path)
+        return _run_blend_tab2tab_subprocess(
+            search_type="single_column",
+            query=list(query),
+            k=k,
+            db_path=db_path,
+            output_json=output_json,
+        )
     if search_type == "multi_column":
         if not isinstance(query, pd.DataFrame):
             raise ValueError("For multi_column search, query must be a pandas DataFrame")
-        return search_multi_column(query, k, db_path=db_path)
+        return _run_blend_tab2tab_subprocess(
+            search_type="multi_column",
+            query=query,
+            k=k,
+            db_path=db_path,
+            output_json=output_json,
+        )
     if search_type == "keyword":
         if not isinstance(query, list) or not all(isinstance(x, str) for x in query):
             raise ValueError("For keyword search, query must be a list of strings")
-        return search_keyword(query, k, db_path=db_path)
+        return _run_blend_tab2tab_subprocess(
+            search_type="keyword",
+            query=list(query),
+            k=k,
+            db_path=db_path,
+            output_json=output_json,
+        )
     if search_type == "unionable":
         if not isinstance(query, pd.DataFrame):
             raise ValueError("For unionable search, query must be a pandas DataFrame")
-        return search_unionable(query, k, db_path=db_path)
+        return _run_blend_tab2tab_subprocess(
+            search_type="unionable",
+            query=query,
+            k=k,
+            db_path=db_path,
+            output_json=output_json,
+        )
     raise ValueError("Unknown search_type: must be 'single_column', 'multi_column', 'keyword', or 'unionable'")
 
 
@@ -197,6 +230,7 @@ def main() -> None:
     parser.add_argument("--search_type", choices=["single_column", "multi_column", "keyword", "unionable"], required=True)
     parser.add_argument("--query", default=None, required=True, help="CSV path for multi_column/unionable, comma-separated values for others.")
     parser.add_argument("--k", type=int, default=10)
+    parser.add_argument("--output_json", default=None, help="Optional output json path to write Blend_internal results.")
     args = parser.parse_args()
 
     if args.search_type in ("single_column", "keyword"):
@@ -205,7 +239,7 @@ def main() -> None:
         query = pd.read_csv(args.query)
 
     start = __import__("time").time()
-    results = search_table2table(query, args.search_type, args.k)
+    results = search_table2table(query, args.search_type, args.k, output_json=args.output_json)
     print(f"Found {len(results)} tables: {results}")
     print(f"Total time: {__import__('time').time() - start:.2f}s")
 
