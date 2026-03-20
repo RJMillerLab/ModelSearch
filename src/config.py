@@ -21,7 +21,7 @@ DATA_TAG = "_251117"
 V2_SUFFIX = "_v2"
 
 # --- modellake.db ---
-MODELLAKE_DB = os.path.join('../Blend_internal', "modellake_v2_251117.db")
+MODELLAKE_DB = os.path.join('../Blend_internal/database_251117', "modellake_v2_251117.db")
 INDEX_TABLE = "modellake_index"
 
 DEDUPED_HUGGING_CSVS =  os.path.join(PROCESSED_DIR, f"deduped_hugging_csvs{V2_SUFFIX}{DATA_TAG}")
