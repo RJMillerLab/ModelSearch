@@ -249,7 +249,7 @@ def load_modelid_to_csvlist(model_id: str) -> List[str]:
     """
     return _get_models_to_tables_batch_sql([model_id]).get(model_id, [])
 
-def _load_modelid_to_csv_expand() -> pd.DataFrame:
+def _load_modelid_to_csv_expand(resources: Optional[List[str]] = None) -> pd.DataFrame:
     """
     Default: load from RELATIONSHIP_PARQUET, Output: DataFrame with columns: modelId, csv_basename
 
@@ -263,23 +263,49 @@ def _load_modelid_to_csv_expand() -> pd.DataFrame:
     Deprecated: so slow, each time generate an intermediate dataframe
     """
     parquet_path = RELATIONSHIP_PARQUET
-    sql = """
-    SELECT DISTINCT
-        modelId,
-        regexp_extract(csv_path, '[^/]+$') AS csv_basename
-    FROM read_parquet(?),
-    UNNEST(
-        list_concat(
-            coalesce(hugging_table_list_dedup, []),
-            coalesce(github_table_list_dedup, []),
-            coalesce(html_table_list_mapped_dedup, []),
-            coalesce(llm_table_list_mapped_dedup, [])
-        )
-    ) AS t(csv_path)
-    WHERE csv_path IS NOT NULL
+    # Backward compatible default: union all 4 source list columns.
+    selected_cols: List[str]
+    if not resources:
+        selected_cols = [
+            "hugging_table_list_dedup",
+            "github_table_list_dedup",
+            "html_table_list_mapped_dedup",
+            "llm_table_list_mapped_dedup",
+        ]
+    else:
+        # Normalize labels to the same output values as `classify_resource()`.
+        # Supported: github|hugging|arxiv|llm (unknown labels will not match any column).
+        normalized = _normalize_allowed_resource_labels(resources)
+        col_map = {
+            "hugging": "hugging_table_list_dedup",
+            "github": "github_table_list_dedup",
+            "arxiv": "html_table_list_mapped_dedup",
+            "llm": "llm_table_list_mapped_dedup",
+        }
+        selected_cols = [col_map[k] for k in ["hugging", "github", "arxiv", "llm"] if k in normalized and k in col_map]
+        if not selected_cols:
+            # Nothing matched -> empty DataFrame
+            return pd.DataFrame({"modelId": [], "csv_basename": []})
+
+    if len(selected_cols) == 1:
+        unnest_expr = f"UNNEST(coalesce({selected_cols[0]}, [])) AS t(csv_path)"
+    else:
+        parts = ", ".join(f"coalesce({c}, [])" for c in selected_cols)
+        unnest_expr = f"UNNEST(list_concat({parts})) AS t(csv_path)"
+
+    sql = f"""
+        SELECT DISTINCT
+            modelId,
+            regexp_extract(csv_path, '[^/]+$') AS csv_basename
+        FROM read_parquet(?),
+        {unnest_expr}
+        WHERE csv_path IS NOT NULL
     """
     con = duckdb.connect()
-    return con.execute(sql, [parquet_path]).df()
+    try:
+        return con.execute(sql, [parquet_path]).df()
+    finally:
+        con.close()
 
 
 def resolve_table_path(csv_path: str) -> Optional[str]:

@@ -3,35 +3,24 @@
 **Paths:** Data paths (ModelTables/data, modellake.db, processed dirs, relationship parquet) are defined in `src.config`. Override with env: `MODELTABLES_DATA` or `DATA_ROOT`, `MODELLAKE_DB`, `DATA_TAG`. Examples below use config defaults.
 
 **Part 1** = index building (run once). **Part 2** = inference (retrieval, table search, demo). When a step has multiple modes, run all and save to separate log/json.
-
----
-
-# Preprocessing vs inference (what to run once vs per query)
-
-| Phase | What | When |
-|-------|------|------|
-| **Preprocessing (run once)** | **Build modelcard index** — encode full corpus → `.npz` + `.faiss`. | Before query2modelcard / card2card. |
-| | **Build sparse index** — Pyserini Lucene BM25 → `data/card2card_sparse_index` (1.1b). | Train once; inference then only loads index. |
-| | **Blend + data** — clone/symlink Blend_internal and data dirs. | Once per env. |
-| | **Valid model IDs txt** — `scripts/build_valid_model_ids_txt.py` → `data/valid_model_ids_with_tables.txt`. | Optional; before demo “Narrow down” (seed with tables). |
-| | **DuckDB table index** — `create_index_duckdb` → `data/modellake.db` with `modellake_index`. | Before card2tab2card, tab2tab, tab2tab_by_type. |
-| | **Table classification (batch)** — `classification --mode batch` → `data/table_classifications.json`. Uses **tab2know inference** per table (tab2know’s own “training” is in TabKnow repo; we only run its pretrained type/column models here). | Once; required only for **by_type** flows (card2tab2card by_type, tab2tab_by_type). |
-| | **Baseline2** — mapping scripts + pyserini Lucene index (`data/tmp/index`). | Before baseline2 search. |
-| | **Baseline3** — build dense index. | Before baseline3 hybrid search. |
-| **Inference (per query / serving)** | query2modelcard, card2card search, card2tab2card, tab2tab, tab2tab_by_type, demo backend, generate_md_from_logs. | They **only load** prebuilt artifacts (faiss, npz, jsonl, modellake.db, table_classifications.json). No index build, no batch classification. |
-
-**Making inference fast:** Run Part 1 once (all steps you need for your flows). Then Part 2 is just loading those artifacts and running retrieval. Do **not** run build-index or classification batch at request time; keep them as one-off preprocessing.
-
----
-
 # Part 1 — Must run (in order)
+
+
+## 1.0 Valid model IDs for Table Search (optional; for demo “Narrow down”)
+
+Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
+
+```bash
+python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables.txt
+python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables_hugging.txt --resources hugging
+```
 
 ```bash
 git clone git@github.com:RJMillerLab/ModelTables.git
 # Install dependencies and download data, as remaining steps depend on it
 ```
 
-## 1.1 Modelcard index (dense)
+## 1.1 Modelcard index
 
 ```bash
 # build index for dense retrieval (FAISS) and sparse retrieval (Pyserini Lucene) from modelcard_step1.parquet
@@ -48,15 +37,8 @@ ln -s ../Blend_internal others/Blend_internal
 # create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117.db
 ```
 
-## 1.2b Valid model IDs for Table Search (optional; for demo “Narrow down”)
 
-Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
-
-```bash
-python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables.txt
-```
-
-## (Optional) 1.3 Table classification (optional; for by_type flows)
+<details><summary>(Optional) 1.3 Table classification (optional; for by_type flows)</summary>
 
 Train vs inference = explicit arg only, no fallback. Train = run below with `--mode batch`. Inference = run 2.3 by_type / 2.5 with `--classification_json data/table_classifications.json`. Same `--db_path` for 1.4 and 2.3/2.5.
 
@@ -66,6 +48,8 @@ python -m src.search.classification --mode batch --output_json data/table_classi
 # heuristic if tab2know fails
 python -m src.search.classification --mode batch --output_json data/table_classifications.json --method heuristic
 ```
+
+</details>
 
 ---
 
@@ -97,6 +81,8 @@ python -m src.search.card2card search --model_ids_file data_251117/card2card_mod
 
 ## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable)
 
+<details><summary>2.3 tab2tab commands (expand to see all modes)</summary>
+
 Paths from `src.config`. Keyword = match column names; single_column = cell values; multi_column/unionable = CSV path.
 
 ```bash
@@ -107,6 +93,8 @@ python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/data
 python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 > logs/tab2tab_unionable.log 2>&1
 ```
 They are wrapped in below scripts.
+
+</details>
 
 ```bash
 python -m src.search.tab2tab --search_type keyword --query "model_name,accuracy,task" --k 10 --output_json results/tab2tab_keyword.json > logs/tab2tab_keyword.log 2>&1
@@ -124,6 +112,7 @@ python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --se
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type unionable --k 10 > logs/card2tab2card_unionable.log 2>&1
 ```
 
+<details><summary>Optional 2.5 tab2tab_by_type</summary>
 ## (Optional) 2.5 tab2tab_by_type (test all modes; needs 1.3) (deprecated)
 
 Same modes as tab2tab, filtered by table type. Paths from `src.config`. **--query** = table ID or CSV path.
@@ -134,6 +123,8 @@ python -m src.search.tab2tab_by_type --query 3690 --classification_json data/tab
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type multi_column --k 10 --output_json data/tab2tab_by_type_multi_column_results.json > logs/tab2tab_by_type_multi_column.log 2>&1
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --output_json data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1 
 ```
+
+</details>
 
 If **multi_column** fails with `Scalar Function with name to_bitstring does not exist`: DuckDB version mismatch. In **Blend_internal** edit `src/Blend_internal/src/Operators/Seekers/MultiColumnOverlap.py` and replace `TO_BITSTRING(super_key)` with `to_binary(super_key)` (or the bitstring function your DuckDB provides). Then re-run.
 

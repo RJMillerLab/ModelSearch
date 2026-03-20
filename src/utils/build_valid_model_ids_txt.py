@@ -20,10 +20,11 @@ from src.utils import _load_modelid_to_csv_expand
 
 def main():
     parser = argparse.ArgumentParser(description="Extract model IDs that have tables from relationship parquet → one model_id per line.")
+    parser.add_argument("--resources", nargs="+", default=["hugging", "github", "arxiv"], choices=["hugging", "github", "arxiv", "llm"], help="Resource labels to select from relationship parquet (e.g. hugging, github, arxiv, llm).")
     parser.add_argument("--output", required=True, help="Output txt path (e.g. data/valid_model_ids_with_tables.txt)")
     args = parser.parse_args()
 
-    rel = _load_modelid_to_csv_expand()
+    rel = _load_modelid_to_csv_expand(args.resources)
     valid_ids = sorted(rel["modelId"].dropna().astype(str).str.strip().unique())
     valid_ids = [mid for mid in valid_ids if mid]
 
