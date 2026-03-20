@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
+from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON
 
 def _sanitize_for_json(obj: Any) -> Any:
     """Replace float('nan') with None so JSON serialization produces null."""
@@ -24,7 +25,6 @@ def _sanitize_for_json(obj: Any) -> Any:
     return obj
 
 # Paths from config.py (relative to repo root)
-from src.config import PRESET_QUERIES_PATH, REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON
 
 def _generate_job_id() -> str:
     """Generate human-readable job ID: YYYY-MM-DD_HH-MM-SS_xxxx (time + 4-char suffix for uniqueness)."""
@@ -176,7 +176,6 @@ def _write_json_job(job_id: str, filename: str, data: Dict):
 # Valid model IDs (have tables): built by scripts/build_valid_model_ids_txt.py (Part 1); inference only loads
 def _get_valid_modelids_with_tables() -> set:
     """Cached set of model_id that have tables. Fast O(1) lookup; loads from txt once per backend lifetime."""
-    from src.config import VALID_MODEL_IDS_TXT
     with open(VALID_MODEL_IDS_TXT, "r", encoding="utf-8") as f:
         return {line.strip() for line in f if line.strip()}
 
