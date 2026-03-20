@@ -52,7 +52,7 @@ SPARSE_INDEX                              = os.path.join(OUTPUT_DIR, "card2card_
 CARD2CARD_CORPUS_JSONL                    = os.path.join(OUTPUT_DIR, "card2card_corpus.jsonl")
 CARD2CARD_SPARSE_CORPUS                   = os.path.join(OUTPUT_DIR, "card2card_sparse_corpus")
 CARD2CARD_NEIGHBORS_JSON                  = os.path.join(OUTPUT_DIR, "card2card_neighbors.json")
-MODEL_CSVS_PARQUET                        = os.path.join(OUTPUT_DIR, "model_csvs.parquet")
+#MODEL_CSVS_PARQUET                        = os.path.join(OUTPUT_DIR, "model_csvs.parquet")
 
 PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
 

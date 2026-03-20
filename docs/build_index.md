@@ -105,17 +105,15 @@ python -m src.search.tab2tab --search_type multi_column --query "$(python script
 python -m src.search.tab2tab --search_type unionable --query "$(python scripts/get_config_paths.py sample_csv)" --k 10 > logs/tab2tab_unionable.log 2>&1
 ```
 
-## 2.4 card2tab2card (keyword, all, by_type)
-
-Paths (db, relationship parquet, classification JSON, output) from `src.config`. Only `--model_id`, `--query` (for mode=all), `--search_type`, `--k`, `--mode` are passed.
+## 2.4 card2tab2card (keyword, single_column, unionable)
 
 ```bash
 python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword.log 2>&1
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode all --query ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0000e35dae_table1.csv > logs/card2tab2card_all.log 2>&1
-python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --mode by_type > logs/card2tab2card_by_type.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type single_column --k 10 > logs/card2tab2card_single_column.log 2>&1
+python -m src.search.card2tab2card --model_id google-bert/bert-base-uncased --search_type unionable --k 10 > logs/card2tab2card_unionable.log 2>&1
 ```
 
-## (Optional) 2.5 tab2tab_by_type (test all modes; needs 1.3)
+## (Optional) 2.5 tab2tab_by_type (test all modes; needs 1.3) (deprecated)
 
 Same modes as tab2tab, filtered by table type. Paths from `src.config`. **--query** = table ID or CSV path.
 
@@ -166,7 +164,7 @@ python -m src.demo.frontend
 | **Part 2** | |
 | query2modelcard | query2modelcard --query "..." --top_k 20 |
 | card2card | search --retrieval_mode dense \| sparse \| hybrid (test all 3) |
-| card2tab2card | --search_type keyword, --mode all, --mode by_type (test all) |
+| card2tab2card | --search_type keyword/single_column/unionable (simplified) |
 | tab2tab | --search_type keyword \| single_column \| multi_column \| unionable (test all 4) |
 | tab2tab_by_type | same 4 search_type with --classification_json (test all 4) |
 | Generate table MD | `python -m src.postprocess.generate_table_md` (--table_ids / --model_id); `generate_md_from_logs` for logs → md/ |

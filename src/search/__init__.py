@@ -26,8 +26,6 @@ from src.search.query2modelcard import search_query2modelcard
 from src.search.card2tab2card import (
     load_modelid_to_csvlist,
     search_card2tab2card,
-    search_card2tab2card_from_tables,
-    search_card2tab2card_by_type,
 )
 from src.search.classification import (
     classify_table,
@@ -37,7 +35,6 @@ from src.search.classification import (
     get_known_classes,
     infer_classification_method,
 )
-from src.search.tab2tab_by_type import search_table2table_by_type
 
 # Lazy import for tab2tab functions to avoid DBHandler initialization
 _tab2tab_module = None
@@ -73,14 +70,10 @@ __all__ = [
     'search_multi_column',
     'search_keyword',
     'search_table2table',
-    'search_table2table_by_type',
     # query2modelcard
     'search_query2modelcard',
     # card2tab2card
-    'get_tables_for_model',
     'search_card2tab2card',
-    'search_card2tab2card_from_tables',
-    'search_card2tab2card_by_type',
     # classification
     'classify_table',
     'classify_table_from_db',

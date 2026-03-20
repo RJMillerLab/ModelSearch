@@ -6,7 +6,7 @@ All job outputs (search results, integration, evaluation, QA) go under data/jobs
 Minimal imports for fast startup.
 """
 
-import os, sys, json, random, string, threading, subprocess, time, math, re, numpy as np, pandas as pd
+import os, sys, json, random, string, threading, subprocess, time, math, re, shutil, numpy as np, pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
@@ -24,7 +24,7 @@ def _sanitize_for_json(obj: Any) -> Any:
     return obj
 
 # Paths from config.py (relative to repo root)
-from src.config import EMB_NPZ, FAISS_INDEX, SPARSE_INDEX, PRESET_QUERIES_PATH, REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES
+from src.config import EMB_NPZ, FAISS_INDEX, SPARSE_INDEX, PRESET_QUERIES_PATH, REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON
 
 def _generate_job_id() -> str:
     """Generate human-readable job ID: YYYY-MM-DD_HH-MM-SS_xxxx (time + 4-char suffix for uniqueness)."""
@@ -361,7 +361,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
-        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--search_type", st, "--k", str(k_table), "--modelcard_k", "0", "--no_citationlake", "--output_json", out_path]
+        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--search_type", st, "--k", str(k_table), "--output_json", out_path]
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -372,13 +372,19 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         """Run card2tab2card with --mode by_type (table type classification). Paths from src.config."""
         st = "by_type"
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
-        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card.py")
+        # card2tab2card.py (simplified) does not support --mode=by_type; use the legacy implementation.
+        c2t2c_script = os.path.join(REPO_ROOT, "src", "search", "card2tab2card_depre.py")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--mode", "by_type", "--search_type", "keyword", "--k", str(k_table), "--modelcard_k", "0", "--no_citationlake", "--output_json", out_path]
+        # NOTE: card2tab2card_depre.py does not expose --output_json; it writes to CARD2TAB2CARD_OUTPUT_JSON.
+        cmd = [sys.executable, c2t2c_script, "--model_id", model_id, "--mode", "by_type", "--search_type", "keyword", "--k", str(k_table), "--modelcard_k", "0"]
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
+        # Copy global output to job_dir so downstream uses a stable per-job path.
+        if os.path.exists(CARD2TAB2CARD_OUTPUT_JSON):
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            shutil.copyfile(CARD2TAB2CARD_OUTPUT_JSON, out_path)
         logger.log_cmd("Card2Tab2Card-by_type", cmd, out_path, elapsed, rc)
         return (st, rc, out_path, out, err, elapsed)
 
