@@ -53,7 +53,7 @@ ln -s ../Blend_internal others/Blend_internal
 Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
 
 ```bash
-python -m src.utils.build_valid_model_ids_txt --output data/valid_model_ids_with_tables.txt
+python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables.txt
 ```
 
 ## (Optional) 1.3 Table classification (optional; for by_type flows)

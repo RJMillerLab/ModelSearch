@@ -25,7 +25,7 @@ def main():
 
     rel = _load_modelid_to_csv_expand()
     valid_ids = sorted(rel["modelId"].dropna().astype(str).str.strip().unique())
-    valid_ids = [mid for m in valid_ids if mid]
+    valid_ids = [mid for mid in valid_ids if mid]
 
     out_abs = os.path.abspath(args.output)
     out_dir = os.path.dirname(out_abs)
