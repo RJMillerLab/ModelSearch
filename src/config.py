@@ -37,7 +37,7 @@ RELATIONSHIP_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step3_dedup{V2_SU
 
 # --- Output / artifact paths (single source: change here only) ---
 # Default outputs go to ModelSearchDemo/data rather than ../ModelTables/data.
-OUTPUT_DIR = str(REPO_ROOT / "data")
+OUTPUT_DIR = str(REPO_ROOT / f"data{DATA_TAG}")
 # Repo-local outputs (e.g. card2card build-index, search results, temp artifacts)
 CLASSIFICATION_JSON                       = os.path.join(OUTPUT_DIR, "table_classifications.json")
 SCHEMA_LOG                                = os.path.join("../ModelTables", "logs", "parquet_schema.log")
@@ -58,7 +58,7 @@ PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
 
 CARD2TAB2CARD_TIMEOUT = 600
 USE_BY_TYPE = False
-JOBS_DIR = os.path.join(OUTPUT_DIR, "jobs")
+JOBS_DIR = os.path.join(OUTPUT_DIR, f"jobs{DATA_TAG}")
 os.makedirs(JOBS_DIR, exist_ok=True)
 
 # --- Other repositories ---
@@ -69,7 +69,7 @@ CARD2CARD_MODES = ["dense", "sparse", "hybrid"]
 CARD2TAB2CARD_TYPES = ["keyword", "single_column", "unionable"]
 
 # --- Data Structures ---
-RESULT_DIR = os.path.join(OUTPUT_DIR, "results")
+RESULT_DIR = os.path.join(OUTPUT_DIR, f"results{DATA_TAG}")
 QUERY_RESULT_PATH = os.path.join(RESULT_DIR, "query_to_modelids.parquet")
 QUERY_TIME_PATH = os.path.join(RESULT_DIR, "past_time_queries.parquet")
 QUERY_MODEL_ID_PATH = os.path.join(RESULT_DIR, "model_to_modelids.parquet")
