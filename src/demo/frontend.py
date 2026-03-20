@@ -404,10 +404,18 @@ RAW_HTML_TEMPLATE = """
                 <div style="flex: 1; min-width: 200px;">
                     <label for="table_search_k">Per-table search k:</label>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="range" id="table_search_k_slider" min="1" max="5" value="1" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
-                        <input type="number" id="table_search_k" class="form-control" value="1" min="1" max="5" oninput="updateTableSearchKSlider(this.value)" style="width: 80px;">
+                        <input type="range" id="table_search_k_slider" min="1" max="5" value="3" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
+                        <input type="number" id="table_search_k" class="form-control" value="3" min="1" max="5" oninput="updateTableSearchKSlider(this.value)" style="width: 80px;">
                     </div>
                     <span style="font-size: 11px; color: #666;">Top k for each individual table search (1–5). Results merged, filtered, capped at 20 tables; models capped at 50.</span>
+                </div>
+                <div style="flex: 1; min-width: 200px;">
+                    <label for="model_top_k">Model top-k (adaptive rerank):</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="range" id="model_top_k_slider" min="1" max="20" value="5" step="1" style="flex: 1; max-width: 200px;" oninput="updateModelTopKValue(this.value)">
+                        <input type="number" id="model_top_k" class="form-control" value="5" min="1" max="20" oninput="updateModelTopKSlider(this.value)" style="width: 80px;">
+                    </div>
+                    <span style="font-size: 11px; color: #666;">Default 5. If Card2Tab2Card returns more than this, we rerank with dense.</span>
                 </div>
                 <div>
                     <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>

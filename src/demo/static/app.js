@@ -72,9 +72,24 @@
             if (num) num.value = value;
             if (slider) slider.value = value;
         }
+        function updateModelTopKValue(value) {
+            const num = document.getElementById('model_top_k');
+            const slider = document.getElementById('model_top_k_slider');
+            if (num) num.value = value;
+            if (slider) slider.value = value;
+        }
         function updateTableSearchKSlider(value) {
             const slider = document.getElementById('table_search_k_slider');
             const num = document.getElementById('table_search_k');
+            const v = parseInt(value, 10);
+            if (slider && num && v >= parseInt(slider.min) && v <= parseInt(slider.max)) {
+                slider.value = v;
+                num.value = v;
+            }
+        }
+        function updateModelTopKSlider(value) {
+            const slider = document.getElementById('model_top_k_slider');
+            const num = document.getElementById('model_top_k');
             const v = parseInt(value, 10);
             if (slider && num && v >= parseInt(slider.min) && v <= parseInt(slider.max)) {
                 slider.value = v;
@@ -400,6 +415,7 @@
             const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt((document.getElementById('top_k') || {}).value, 10) || 100;  // Left aligns to right; high default
             const tableSearchK = parseInt(document.getElementById('table_search_k').value, 10) || 1;
+            const modelTopK = parseInt((document.getElementById('model_top_k') || {}).value, 10) || 5;
             // Table retrieval: always run search (no load-from-JSON option)
             const tab2tabMode = 'search';
             // One-click: always run all; primary display uses dense
@@ -430,6 +446,7 @@
                     top_k: topK,
                     tab2tab_mode: 'search',
                     table_search_k: tableSearchK,
+                    model_top_k: modelTopK,
                     card2card_retrieval_mode: card2cardRetrievalMode,
                 };
                 
@@ -829,16 +846,16 @@
             const integrationTitleStyle = 'margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;';
             const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
             const defaultIntegrationK = results.table_search_k || 10;
-            const defaultIntegrationMaxModels = results.top_k || 10;
+            const defaultIntegrationMaxModels = results.model_top_k || 5;
             html += `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 16px;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Model Search and Table Search are saved separately. Switch via dropdowns to view different saved results. <strong>Integrated</strong> runs the current combination; <strong>Run all (Table Search)</strong> precomputes all table search types in parallel.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                            <option value="alite">ALITE</option>
                             <option value="union">Union</option>
                             <option value="intersection">Intersection</option>
-                            <option value="alite">ALITE</option>
                             <option value="outer_join">Outer Join</option>
                         </select></div>
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
@@ -1470,7 +1487,7 @@
             const tablesSource = 'intermediate';
             const btn = document.getElementById('integrationRunAllTableBtn');
             if (!btn) return;
-            const integrationTypes = ['union', 'intersection', 'alite', 'outer_join'];
+            const integrationTypes = ['alite', 'union', 'intersection', 'outer_join'];
             const modelModes = ['dense', 'sparse', 'hybrid'];
             const tableSearchTypes = ['single_column','keyword','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'];
             btn.disabled = true;

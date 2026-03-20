@@ -179,7 +179,7 @@ def _get_valid_modelids_with_tables() -> set:
     with open(VALID_MODEL_IDS_TXT, "r", encoding="utf-8") as f:
         return {line.strip() for line in f if line.strip()}
 
-def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None, tab2tab_mode: str = "search", tab2tab_json: Optional[str] = None, card2card_retrieval_mode: str = "dense", require_seed_has_tables: bool = False, use_by_type: bool = False):
+def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 20, model_id: Optional[str] = None, table_search_k: Optional[int] = None, tab2tab_mode: str = "search", tab2tab_json: Optional[str] = None, card2card_retrieval_mode: str = "dense", require_seed_has_tables: bool = False, use_by_type: bool = False, model_top_k: int = 5):
     """Run pipeline by calling CLI commands (build_index.md). All outputs under job_dir."""
     logger = jobs.get(job_id)
     if not logger:
@@ -197,14 +197,14 @@ def run_search_pipeline(job_id: str, query: Optional[str] = None, top_k: int = 2
         logger.set_results(d)
 
     try:
-        _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type)
+        _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k=model_top_k)
     except Exception as e:
         logger.log(f"Pipeline crashed: {e}")
         _set_pipeline_error(f"Pipeline error: {e}", model_id)
         import traceback
         logger.log(traceback.format_exc())
 
-def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], tab2tab_mode: str, tab2tab_json: Optional[str], card2card_retrieval_mode: str, require_seed_has_tables: bool = False, use_by_type: bool = False):
+def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], tab2tab_mode: str, tab2tab_json: Optional[str], card2card_retrieval_mode: str, require_seed_has_tables: bool = False, use_by_type: bool = False, *, model_top_k: int = 5):
     # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
@@ -219,7 +219,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     else:
         logger.log(f"Model ID: {model_id}")
     logger.log(
-        f"Run settings: top_k={top_k}, per_table_search_k={table_search_k or 1}, "
+        f"Run settings: top_k={top_k}, model_top_k={model_top_k}, per_table_search_k={table_search_k or 1}, "
         f"card2card={card2card_retrieval_mode}, "
         f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}, "
         f"require_seed_has_tables={require_seed_has_tables}"
@@ -557,18 +557,33 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             "Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
         )
 
-    # Right pipeline max: take max model count across all card2tab2card types
-    max_right = 0
-    for st, data in card2tab2card_all.items():
-        if isinstance(data, dict) and "model_ids" in data:
-            max_right = max(max_right, len(data.get("model_ids", [])))
+    # Adaptive model-topk:
+    # - Card2Card: cap by model_top_k (left side ordering preserved)
+    # - Card2Tab2Card: if model_ids > model_top_k, rerank candidates by Card2Card dense order.
+    dense_order = card2card_all.get("dense") if isinstance(card2card_all.get("dense"), list) else []
+    rank_map = {mid: i for i, mid in enumerate(dense_order)}
 
-    # Align left (Card2Card) to right's max: truncate each mode to max_right
+    # Rerank/cap right side (Card2Tab2Card)
+    for st, payload in card2tab2card_all.items():
+        if not isinstance(payload, dict):
+            continue
+        mids = payload.get("model_ids", [])
+        if not isinstance(mids, list):
+            continue
+        if len(mids) > model_top_k:
+            big = len(rank_map) + 100000
+            reranked = sorted(mids, key=lambda mid: rank_map.get(mid, big))
+            payload["model_ids"] = reranked[:model_top_k]
+            logger.log(f"[Card2Tab2Card-{st}] Adaptive rerank: {len(mids)} -> {model_top_k} (dense order)")
+        elif len(mids) > model_top_k:
+            payload["model_ids"] = mids[:model_top_k]
+
+    # Cap left side (Card2Card)
     for mode in card2card_modes:
         val = card2card_all.get(mode)
-        if isinstance(val, list) and len(val) > max_right and max_right > 0:
-            card2card_all[mode] = val[:max_right]
-            logger.log(f"[Card2Card-{mode.upper()}] Truncated to {max_right} (align to right pipeline max)")
+        if isinstance(val, list) and len(val) > model_top_k:
+            card2card_all[mode] = val[:model_top_k]
+            logger.log(f"[Card2Card-{mode.upper()}] Truncated to model_top_k={model_top_k}")
 
     # Primary Card2Card list is strictly the configured retrieval_mode ("dense" by default).
     # If that mode failed or produced no usable list, do not silently fall back to another mode.
@@ -580,7 +595,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     elapsed_total = time.time() - start_time
     logger.log(f"Step 3: Done. Total time: {elapsed_total:.2f}s")
 
-    results_data = {"job_id": job_id, "query": query, "model_id": model_id, "top_k": top_k, "table_search_k": k_table, "card2card_retrieval_mode": card2card_retrieval_mode, "use_by_type": use_by_type, "require_seed_has_tables": require_seed_has_tables, "card2card_results": primary, "card2card_all_modes": card2card_all, "card2tab2card_results": card2tab2card_all, "timestamp": datetime.fromtimestamp(start_time).isoformat(), "folder_path": job_dir, "run_log_path": run_log_path, "running_time_seconds": round(elapsed_total, 3)}
+    results_data = {"job_id": job_id, "query": query, "model_id": model_id, "top_k": top_k, "model_top_k": model_top_k, "table_search_k": k_table, "card2card_retrieval_mode": card2card_retrieval_mode, "use_by_type": use_by_type, "require_seed_has_tables": require_seed_has_tables, "card2card_results": primary, "card2card_all_modes": card2card_all, "card2tab2card_results": card2tab2card_all, "timestamp": datetime.fromtimestamp(start_time).isoformat(), "folder_path": job_dir, "run_log_path": run_log_path, "running_time_seconds": round(elapsed_total, 3)}
     if table_search_empty_reason:
         results_data["table_search_reason"] = table_search_empty_reason
 
@@ -669,6 +684,7 @@ def search():
     mode = data.get("mode", "query")
     top_k = int(data.get("top_k", 20))
     table_search_k = data.get("table_search_k")
+    model_top_k = int(data.get("model_top_k", 5))
     tab2tab_mode = data.get("tab2tab_mode", "search")
     tab2tab_json = data.get("tab2tab_json")
     card2card_retrieval_mode = data.get("card2card_retrieval_mode", "dense")
@@ -695,7 +711,7 @@ def search():
     jobs[job_id] = JobLogger(job_id)
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type),
+        args=(job_id, query, top_k, model_id, table_search_k, tab2tab_mode, tab2tab_json, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
     )
     thread.daemon = True
     thread.start()
@@ -827,7 +843,7 @@ def list_saved_searches():
     searches = []
     for name, path, _ in candidates[:50]:
         json_path = os.path.join(path, "search_results.json")
-        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "use_by_type": False, "require_seed_has_tables": False, "card2card_retrieval_mode": None, "table_search_k": None}
+        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "model_top_k": None, "use_by_type": False, "require_seed_has_tables": False, "card2card_retrieval_mode": None, "table_search_k": None}
         with open(json_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
         entry["query"] = saved.get("query") or ""
@@ -837,6 +853,7 @@ def list_saved_searches():
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             entry["timestamp_str"] = dt.strftime("%Y-%m-%d %H:%M")
         entry["top_k"] = saved.get("top_k")
+        entry["model_top_k"] = saved.get("model_top_k")
         entry["use_by_type"] = bool(saved.get("use_by_type", False))
         entry["require_seed_has_tables"] = bool(saved.get("require_seed_has_tables", False))
         entry["card2card_retrieval_mode"] = saved.get("card2card_retrieval_mode")
