@@ -30,7 +30,7 @@ TABLES_OUTPUT = os.path.join(PROCESSED_DIR, f"tables_output{V2_SUFFIX}{DATA_TAG}
 TABLE_BASE_DIRS = [DEDUPED_HUGGING_CSVS, DEDUPED_GITHUB_CSVS, TABLES_OUTPUT]
 
 # --- Model card text (step1) — used for card_readme dense index build ---
-MODELCARD_STEP1_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step1{V2_SUFFIX}{DATA_TAG}.parquet")
+MODELCARD_STEP1_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step1{DATA_TAG}.parquet")
 
 # --- Relationship parquet (model–table mapping) ---
 RELATIONSHIP_PARQUET = os.path.join(PROCESSED_DIR, f"modelcard_step3_dedup{V2_SUFFIX}{DATA_TAG}.parquet")
