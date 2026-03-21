@@ -581,6 +581,11 @@
             const errorBlock = results.error
                 ? `<div style="padding: 12px; margin-bottom: 15px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px;"><strong>❌ Pipeline error:</strong> ${results.error}</div>`
                 : '';
+            const escapeHtml = (s) => String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
             // Seed model + Query tables: same row, two columns (aligned with the two result cards below)
             const seedModelId = results.model_id || null;
             const headerStyle = 'font-size: 12px; color: #666;';
@@ -629,6 +634,12 @@
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
             </div>${runLogRow}`;
+
+            const queryLine = results.query
+                ? `<div style="margin: 0 0 10px 0; padding: 8px 12px; font-size: 12px; color: #495057; background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px;">
+                    <strong>Query:</strong> <span style="font-family: monospace;">${escapeHtml(results.query)}</span>
+                </div>`
+                : '';
             
             // Helper function to format model display (handle both string and object formats)
             function formatModel(model) {
@@ -662,6 +673,7 @@
             let html = `
                 ${errorBlock}
                 ${headerRowHtml}
+                ${queryLine}
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">
