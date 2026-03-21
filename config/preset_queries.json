@@ -1,49 +1,29 @@
 {
   "queries": [
     {
-      "id": "transformer_code",
-      "title": "Transformer model for code generation",
-      "query": "transformer model for code generation"
-    },
-    {
-      "id": "nlp_classification",
-      "title": "NLP classification model",
-      "query": "natural language processing classification model"
-    },
-    {
-      "id": "vision_transformer",
-      "title": "Vision transformer model",
-      "query": "vision transformer image classification"
-    },
-    {
-      "id": "language_model",
-      "title": "Large language model",
-      "query": "large language model text generation"
-    },
-    {
-      "id": "code_completion",
-      "title": "Code completion model",
-      "query": "code completion programming assistant"
-    },
-    {
-      "id": "paper_with_code_benchmark",
-      "title": "Paper with Code benchmark comparison",
-      "query": "For task of text-to-SQL, which models have the most complete and comparable benchmark results (same datasets/metrics) so I can compare them fairly?"
+      "id": "performance_on_specific_dataset",
+      "title": "Performance on specific dataset",
+      "query": "Which models achieve the best performance on the Spider benchmark for text-to-SQL?"
     },
     {
       "id": "resource_constrained_code_gen",
-      "title": "Resource-constrained code generation (32B limit)",
-      "query": "I have one server that can run up to a 32B model. For the task of code generation, which models give the best quality under this size limit?"
+      "title": "Resource-constrained code generation (4-bit quantization)",
+      "query": "Which code generation models maintain strong accuracy under 4-bit quantization?"
     },
     {
-      "id": "customer_support_chat_safety",
-      "title": "Customer support chat (helpfulness + safety)",
-      "query": "I need a model for customer-support chat. Which models are strong on helpfulness but also show low toxicity or safer behavior in reported evaluations?"
+      "id": "image_gen_affect",
+      "title": "Image generation affect",
+      "query": "Which text-to-image models can generate anime-style images?"
     },
     {
-      "id": "quantization_accuracy",
-      "title": "Quantization accuracy (4-bit)",
-      "query": "I'm deploying with 4-bit quantization. Which models keep strong accuracy after quantization, and what benchmarks show the drop?"
+      "id": "cross-domain_finetuning",
+      "title": "cross-domain_finetuning",
+      "query": "Which models are suitable for fine-tuning question answering on legal documents?"
+    },
+    {
+      "id": "table_foundation_model_for_missing_values",
+      "title": "table_foundation_model_for_missing_values",
+      "query": "Are there table foundation models that can handle small tables (≤100 rows/columns) with many missing values and produce column embeddings?"
     }
   ]
 }
