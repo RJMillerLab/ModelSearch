@@ -1223,10 +1223,10 @@
             const buildTableHtml = () => {
                 return `<table style="width: max-content; border-collapse: collapse; font-size: 12px; margin: 0 auto;">
                     <thead><tr style="background: #f8f9fa;">
-                        ${t.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 8px; text-align: left; background: #f8f9fa; white-space: nowrap;">${col}</th>`).join('')}
+                        ${t.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 8px; text-align: left; background: #f8f9fa; white-space: nowrap;">${normalizeIntegrationText(col)}</th>`).join('')}
                     </tr></thead>
                     <tbody>
-                        ${t.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${cell != null && cell !== '' ? cell : ''}</td>`).join('')}</tr>`).join('')}
+                        ${t.data.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap;">${formatIntegrationCell(cell)}</td>`).join('')}</tr>`).join('')}
                     </tbody>
                 </table>`;
             };
@@ -1286,9 +1286,11 @@
                 let hasNum = true;
                 for (let r = 0; r < table.data.length; r++) {
                     const v = table.data[r][i];
-                    if (v != null && v !== '') {
+                    const vs = normalizeIntegrationText(v);
+                    const isNaNString = vs.trim().toLowerCase() === 'nan';
+                    if (vs !== '' && !isNaNString) {
                         nonNull++;
-                        if (hasNum && isNaN(Number(v))) hasNum = false;
+                        if (hasNum && isNaN(Number(vs))) hasNum = false;
                     }
                 }
                 const pct = totalRows ? (nonNull / totalRows * 100).toFixed(1) : '0';
@@ -1297,9 +1299,33 @@
                 return { col, nonNullPct, dtype };
             });
         }
+        function maybeFixMojibakeUtf8(s) {
+            if (!s || typeof s !== 'string') return s;
+            const likelyMojibake = /[ÃÂâãäå]/.test(s);
+            if (!likelyMojibake) return s;
+            for (let i = 0; i < s.length; i++) {
+                if (s.charCodeAt(i) > 255) return s;
+            }
+            try {
+                const bytes = new Uint8Array(s.length);
+                for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i) & 0xff;
+                const fixed = new TextDecoder('utf-8').decode(bytes);
+                const srcBad = (s.match(/[ÃÂâãäå]/g) || []).length;
+                const fixedBad = (fixed.match(/[ÃÂâãäå]/g) || []).length;
+                return fixedBad < srcBad ? fixed : s;
+            } catch (_) {
+                return s;
+            }
+        }
+        function normalizeIntegrationText(v) {
+            if (v == null || v === '') return '';
+            const asStr = String(v);
+            if (asStr.trim().toLowerCase() === 'nan') return '';
+            return maybeFixMojibakeUtf8(asStr);
+        }
         function formatIntegrationCell(cell) {
-            if (cell == null || cell === '') return '';
-            const asStr = String(cell);
+            const asStr = normalizeIntegrationText(cell);
+            if (asStr === '') return '';
             if (asStr.length > INTEGRATION_MAX_CELL_CHARS) {
                 return asStr.slice(0, INTEGRATION_MAX_CELL_CHARS - 1) + '…';
             }
@@ -1321,7 +1347,7 @@
             if (savedPath) footer.push(`<span style="font-size: 12px; color: #666;">Saved to: <code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${savedPath}</code></span>`);
             footer.push(`<button type="button" onclick="downloadIntegrationTableAsCsv('${downloadId}')" style="margin-left: 10px; padding: 6px 12px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">📥 Download full CSV (${totalRows} rows)</button>`);
             const infoRows = buildTableInfo(table);
-            const infoHeaderRow = '<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px;"> </th>' + infoRows.map(({ col }) => `<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px; white-space: nowrap;">${String(col)}</th>`).join('');
+            const infoHeaderRow = '<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px;"> </th>' + infoRows.map(({ col }) => `<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px; white-space: nowrap;">${normalizeIntegrationText(col)}</th>`).join('');
             const infoNonNullRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Non-Null %</td>' + infoRows.map(({ nonNullPct }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${nonNullPct}</td>`).join('');
             const infoDtypeRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Dtype</td>' + infoRows.map(({ dtype }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${dtype}</td>`).join('');
             let html = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
@@ -1332,7 +1358,7 @@
                     <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Showing first ${displayRows.length} rows; download CSV for full table">
                         <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
                             <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
-                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${col}</th>`).join('')}
+                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${normalizeIntegrationText(col)}</th>`).join('')}
                             </tr></thead>
                             <tbody>
                                 ${displayRows.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${formatIntegrationCell(cell)}</td>`).join('')}</tr>`).join('')}
@@ -1399,6 +1425,16 @@
                     const modelIds = modelRes.models_with_tables || [];
                     let extra = '';
                     if (modelIds.length > 0) {
+                        const modelToTables = modelRes.model_to_table_paths || {};
+                        const relatedTablesHtml = modelIds
+                            .map(m => {
+                                const paths = modelToTables[m] || [];
+                                const basenames = paths.map(p => String(p).split('/').pop());
+                                const shown = basenames.slice(0, 6).join(', ');
+                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
+                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
+                            })
+                            .join('');
                         const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
                         const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
                         const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : (table && table.data ? table.data.length : 0);
@@ -1410,6 +1446,10 @@
                                 </summary>
                                 <div style="margin-top: 6px; font-size: 11px;">
                                     <div><strong>Models:</strong> ${links}</div>
+                                    <div style="margin-top: 6px;">
+                                        <strong>Related tables:</strong>
+                                        ${relatedTablesHtml}
+                                    </div>
                                 </div>
                             </details>
                         </div>`;
@@ -1418,7 +1458,29 @@
                     }
                     leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                 } else {
-                    leftDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${modelRes.message || 'Integration failed'}</div>`;
+                    let debugHtml = '';
+                    if (modelRes.model_to_table_paths) {
+                        const mtp = modelRes.model_to_table_paths || {};
+                        const mids = (Array.isArray(modelRes.model_ids) && modelRes.model_ids.length) ? modelRes.model_ids : Object.keys(mtp);
+                        const relatedTablesHtml = mids
+                            .slice(0, 12)
+                            .map(m => {
+                                const paths = mtp[m] || [];
+                                const basenames = paths.map(p => String(p).split('/').pop());
+                                const shown = basenames.slice(0, 6).join(', ');
+                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
+                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
+                            })
+                            .join('');
+                        debugHtml = `<div style="margin-top: 10px; padding: 8px; border: 1px solid #f1b0b7; background: #fff6f7; border-radius: 4px;">
+                            <div style="font-size: 11px; color:#b02a37;"><strong>Debug: resolved related tables</strong> (first 12 models)</div>
+                            <div style="margin-top: 6px; font-size: 11px;">${relatedTablesHtml}</div>
+                        </div>`;
+                    }
+                    leftDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">
+                        ❌ ${modelRes.message || 'Integration failed'}
+                        ${debugHtml}
+                    </div>`;
                 }
                 initTablePanZoom(leftDiv);
 
@@ -1428,6 +1490,16 @@
                     let tableExtra = '';
                     const tableModelIds = tableRes.models_with_tables || [];
                     if (tableModelIds.length > 0) {
+                        const modelToTables = tableRes.model_to_table_paths || {};
+                        const relatedTablesHtml = tableModelIds
+                            .map(m => {
+                                const paths = modelToTables[m] || [];
+                                const basenames = paths.map(p => String(p).split('/').pop());
+                                const shown = basenames.slice(0, 6).join(', ');
+                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
+                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
+                            })
+                            .join('');
                         const links = tableModelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
                         const modelsCount = (tableRes.stats && tableRes.stats.models_with_tables != null) ? tableRes.stats.models_with_tables : tableModelIds.length;
                         const tablesCount = (tableRes.table_paths || []).length;
@@ -1439,6 +1511,10 @@
                                 </summary>
                                 <div style="margin-top: 6px; font-size: 11px;">
                                     <div><strong>Models:</strong> ${links}</div>
+                                    <div style="margin-top: 6px;">
+                                        <strong>Related tables:</strong>
+                                        ${relatedTablesHtml}
+                                    </div>
                                 </div>
                             </details>
                         </div>`;
@@ -1447,7 +1523,29 @@
                     }
                     rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745', extraHtml: tableExtra, savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                 } else {
-                    rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${tableRes.message || 'Integration failed'}</div>`;
+                    let debugHtml = '';
+                    if (tableRes.model_to_table_paths) {
+                        const mtp = tableRes.model_to_table_paths || {};
+                        const mids = (Array.isArray(tableRes.model_ids) && tableRes.model_ids.length) ? tableRes.model_ids : Object.keys(mtp);
+                        const relatedTablesHtml = mids
+                            .slice(0, 12)
+                            .map(m => {
+                                const paths = mtp[m] || [];
+                                const basenames = paths.map(p => String(p).split('/').pop());
+                                const shown = basenames.slice(0, 6).join(', ');
+                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
+                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
+                            })
+                            .join('');
+                        debugHtml = `<div style="margin-top: 10px; padding: 8px; border: 1px solid #f1b0b7; background: #fff6f7; border-radius: 4px;">
+                            <div style="font-size: 11px; color:#b02a37;"><strong>Debug: resolved related tables</strong> (first 12 models)</div>
+                            <div style="margin-top: 6px; font-size: 11px;">${relatedTablesHtml}</div>
+                        </div>`;
+                    }
+                    rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">
+                        ❌ ${tableRes.message || 'Integration failed'}
+                        ${debugHtml}
+                    </div>`;
                 }
                 initTablePanZoom(rightDiv);
                 const modelKey = getModelSearchKey(integrationType, modelSearchMode);

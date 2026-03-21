@@ -360,7 +360,7 @@ RAW_HTML_TEMPLATE = """
                     <select id="preset_query_select" onchange="onPresetQueryChange()" class="form-control" style="width: 200px; flex: none;">
                         <option value="">— custom —</option>
                     </select>
-                    <input type="text" id="query" class="form-control" placeholder="Type or pick preset" value="transformer model for code generation">
+                    <input type="text" id="query" class="form-control" placeholder="Type or pick preset" value="Are there table foundation models that can handle small tables (≤100 rows/columns) with many missing values and produce column embeddings?">
                 </div>
                 <div class="form-row" id="require-seed-has-tables-row" style="margin-top: 8px;">
                     <label for="require_seed_has_tables">Table Search Seed Model (Model with Tables / Model without Tables):</label>

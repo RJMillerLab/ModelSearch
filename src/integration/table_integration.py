@@ -515,7 +515,11 @@ def integrate_tables_from_card2card(
     models_with_tables = [mid for mid, paths in model_to_table_paths.items() if paths]
     models_without_tables = [mid for mid, paths in model_to_table_paths.items() if not paths]
     for model_id in models_with_tables:
-        print(f"  ✅ Model {model_id}: {len(model_to_table_paths[model_id])} tables")
+        paths = model_to_table_paths.get(model_id) or []
+        basenames = [os.path.basename(str(p)) for p in paths]
+        shown = ", ".join(basenames[:6])
+        more = " ..." if len(basenames) > 6 else ""
+        print(f"  ✅ Model {model_id}: {len(basenames)} tables ({shown}{more})")
     for model_id in models_without_tables:
         print(f"  ⚠️  Model {model_id}: No tables found")
     print(f"   DuckDB query elapsed: {time.time() - t_duck:.2f}s")
@@ -525,6 +529,12 @@ def integrate_tables_from_card2card(
             "success": False,
             "error": f"No tables found for any of the {len(model_ids)} models",
             "integrated_table": None,
+            # Debug payload: even on failure, expose mapping so the caller
+            # can see whether resolution failed due to parquet->basename->local path.
+            "model_ids": model_ids,
+            "models_with_tables": models_with_tables,
+            "models_without_tables": models_without_tables,
+            "model_to_table_paths": model_to_table_paths,
             "stats": {
                 "models_processed": len(model_ids),
                 "models_with_tables": len(models_with_tables),
