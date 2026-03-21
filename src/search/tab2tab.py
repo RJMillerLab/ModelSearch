@@ -26,8 +26,36 @@ from src.utils import resolve_table_path
 _blend_subprocess_lock = threading.Lock()
 
 
+def _normalize_header_token_for_index(s: str) -> str:
+    """
+    Match Blend_internal src.utils.df_to_index header path:
+    col_name = str(df.columns[col_counter]).lower().strip()[:200]
+    """
+    return str(s).lower().strip()[:200]
+
+
+def _normalize_cell_token_for_index(s: str) -> str:
+    """
+    Match Blend_internal src.utils.df_to_index body path (tokenized cell string).
+    """
+    t = (
+        str(s)
+        .lower()
+        .replace("\\", "")
+        .replace("'", "")
+        .replace('"', "")
+        .replace("\t", "")
+        .replace("\n", "")
+        .replace("\r", "")
+        .strip()[:200]
+    )
+    if t in ("nan", "none", ""):
+        return ""
+    return t
+
+
 def _extract_keyword_query_from_table(table_path: str) -> List[str]:
-    """Build keyword query from table headers."""
+    """Build keyword query from table headers (normalized like DuckDB index)."""
     out: List[str] = []
     seen = set()
     try:
@@ -35,7 +63,7 @@ def _extract_keyword_query_from_table(table_path: str) -> List[str]:
     except Exception:
         return []
     for c in df.columns:
-        s = str(c).strip()
+        s = _normalize_header_token_for_index(str(c))
         if s and s not in seen:
             seen.add(s)
             out.append(s)
@@ -43,7 +71,7 @@ def _extract_keyword_query_from_table(table_path: str) -> List[str]:
 
 
 def _extract_single_column_query_from_table(table_path: str, max_rows_per_table: int = 100) -> List[str]:
-    """Build single-column query from first-column values."""
+    """Build single-column query from first-column values (normalized like DuckDB index)."""
     try:
         df = pd.read_csv(table_path, nrows=max_rows_per_table)
     except Exception:
@@ -51,7 +79,14 @@ def _extract_single_column_query_from_table(table_path: str, max_rows_per_table:
     if len(df.columns) == 0:
         return []
     vals = df[df.columns[0]].dropna().astype(str).tolist()
-    return [v for v in vals if str(v).strip()]
+    out: List[str] = []
+    seen = set()
+    for v in vals:
+        s = _normalize_cell_token_for_index(v)
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 def _blend_file_lock_path() -> str:
@@ -150,8 +185,8 @@ def search_table2table(
                 query_tokens = _extract_single_column_query_from_table(table_path)
             if not query_tokens:
                 raise ValueError(f"Empty extracted query from table path: {table_path!r}")
-            query_arg = ",".join(query_tokens)
-            # Keep logs readable; the actual query string can be long.
+            # Pass as JSON so tokens may contain commas; Blend tab2tab CLI accepts JSON arrays.
+            query_arg = json.dumps(query_tokens, ensure_ascii=False)
             query_arg_preview = query_arg[:300] + ("..." if len(query_arg) > 300 else "")
             print(
                 f"[tab2tab-debug] search_type={search_type} "
@@ -318,7 +353,7 @@ def main() -> None:
         "--query",
         default=None,
         required=True,
-        help="Input table path/name. keyword extracts headers; single_column extracts first-column values; multi_column/unionable pass table path directly.",
+        help="Input table path/name. keyword/single_column extract normalized tokens (JSON array sent to Blend); multi_column/unionable pass table path directly.",
     )
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--output_json", default="", help="Optional output json path to write Blend_internal results.")
