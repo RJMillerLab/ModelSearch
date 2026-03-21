@@ -787,7 +787,7 @@
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px;">
                                             ${displayName}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">
-                                                ${models.length} models${realTableCount ? ` from ${realTableCount} tables` : ''}
+                                                ${models.length} models${(SHOW_CARD2TAB2CARD_MODEL_TABLES && realTableCount) ? ` from ${realTableCount} tables` : ''}
                                             </span>
                                         </h4>
                                     </div>
