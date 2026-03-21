@@ -12,7 +12,7 @@ import os
 import json
 import time
 import argparse
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import duckdb
 
@@ -54,6 +54,8 @@ def search_card2tab2card(
         resolved = resolve_table_path(base)
         if resolved and os.path.exists(resolved):
             query_tables.append(resolved)
+        else:
+            print(f'⚠️ No table found for {base}')
 
     if not query_tables:
         print(f"⚠️ No tables found for model_id={model_id}")
@@ -158,6 +160,15 @@ def main() -> None:
         db_path = MODELLAKE_DB
     else:
         raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
+
+    print(
+        "[card2tab2card] artifacts: "
+        f"resources={resources!r} | "
+        f"RELATIONSHIP_PARQUET={os.path.abspath(RELATIONSHIP_PARQUET)} | "
+        f"MODELLAKE_DB={os.path.abspath(db_path)} | "
+        f"TABLE_BASE_DIRS={[os.path.abspath(d) for d in TABLE_BASE_DIRS]!r}",
+        flush=True,
+    )
 
     t0 = time.time()
     

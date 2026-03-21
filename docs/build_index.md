@@ -39,9 +39,11 @@ python -m src.utils.build_card2card_subset_from_embeddings_and_ids --model_ids_t
 # Build DuckDB index from csvs, for later search
 git clone git@github.com:DoraDong-2023/Blend_internal.git 
 ln -s ../Blend_internal others/Blend_internal
-# create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117.db
-# python -m scripts.create_index_duckdb --db_path modellake_v2_251117_hugging.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/*.csv" --mask ../ModelTables/data/analysis/all_valid_title_valid_v2_251117.txt
+# create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117_nomask.db
+
 # optional: create subset of duckdb index for later search
+# python -m scripts.create_index_duckdb --db_path database/modellake_v2_251117_nomask_hugging.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/*.csv"
+# here we don't use the mask file, as we don't need <MUST CONTAIN TITLE> condition
 ```
 
 

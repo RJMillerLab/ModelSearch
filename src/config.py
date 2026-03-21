@@ -22,8 +22,8 @@ DATA_TAG = "_251117"
 V2_SUFFIX = "_v2"
 
 # --- modellake.db ---
-MODELLAKE_DB = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117.db")
-MODELLAKE_DB_HUGGING = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117_hugging.db")
+MODELLAKE_DB = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_nomask_251117.db") # because there is no condition on Title, we don't need to use the mask file
+MODELLAKE_DB_HUGGING = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117_nomask_hugging.db")
 INDEX_TABLE = "modellake_index"
 
 DEDUPED_HUGGING_CSVS =  os.path.join(PROCESSED_DIR, f"deduped_hugging_csvs{V2_SUFFIX}{DATA_TAG}")
@@ -85,8 +85,10 @@ QUERY_MODEL_ID_PATH = os.path.join(RESULT_DIR, "model_to_modelids.parquet")
 TABLE_RESULT_PATH = os.path.join(RESULT_DIR, "table_to_tables.parquet")
 LOG_PATH = os.path.join(RESULT_DIR, "query_to_logs.parquet")
 
-# --- 
+# --- Valid model ID lists (optional; Card2Tab2Card / demo narrow-down)
 VALID_MODEL_IDS_TXT = os.path.join(OUTPUT_DIR, "valid_model_ids_with_tables.txt")
+# Hugging-only tables subset (matches build_valid_model_ids_txt --resources hugging)
+VALID_MODEL_IDS_WITH_TABLES_HUGGING_TXT = os.path.join(OUTPUT_DIR, "valid_model_ids_with_tables_hugging.txt")
 
 def abs_path(relative_path: str) -> str:
     """Return absolute path for a path that may be relative to repo root."""

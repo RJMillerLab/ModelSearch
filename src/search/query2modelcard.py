@@ -140,6 +140,15 @@ def main():
     else:
         raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
+    print(
+        "[query2modelcard] artifacts: "
+        f"resources={resources} | "
+        f"embeddings_npz={os.path.abspath(emb_npz_path)} | "
+        f"sparse_index={os.path.abspath(sparse_index_path)} | "
+        f"encode_model={ENCODE_MODEL!r}",
+        flush=True,
+    )
+
     results = search_query2modelcard(query=args.query, top_k=args.top_k, output_json=args.output_json, retrieval_mode=args.retrieval_mode, candidate_factor=args.candidate_factor, emb_npz_path=emb_npz_path, sparse_index_path=sparse_index_path)
     
     print(f"Found {len(results)} model cards for query: '{args.query}'")

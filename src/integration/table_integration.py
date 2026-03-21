@@ -179,9 +179,44 @@ def _integrate_tables_outer_join(tables: List[pd.DataFrame]) -> Optional[pd.Data
     return result
 
 
-def _resolve_table_paths_for_model_ids(model_ids: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
-    """Resolve unique local table paths for model IDs."""
-    model_to_tables = _get_models_to_tables_batch_sql(model_ids)
+def _table_resources_for_integration(search_results: Dict[str, Any]) -> Optional[List[str]]:
+    """
+    Parquet column scope for modelId -> csv basenames (align with search pipeline --resources).
+
+    - If ``table_resources`` is **absent** from JSON (legacy jobs): return ``None`` → all list columns
+      in parquet (previous integration behavior).
+    - If **present** (new backend always writes it): use that list; empty/invalid → config default.
+    """
+    from src.config import TABLE_RESOURCE_ALLOWLIST
+
+    if "table_resources" not in search_results:
+        print("ℹ️  Legacy search_results (no table_resources key): all parquet table-list columns")
+        return None
+
+    tr = search_results.get("table_resources")
+    if isinstance(tr, list) and tr:
+        out = [
+            str(x).strip().lower()
+            for x in tr
+            if str(x).strip() and str(x).strip().lower() in ("hugging", "github", "arxiv", "llm")
+        ]
+        if out:
+            return out
+    fallback = [r for r in TABLE_RESOURCE_ALLOWLIST if r in ("hugging", "github", "arxiv", "llm")]
+    print(
+        "ℹ️  table_resources empty or invalid in search_results.json; "
+        f"using TABLE_RESOURCE_ALLOWLIST={fallback!r} for parquet table lists"
+    )
+    return fallback
+
+
+def _resolve_table_paths_for_model_ids(
+    model_ids: List[str],
+    *,
+    resources: Optional[List[str]] = None,
+) -> Tuple[List[str], Dict[str, List[str]]]:
+    """Resolve unique local table paths for model IDs (only columns selected by ``resources``)."""
+    model_to_tables = _get_models_to_tables_batch_sql(model_ids, resources=resources)
     seen_paths: Set[str] = set()
     table_paths: List[str] = []
     model_to_table_paths: Dict[str, List[str]] = {mid: [] for mid in model_ids}
@@ -270,7 +305,14 @@ def integrate_tables(table_paths: List[str], integration_type: str = "union", k:
     print(f"{'='*60}\n")    
     return {"success": True, "integrated_table": integrated_df, "stats": stats, "table_paths": loaded_paths}
 
-def integrate_tables_from_card2tab2card(search_results_json: str, search_type: str = "single_column", integration_type: str = "union", k: int = 10, tables_source: str = "intermediate") -> Dict[str, Any]:
+def integrate_tables_from_card2tab2card(
+    search_results_json: str,
+    search_type: str = "single_column",
+    integration_type: str = "union",
+    k: int = 10,
+    tables_source: str = "intermediate",
+    table_resources: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Integrate tables from backend search_results.json Card2Tab2Card payloads."""
     t0 = time.time()
     print(f"\n{'='*60}")
@@ -283,7 +325,15 @@ def integrate_tables_from_card2tab2card(search_results_json: str, search_type: s
     
     with open(search_results_json, 'r', encoding='utf-8') as f:
         search_results = json.load(f)
-    
+
+    parquet_resources: Optional[List[str]] = (
+        table_resources
+        if isinstance(table_resources, list) and table_resources
+        else _table_resources_for_integration(search_results)
+    )
+    _scope = "ALL_COLUMNS" if parquet_resources is None else repr(parquet_resources)
+    print(f"ℹ️  Parquet table-list columns scoped to resources={_scope} (hugging/github/arxiv/llm)")
+
     # Only support the current backend schema:
     # search_results["card2tab2card_results"][search_type]
     card2tab2card_results = search_results.get("card2tab2card_results")
@@ -329,7 +379,7 @@ def integrate_tables_from_card2tab2card(search_results_json: str, search_type: s
         if not model_ids:
             return {"success": False, "error": "No model IDs in intermediate for all_from_modelcards", "integrated_table": None}
         print(f"✅ tables_source=all_from_modelcards: DuckDB batch query for {len(model_ids)} models")
-        table_paths, model_to_table_paths_ts = _resolve_table_paths_for_model_ids(model_ids)
+        table_paths, model_to_table_paths_ts = _resolve_table_paths_for_model_ids(model_ids, resources=parquet_resources)
         # No table top-k cap: use ALL tables
         print(f"   Resolved {len(table_paths)} tables for integration (no table top-k cap; from {len(retrieved_filenames)} retrieved tables)")
         models_with_tables_list = model_ids
@@ -386,11 +436,19 @@ def integrate_tables_from_card2tab2card(search_results_json: str, search_type: s
         result["stats"] = result.get("stats") or {}
     result["stats"]["elapsed_seconds"] = elapsed
     result["stats"]["tables_source"] = tables_source
+    result["stats"]["parquet_table_resources"] = parquet_resources
     result["stats"]["total_unique_tables"] = len(table_paths)
     print(f"⏱️  Table Search integration elapsed: {elapsed:.2f}s (tables_source={tables_source})")
     return result
 
-def integrate_tables_from_card2card(search_results_json: str, integration_type: str = "union", k: int = 10, max_models: int = 10, card2card_retrieval_mode: Optional[str] = None) -> Dict[str, Any]:
+def integrate_tables_from_card2card(
+    search_results_json: str,
+    integration_type: str = "union",
+    k: int = 10,
+    max_models: int = 10,
+    card2card_retrieval_mode: Optional[str] = None,
+    table_resources: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Integrate tables from backend search_results.json Card2Card payloads."""
     t0 = time.time()
     print(f"\n{'='*60}")
@@ -403,6 +461,14 @@ def integrate_tables_from_card2card(search_results_json: str, integration_type: 
     
     with open(search_results_json, 'r', encoding='utf-8') as f:
         search_results = json.load(f)
+
+    parquet_resources: Optional[List[str]] = (
+        table_resources
+        if isinstance(table_resources, list) and table_resources
+        else _table_resources_for_integration(search_results)
+    )
+    _scope_c2c = "ALL_COLUMNS" if parquet_resources is None else repr(parquet_resources)
+    print(f"ℹ️  Parquet table-list columns scoped to resources={_scope_c2c} (hugging/github/arxiv/llm)")
     
     # Only support the current backend schema:
     # search_results["card2card_all_modes"][mode] or search_results["card2card_results"]
@@ -441,7 +507,7 @@ def integrate_tables_from_card2card(search_results_json: str, integration_type: 
     # Fast path: DuckDB batch query (single SQL scan, no full parquet load)
     t_duck = time.time()
     print(f"✅ DuckDB batch query on parquet (fast, no full load)")
-    all_table_paths, model_to_table_paths = _resolve_table_paths_for_model_ids(model_ids)
+    all_table_paths, model_to_table_paths = _resolve_table_paths_for_model_ids(model_ids, resources=parquet_resources)
     models_with_tables = [mid for mid, paths in model_to_table_paths.items() if paths]
     models_without_tables = [mid for mid, paths in model_to_table_paths.items() if not paths]
     for model_id in models_with_tables:
@@ -451,7 +517,17 @@ def integrate_tables_from_card2card(search_results_json: str, integration_type: 
     print(f"   DuckDB query elapsed: {time.time() - t_duck:.2f}s")
     
     if not all_table_paths:
-        return {"success": False, "error": f"No tables found for any of the {len(model_ids)} models", "integrated_table": None, "stats": {"models_processed": len(model_ids), "models_with_tables": len(models_with_tables), "models_without_tables": len(models_without_tables)}}
+        return {
+            "success": False,
+            "error": f"No tables found for any of the {len(model_ids)} models",
+            "integrated_table": None,
+            "stats": {
+                "models_processed": len(model_ids),
+                "models_with_tables": len(models_with_tables),
+                "models_without_tables": len(models_without_tables),
+                "parquet_table_resources": parquet_resources,
+            },
+        }
     
     print(f"\n✅ Collected {len(all_table_paths)} unique tables from {len(models_with_tables)} models")
 
@@ -479,5 +555,6 @@ def integrate_tables_from_card2card(search_results_json: str, integration_type: 
     # Attach timing + DuckDB info to stats for debugging
     if isinstance(result.get("stats"), dict):
         result["stats"]["elapsed_seconds"] = elapsed
+        result["stats"]["parquet_table_resources"] = parquet_resources
     print(f"⏱️  Model Search integration elapsed: {elapsed:.2f}s")
     return result

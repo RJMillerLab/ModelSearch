@@ -410,12 +410,12 @@ RAW_HTML_TEMPLATE = """
                     <span style="font-size: 11px; color: #666;">Top k for each individual table search (1–5). Results merged, filtered, capped at 20 tables; models capped at 50.</span>
                 </div>
                 <div style="flex: 1; min-width: 200px;">
-                    <label for="model_top_k">Model top-k (adaptive rerank):</label>
+                    <label for="model_top_k">Model top-k (dense reranker cap):</label>
                     <div style="display: flex; gap: 8px; align-items: center;">
                         <input type="range" id="model_top_k_slider" min="1" max="20" value="5" step="1" style="flex: 1; max-width: 200px;" oninput="updateModelTopKValue(this.value)">
                         <input type="number" id="model_top_k" class="form-control" value="5" min="1" max="20" oninput="updateModelTopKSlider(this.value)" style="width: 80px;">
                     </div>
-                    <span style="font-size: 11px; color: #666;">Default 5. If Card2Tab2Card returns more than this, we rerank with dense.</span>
+                    <span style="font-size: 11px; color: #666;">Default 5. If Card2Tab2Card has more candidates, backend uses dense reranker (seed Card2Card order), then cap.</span>
                 </div>
                 <div>
                     <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>

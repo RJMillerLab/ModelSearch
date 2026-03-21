@@ -266,6 +266,14 @@ def main() -> None:
     else:
         raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
+    print(
+        "[tab2tab CLI] artifacts: "
+        f"resources={resources!r} | "
+        f"modellake_db={os.path.abspath(db_path)} | "
+        f"blend_repo={os.path.abspath(BLEND_INTERNAL_REPO or '')}",
+        flush=True,
+    )
+
     start = time.time()
     results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, db_path=db_path, output_json=args.output_json)
     if args.output_json:

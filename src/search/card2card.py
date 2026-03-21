@@ -452,6 +452,16 @@ def main():
         else:
             raise NotImplementedError(f"Unsupported resource combination: {resource_set}. Must be one of: {'hugging', 'github', 'arxiv'}")
 
+        print(
+            "[card2card] artifacts: "
+            f"resources={sorted(resource_set)!s} | "
+            f"embeddings_npz={os.path.abspath(emb_npz)} | "
+            f"sparse_index={os.path.abspath(sparse_idx)} | "
+            f"encode_model={ENCODE_MODEL!r} | "
+            f"retrieval_mode={args.retrieval_mode!r}",
+            flush=True,
+        )
+
         if args.retrieval_mode == 'dense':
             results = search_dense_neighbors_queries(query_model_ids=model_ids_list, top_k=args.top_k, embeddings_npz_path=emb_npz)
         elif args.retrieval_mode == 'sparse':
