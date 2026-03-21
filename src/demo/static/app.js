@@ -805,8 +805,8 @@
                                                     <li class="result-item" style="margin-bottom: 4px;">
                                                         <div style="display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap;">
                                                             <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">${modelId}</a>
-                                                            ${hasTables ? ` <span style="font-size: 10px; color: #888;">(${modelTables.length} tables)</span>` : ''}
-                                                            ${hasTables ? `<span style="font-size: 10px; color: #999; font-family: monospace;">${tableLine}</span>` : ''}
+                                                            ${(SHOW_CARD2TAB2CARD_MODEL_TABLES && hasTables) ? ` <span style="font-size: 10px; color: #888;">(${modelTables.length} tables)</span>` : ''}
+                                                            ${(SHOW_CARD2TAB2CARD_MODEL_TABLES && hasTables) ? `<span style="font-size: 10px; color: #999; font-family: monospace;">${tableLine}</span>` : ''}
                                                         </div>
                                                     </li>
                                                 `;
@@ -920,6 +920,7 @@
                 </div>
             `;
             
+            if (ENABLE_POST_INTEGRATION_ANALYSIS) {
             html += `
                 <div id="integrationShortAnalysis" class="integration-summary-section" style="margin-top: 16px; padding: 14px; background: #e2e3e5; border-radius: 6px; border: 2px solid #6c757d; display: none;">
                     <h4 style="margin: 0 0 6px 0; font-size: 14px; color: #383d41;">Summary (between Table Integration and Evaluation)</h4>
@@ -980,6 +981,7 @@
                     </div>
                 </div>
             `;
+            }
             
             container.innerHTML = html;
             window.__modelSearchRuns = [];
@@ -1016,6 +1018,9 @@
             `;
         }
         
+        // Feature flags for UI verbosity/control.
+        const SHOW_CARD2TAB2CARD_MODEL_TABLES = false;
+        const ENABLE_POST_INTEGRATION_ANALYSIS = false;
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 480px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         const DISPLAY_MAX_ROWS = 50;
         const DISPLAY_MAX_COLS = 20;
