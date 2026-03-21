@@ -1004,8 +1004,9 @@
             `;
         }
         
-        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 320px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
-        const DISPLAY_MAX_ROWS = 20;
+        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 480px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
+        const DISPLAY_MAX_ROWS = 50;
+        const DISPLAY_MAX_COLS = 20;
         const INTEGRATION_MAX_CELL_CHARS = 120;
         window.__integrationTables = window.__integrationTables || {};
         window.__modelSearchRuns = window.__modelSearchRuns || [];
@@ -1278,14 +1279,17 @@
             URL.revokeObjectURL(a.href);
         }
         
-        function buildTableInfo(table) {
+        function buildTableInfo(table, maxColumns) {
             const totalRows = (table.data || []).length;
-            const cols = table.columns || [];
+            const allCols = table.columns || [];
+            const colLimit = maxColumns == null ? allCols.length : Math.min(maxColumns, allCols.length);
+            const cols = allCols.slice(0, colLimit);
             return cols.map((col, i) => {
                 let nonNull = 0;
                 let hasNum = true;
                 for (let r = 0; r < table.data.length; r++) {
-                    const v = table.data[r][i];
+                    const row = table.data[r] || [];
+                    const v = row[i];
                     const vs = normalizeIntegrationText(v);
                     const isNaNString = vs.trim().toLowerCase() === 'nan';
                     if (vs !== '' && !isNaNString) {
@@ -1341,24 +1345,34 @@
             }
             if (downloadId) window.__integrationTables[downloadId] = table;
             const totalRows = (table.data || []).length;
-            const displayRows = table.data.slice(0, DISPLAY_MAX_ROWS);
-            const showRowsLabel = totalRows <= DISPLAY_MAX_ROWS ? totalRows : `${DISPLAY_MAX_ROWS} of ${totalRows}`;
+            const totalCols = (table.columns || []).length;
+            const displayRowCount = Math.min(totalRows, DISPLAY_MAX_ROWS);
+            const displayColCount = Math.min(totalCols, DISPLAY_MAX_COLS);
+            const displayCols = (table.columns || []).slice(0, displayColCount);
+            const displayRows = (table.data || []).slice(0, displayRowCount).map((row) => (row || []).slice(0, displayColCount));
+            const rowsTruncated = totalRows > DISPLAY_MAX_ROWS;
+            const colsTruncated = totalCols > DISPLAY_MAX_COLS;
+            const previewDims = `${displayRowCount}×${displayColCount}`;
+            const fullDims = `${totalRows}×${totalCols}`;
+            const previewLabel = rowsTruncated || colsTruncated
+                ? `preview ${previewDims} of ${fullDims} (download CSV for full table)`
+                : `all ${previewDims}`;
             const footer = [];
             if (savedPath) footer.push(`<span style="font-size: 12px; color: #666;">Saved to: <code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${savedPath}</code></span>`);
             footer.push(`<button type="button" onclick="downloadIntegrationTableAsCsv('${downloadId}')" style="margin-left: 10px; padding: 6px 12px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">📥 Download full CSV (${totalRows} rows)</button>`);
-            const infoRows = buildTableInfo(table);
+            const infoRows = buildTableInfo(table, displayColCount);
             const infoHeaderRow = '<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px;"> </th>' + infoRows.map(({ col }) => `<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px; white-space: nowrap;">${normalizeIntegrationText(col)}</th>`).join('');
             const infoNonNullRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Non-Null %</td>' + infoRows.map(({ nonNullPct }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${nonNullPct}</td>`).join('');
             const infoDtypeRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Dtype</td>' + infoRows.map(({ dtype }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${dtype}</td>`).join('');
             let html = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                 <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
-                <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols (showing first ${showRowsLabel} rows)</div>
+                <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols (${previewLabel})</div>
                 ${extraHtml}
                 <div style="position: relative;">
-                    <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Showing first ${displayRows.length} rows; download CSV for full table">
+                    <div style="${INTEGRATION_TABLE_VIEWPORT_STYLE}" id="table-viewport-${downloadId}" title="Integrated table preview (max ${DISPLAY_MAX_ROWS} rows × ${DISPLAY_MAX_COLS} cols); download CSV for full table">
                         <table style="width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px;">
                             <thead><tr style="background: #f8f9fa; position: sticky; top: 0; z-index: 10;">
-                                ${table.columns.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${normalizeIntegrationText(col)}</th>`).join('')}
+                                ${displayCols.map(col => `<th style="border: 1px solid #dee2e6; padding: 6px; text-align: left; background: #f8f9fa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${normalizeIntegrationText(col)}</th>`).join('')}
                             </tr></thead>
                             <tbody>
                                 ${displayRows.map(row => `<tr>${row.map(cell => `<td style="border: 1px solid #dee2e6; padding: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${formatIntegrationCell(cell)}</td>`).join('')}</tr>`).join('')}
