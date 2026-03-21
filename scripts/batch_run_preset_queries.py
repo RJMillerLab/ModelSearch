@@ -84,15 +84,15 @@ def run_one_query(
     query: str,
     mode: str = "query",
     top_k: int = 100,
-    table_search_k: int = 1,
+    table_search_k: int = 3,
     card2card_retrieval_mode: str = "dense",
     require_seed_has_tables: bool = True,
     use_by_type: bool = False,
     run_integration: bool = False,
-    integration_type: str = "union",
+    integration_type: str = "alite",
     integration_k: int = 10,
     integration_max_models: int = 10,
-    integration_search_type: str = "single_column",
+    integration_search_type: str = "unionable",
 ) -> Dict[str, Any]:
     """Run search (and optional integration) for a single query."""
     search_url = f"{backend_url}/api/search"
@@ -217,8 +217,8 @@ def main() -> int:
     parser.add_argument(
         "--table_search_k",
         type=int,
-        default=1,
-        help="Per-table search k (frontend slider, default 1).",
+        default=3,
+        help="Per-table search k (frontend slider, default 3).",
     )
     parser.add_argument(
         "--top_k",
@@ -248,9 +248,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--integration_type",
-        default="union",
+        default="alite",
         choices=["union", "intersection", "alite", "outer_join"],
-        help="Integration type (default: union).",
+        help="Integration type (default: alite).",
     )
     parser.add_argument(
         "--integration_k",
@@ -266,8 +266,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--integration_search_type",
-        default="single_column",
-        help="Table search type for integration /api/integrate (default single_column).",
+        default="unionable",
+        help="Table search type for integration /api/integrate (default unionable).",
     )
 
     args = parser.parse_args()

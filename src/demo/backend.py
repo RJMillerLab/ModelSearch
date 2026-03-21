@@ -425,9 +425,11 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         # NOTE: This repo snapshot may not include legacy `scripts/check_model_in_index.py`.
         # We let downstream scripts produce empty results if the model id is missing.
 
-    # Table Search: user `table_search_k` scaled for card2tab2card `--table_top_k` (single run; no backend rerun).
+    # Table Search: user `table_search_k` is the per-table top-k passed into tab2tab.
+    # (card2tab2card does its own merging/dedup/capping downstream.)
     table_search_k_input = max(1, int(table_search_k))
     k_table = table_search_k_input * 20
+    #k_table = table_search_k_input
 
     # Card2Card: scaled `--top_k` for first (and only) dense/sparse/hybrid subprocess.
     card2card_top_k = max(100, int(model_top_k) * 20)
@@ -1041,8 +1043,10 @@ def integrate():
     if err is not None:
         return err
     os.makedirs(job_dir, exist_ok=True)
-    search_type = data.get("search_type", "keyword")
-    integration_type = data.get("integration_type", "union")
+    # Default table-search mode should prefer unionable.
+    search_type = data.get("search_type", "unionable")
+    # Default integration method should match the UI default (ALITE).
+    integration_type = data.get("integration_type", "alite")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
     tables_source = data.get("tables_source", "intermediate")
@@ -1107,7 +1111,7 @@ def integrate_model_search():
     if err is not None:
         return err
     os.makedirs(job_dir, exist_ok=True)
-    integration_type = data.get("integration_type", "union")
+    integration_type = data.get("integration_type", "alite")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
     card2card_retrieval_mode = data.get("card2card_retrieval_mode") or None

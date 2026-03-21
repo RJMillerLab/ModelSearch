@@ -132,6 +132,10 @@ def search_table2table(
         out_fd, out_path = tempfile.mkstemp(prefix="tab2tab_", suffix=".json")
         os.close(out_fd)
 
+    # Used for debug prints (keyword/single_column paths).
+    query_tokens: List[str] = []
+    query_arg_preview: str = ""
+
     try:
         if not isinstance(query, str):
             raise ValueError("query must be a table name/path string")
@@ -147,6 +151,16 @@ def search_table2table(
             if not query_tokens:
                 raise ValueError(f"Empty extracted query from table path: {table_path!r}")
             query_arg = ",".join(query_tokens)
+            # Keep logs readable; the actual query string can be long.
+            query_arg_preview = query_arg[:300] + ("..." if len(query_arg) > 300 else "")
+            print(
+                f"[tab2tab-debug] search_type={search_type} "
+                f"table={os.path.basename(table_path)} "
+                f"query_tokens={len(query_tokens)} "
+                f"tokens_preview={query_tokens[:20]!r} "
+                f"query_arg_preview={query_arg_preview!r}",
+                flush=True,
+            )
         elif search_type in ("multi_column", "unionable"):
             # Blend expects query csv path for these modes.
             query_arg = table_path
@@ -186,22 +200,69 @@ def search_table2table(
         # - list: [tableid,...] or [filename,...]
         if isinstance(payload, dict):
             if "results" in payload and isinstance(payload["results"], list):
-                return [int(x) for x in payload["results"]]
+                out_ids = [int(x) for x in payload["results"]]
+                if not out_ids and search_type in ("keyword", "single_column"):
+                    print(
+                        f"[tab2tab-debug] empty ids from Blend. "
+                        f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
+                        f"tokens_preview={query_tokens[:20]!r}",
+                        flush=True,
+                    )
+                return out_ids
             if "table_ids" in payload and isinstance(payload["table_ids"], list):
-                return [int(x) for x in payload["table_ids"]]
+                out_ids = [int(x) for x in payload["table_ids"]]
+                if not out_ids and search_type in ("keyword", "single_column"):
+                    print(
+                        f"[tab2tab-debug] empty ids from Blend. "
+                        f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
+                        f"tokens_preview={query_tokens[:20]!r}",
+                        flush=True,
+                    )
+                return out_ids
             if "tableid" in payload and isinstance(payload["tableid"], list):
-                return [int(x) for x in payload["tableid"]]
+                out_ids = [int(x) for x in payload["tableid"]]
+                if not out_ids and search_type in ("keyword", "single_column"):
+                    print(
+                        f"[tab2tab-debug] empty ids from Blend. "
+                        f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
+                        f"tokens_preview={query_tokens[:20]!r}",
+                        flush=True,
+                    )
+                return out_ids
 
         if isinstance(payload, list):
             # Case A: list of ints (or int-like strings)
             if all(isinstance(x, (int, float)) for x in payload):
-                return [int(x) for x in payload]
+                out_ids = [int(x) for x in payload]
+                if not out_ids and search_type in ("keyword", "single_column"):
+                    print(
+                        f"[tab2tab-debug] empty ids from Blend. "
+                        f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
+                        f"tokens_preview={query_tokens[:20]!r}",
+                        flush=True,
+                    )
+                return out_ids
             if all(isinstance(x, str) and x.strip().isdigit() for x in payload):
-                return [int(str(x).strip()) for x in payload]
+                out_ids = [int(str(x).strip()) for x in payload]
+                if not out_ids and search_type in ("keyword", "single_column"):
+                    print(
+                        f"[tab2tab-debug] empty ids from Blend. "
+                        f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
+                        f"tokens_preview={query_tokens[:20]!r}",
+                        flush=True,
+                    )
+                return out_ids
 
             # Case B: list of filenames / basenames -> map to tableid via DuckDB
             filenames = [os.path.basename(str(x).strip()) for x in payload if str(x).strip()]
             if not filenames:
+                if search_type in ("keyword", "single_column"):
+                    print(
+                        f"[tab2tab-debug] Blend returned empty filenames list. "
+                        f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
+                        f"tokens_preview={query_tokens[:20]!r}",
+                        flush=True,
+                    )
                 return []
 
             import duckdb
@@ -228,6 +289,13 @@ def search_table2table(
                 if tid not in seen:
                     seen.add(tid)
                     out.append(tid)
+            if not out and search_type in ("keyword", "single_column"):
+                print(
+                    f"[tab2tab-debug] empty ids after filename->tableid mapping. "
+                    f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
+                    f"tokens_preview={query_tokens[:20]!r}",
+                    flush=True,
+                )
             return out
 
         raise ValueError(f"Unexpected Blend_internal output JSON format: {payload!r}")

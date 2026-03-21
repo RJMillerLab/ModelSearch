@@ -886,9 +886,9 @@
                                 </select></div>
                                 <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">search type:</label><select id="integration_search_type" class="form-control" onchange="syncTableSearchDisplay()" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                                     <!-- Currently only these three have non-empty results in pipeline -->
+                                    <option value="unionable">Unionable</option>
                                     <option value="single_column">Single Column</option>
                                     <option value="keyword">Keyword</option>
-                                    <option value="unionable">Unionable</option>
                                     <!--
                                     <option value="multi_column">Multi Column</option>
                                     <option value="complex">Complex</option>
