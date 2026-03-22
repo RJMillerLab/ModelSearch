@@ -8,18 +8,35 @@ import os
 import sys
 import json
 import requests
-from flask import Flask, render_template_string, jsonify, send_from_directory, Response
+from flask import (
+    Flask,
+    render_template_string,
+    jsonify,
+    send_from_directory,
+    Response,
+    request,
+    stream_with_context,
+)
 from flask_cors import CORS
-import os
 
-app = Flask(__name__)
+# static_folder=None: Flask's default /static/<path> would otherwise compete with our
+# /static/app.js route and can serve raw app.js ({{BACKEND_URL}} never replaced).
+app = Flask(__name__, static_folder=None)
 CORS(app)
 
 # Get the project root directory (assuming frontend.py is in src/demo/)
 from src.config import REPO_ROOT
 
-# Backend API URL
-BACKEND_URL = "http://localhost:5002"
+# Backend process URL (this app proxies /api/* here when MODELSEARCH_FRONTEND_API_PROXY is on).
+API_UPSTREAM = os.environ.get("MODELSEARCH_API_UPSTREAM", "http://127.0.0.1:5002").rstrip("/")
+_USE_API_PROXY = os.environ.get("MODELSEARCH_FRONTEND_API_PROXY", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# Injected into HTML/JS: "" => same-origin /api/... (proxied). Full URL => browser calls API directly.
+CLIENT_BACKEND_URL = "" if _USE_API_PROXY else API_UPSTREAM
 
 # Raw template with {{BACKEND_URL}} placeholder (for single-server deploy; backend uses this with "").
 RAW_HTML_TEMPLATE = """
@@ -450,7 +467,70 @@ RAW_HTML_TEMPLATE = """
 </body>
 </html>
 """
-HTML_TEMPLATE = RAW_HTML_TEMPLATE.replace('{{BACKEND_URL}}', BACKEND_URL)
+HTML_TEMPLATE = RAW_HTML_TEMPLATE.replace("{{BACKEND_URL}}", CLIENT_BACKEND_URL)
+
+
+if _USE_API_PROXY:
+
+    def _upstream_api_url():
+        q = request.query_string.decode("utf-8") if request.query_string else ""
+        return API_UPSTREAM + request.path + ("?" + q if q else "")
+
+    @app.route("/api", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    @app.route("/api/", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    @app.route("/api/<path:path>", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    def proxy_api(path=None):
+        """Forward /api/* to the ModelSearch backend (default 127.0.0.1:5002)."""
+        if request.method == "OPTIONS":
+            return Response(status=204)
+        url = _upstream_api_url()
+        is_sse = request.method == "GET" and request.path.startswith("/api/logs/")
+
+        if is_sse:
+
+            def generate():
+                try:
+                    with requests.get(url, stream=True, timeout=(10, None)) as resp:
+                        for chunk in resp.iter_content(chunk_size=2048):
+                            if chunk:
+                                yield chunk
+                except requests.exceptions.RequestException:
+                    line = json.dumps(
+                        {
+                            "status": "error",
+                            "message": f"Cannot reach API at {API_UPSTREAM}. Start: python -m src.demo.backend",
+                        }
+                    )
+                    yield f"data: {line}\n\n".encode("utf-8")
+
+            return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+        headers = {}
+        if request.content_type:
+            headers["Content-Type"] = request.content_type
+        body = None
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            body = request.get_data()
+        try:
+            resp = requests.request(
+                request.method,
+                url,
+                data=body,
+                headers=headers,
+                timeout=(15, 3600),
+            )
+        except requests.exceptions.ConnectionError:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": f"Cannot reach API at {API_UPSTREAM}. In another terminal run: python -m src.demo.backend",
+                }
+            ), 502
+        except requests.exceptions.RequestException as e:
+            return jsonify({"status": "error", "message": str(e)}), 502
+
+        ct = resp.headers.get("Content-Type")
+        return Response(resp.content, status=resp.status_code, content_type=ct)
 
 
 @app.route('/')
@@ -464,7 +544,7 @@ def serve_app_js():
     """Serve app script with BACKEND_URL injected (no \\u003c hacks; script is external so </ is safe)."""
     app_js_path = os.path.join(os.path.dirname(__file__), 'static', 'app.js')
     with open(app_js_path, 'r', encoding='utf-8') as f:
-        content = f.read().replace('{{BACKEND_URL}}', BACKEND_URL)
+        content = f.read().replace("{{BACKEND_URL}}", CLIENT_BACKEND_URL)
     return Response(content, mimetype='application/javascript')
 
 
@@ -485,5 +565,9 @@ def serve_fig(filename):
 
 if __name__ == '__main__':
     print("Starting ModelSearch Frontend...")
+    if _USE_API_PROXY:
+        print(f"Proxying /api/* -> {API_UPSTREAM} (MODELSEARCH_FRONTEND_API_PROXY=0 to disable)")
+    else:
+        print(f"API proxy off — browser calls {API_UPSTREAM} directly")
     print("Open http://localhost:5001 in your browser")
     app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)

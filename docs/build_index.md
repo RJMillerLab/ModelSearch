@@ -157,6 +157,8 @@ python -m src.utils.generate_md_from_logs --log_file logs/card2tab2card_by_type.
 python -m src.demo.backend
 python -m src.demo.frontend
 # open http://localhost:5001
+# if on server, redirect port 5001 to localhost:5001 and port 5002 to localhost:5002
+ssh -L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002 chippie.cs.uwaterloo.ca
 ```
 
 
