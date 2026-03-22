@@ -457,6 +457,7 @@ RAW_HTML_TEMPLATE = """
         <div id="errorMsg" class="error" style="display: none;"></div>
         
         <div id="resultsSection" class="results-section">
+            <div id="resultsMetaStrip" style="display: none; margin-bottom: 8px; padding: 6px 10px; line-height: 1.35; font-size: 12px; color: #495057; background: #fafafa; border: 1px solid #e9ecef; border-radius: 6px;"></div>
             <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; font-weight: bold;">Retrieval results</h3>
             <div id="resultsContent"></div>
         </div>

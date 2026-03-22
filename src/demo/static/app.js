@@ -214,10 +214,18 @@
             }
         }
         
+        function clearResultsMetaStrip() {
+            const el = document.getElementById('resultsMetaStrip');
+            if (!el) return;
+            el.style.display = 'none';
+            el.innerHTML = '';
+        }
+        
         async function loadSavedSearchFolder(folderName) {
             // Reset UI
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.remove('active');
+            clearResultsMetaStrip();
             document.getElementById('errorMsg').style.display = 'none';
             document.getElementById('logContainer').innerHTML = '';
             
@@ -387,6 +395,7 @@
             // Reset UI
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.remove('active');
+            clearResultsMetaStrip();
             document.getElementById('errorMsg').style.display = 'none';
             document.getElementById('logContainer').innerHTML = '';
             
@@ -454,6 +463,7 @@
             document.getElementById('searchBtn').disabled = true;
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.remove('active');
+            clearResultsMetaStrip();
             document.getElementById('errorMsg').style.display = 'none';
             document.getElementById('logContainer').innerHTML = '';
             
@@ -580,7 +590,7 @@
                     
                     if (data.status === 'success') {
                         clearInterval(interval);
-                        displayResults(data.results);
+                        displayResults({ ...(data.results || {}), job_id: data.job_id });
                         await restoreIntegrationEvaluationQA(data);
                         document.getElementById('searchBtn').disabled = false;
                     } else if (data.status === 'error') {
@@ -649,24 +659,31 @@
                           }).join('')
                         : '—'
                   }</span></span>`;
-            const runLogPath = results.run_log_path || results.folder_path ? (results.folder_path + '/pipeline_run.log') : null;
-            const folderPath = results.folder_path || '';
-            const runLogRow = (folderPath || runLogPath)
-                ? `<div style="margin-bottom: 8px; padding: 8px 12px; font-size: 11px; color: #666; background: #f8f9fa; border-radius: 4px; font-family: monospace;">
-                    <strong>Output:</strong> ${folderPath || '—'}<br>
-                    <strong>Run log:</strong> ${runLogPath || '—'} (CMD, ELAPSED, SAVED)
-                </div>`
-                : '';
             const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; align-items: center;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
-            </div>${runLogRow}`;
+            </div>`;
 
-            const queryLine = results.query
-                ? `<div style="margin: 0 0 10px 0; padding: 8px 12px; font-size: 12px; color: #495057; background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px;">
-                    <strong>Query:</strong> <span style="font-family: monospace;">${escapeHtml(results.query)}</span>
-                </div>`
-                : '';
+            let jobIdStrip = (results.job_id != null && String(results.job_id).trim()) ? String(results.job_id).trim() : '';
+            if (!jobIdStrip && typeof currentJobId !== 'undefined' && currentJobId) {
+                jobIdStrip = String(currentJobId).trim();
+            }
+            if (!jobIdStrip && results.folder_path) {
+                const segs = String(results.folder_path).replace(/\\/g, '/').split('/').filter(Boolean);
+                if (segs.length) jobIdStrip = segs[segs.length - 1];
+            }
+            const metaStrip = document.getElementById('resultsMetaStrip');
+            if (metaStrip) {
+                const metaParts = [];
+                if (results.query) {
+                    metaParts.push(`<div style="margin:0;"><strong>Query:</strong> <span style="font-family: ui-monospace, monospace; font-size: 12px;">${escapeHtml(results.query)}</span></div>`);
+                }
+                if (jobIdStrip) {
+                    metaParts.push(`<div style="margin-top:3px;font-size:11px;color:#555;"><strong>JOB_ID:</strong> <code style="font-size:11px;background:#f1f3f5;padding:1px 6px;border-radius:3px;">${escapeHtml(jobIdStrip)}</code></div>`);
+                }
+                metaStrip.innerHTML = metaParts.join('');
+                metaStrip.style.display = metaParts.length ? 'block' : 'none';
+            }
             
             // Helper function to format model display (handle both string and object formats)
             function formatModel(model) {
@@ -700,7 +717,6 @@
             let html = `
                 ${errorBlock}
                 ${headerRowHtml}
-                ${queryLine}
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">
