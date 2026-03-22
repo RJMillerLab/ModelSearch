@@ -1212,10 +1212,9 @@ def get_table_preview():
     )
 
 
-@app.route("/api/table-page", methods=["GET"])
-def table_page():
-    """Full-page HTML table view (new tab from retrieval results)."""
-    path_q = (request.args.get("path") or "").strip()
+def make_table_page_response(path_q: str) -> Response:
+    """Build full-page HTML for one CSV (used by /api/table-page on API and UI servers)."""
+    path_q = (path_q or "").strip()
     if not path_q:
         return Response("Missing path", status=400, mimetype="text/plain; charset=utf-8")
     resolved = _resolve_table_file_for_preview(path_q)
@@ -1252,6 +1251,12 @@ def table_page():
         table_html=_dataframe_to_html_table(df),
     )
     return Response(body, mimetype="text/html; charset=utf-8")
+
+
+@app.route("/api/table-page", methods=["GET"])
+def table_page():
+    """Full-page HTML table view (new tab from retrieval results)."""
+    return make_table_page_response(request.args.get("path") or "")
 
 
 @app.route("/api/saved-searches", methods=["GET"])

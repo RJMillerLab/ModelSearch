@@ -472,6 +472,21 @@ HTML_TEMPLATE = RAW_HTML_TEMPLATE.replace("{{BACKEND_URL}}", CLIENT_BACKEND_URL)
 
 if _USE_API_PROXY:
 
+    @app.route("/api/table-page", methods=["GET"])
+    def serve_table_page_on_ui_port():
+        """
+        Full CSV table HTML is served here (port 5001) using the same logic as the API app.
+        If :5002 is an older process without GET /api/table-page, the browser would get Werkzeug 404;
+        handling on the UI process avoids that mismatch when only the UI was restarted after a git pull.
+        """
+        try:
+            from src.demo.backend import make_table_page_response
+        except Exception as e:
+            return jsonify(
+                {"status": "error", "message": f"Could not load table-page handler: {e}"}
+            ), 500
+        return make_table_page_response(request.args.get("path") or "")
+
     def _upstream_api_url():
         q = request.query_string.decode("utf-8") if request.query_string else ""
         return API_UPSTREAM + request.path + ("?" + q if q else "")
