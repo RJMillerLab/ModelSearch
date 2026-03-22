@@ -28,6 +28,56 @@
             return m;
         }
         
+        function escapeHtmlIntegration(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+        
+        function integrationTablePageHref(fullPath) {
+            const p = String(fullPath || '').trim();
+            if (!p) return '#';
+            return '{{BACKEND_URL}}/api/table-page?path=' + encodeURIComponent(p);
+        }
+        
+        /** Open full HTML table view; label defaults to file basename. */
+        function integrationTablePathLink(fullPath, displayLabel) {
+            const p = String(fullPath || '').trim();
+            if (!p) return '';
+            const label = displayLabel != null ? String(displayLabel) : (p.split('/').pop() || p);
+            const href = integrationTablePageHref(p);
+            return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(label)}</a>`;
+        }
+        
+        function integrationTablePathLinksRow(paths, joinHtml) {
+            const list = (paths || []).map(p => String(p).trim()).filter(Boolean);
+            if (!list.length) return '';
+            const j = joinHtml != null ? joinHtml : ', ';
+            return list.map(p => integrationTablePathLink(p)).join(j);
+        }
+        
+        function integrationSavedPathLink(fullPath) {
+            const p = String(fullPath || '').trim();
+            if (!p) return '';
+            const href = integrationTablePageHref(p);
+            return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;"><code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${escapeHtmlIntegration(p)}</code></a>`;
+        }
+        
+        function integrationRelatedTablesBlock(modelId, paths) {
+            const id = String(modelId || '');
+            const arr = Array.isArray(paths) ? paths.filter(Boolean) : [];
+            if (!id) return '';
+            if (!arr.length) {
+                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${escapeHtmlIntegration(id)}</span>: 0 tables</div>`;
+            }
+            const slice = arr.slice(0, 6);
+            const shown = slice.map(p => integrationTablePathLink(p)).join(', ');
+            const more = arr.length > 6 ? ` (+${arr.length - 6} more)` : '';
+            return `<div style="margin-top: 4px;"><span style="font-weight:600;">${escapeHtmlIntegration(id)}</span>: ${arr.length} tables — ${shown}${more}</div>`;
+        }
+        
         async function loadPresetQueries() {
             const sel = document.getElementById('preset_query_select');
             if (!sel) return;
@@ -1073,12 +1123,8 @@
             const modelRun = (window.__modelSearchRuns || []).find(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === modelKey);
             const tablePath = (tableRun && tableRun.saved_path) ? tableRun.saved_path : '';
             const modelPath = (modelRun && modelRun.saved_path) ? modelRun.saved_path : '';
-            const tableHtml = tablePath
-                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${tablePath}</code>`
-                : '<span style="color:#999;">N/A</span>';
-            const modelHtml = modelPath
-                ? `<code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${modelPath}</code>`
-                : '<span style="color:#999;">N/A</span>';
+            const tableHtml = tablePath ? integrationSavedPathLink(tablePath) : '<span style="color:#999;">N/A</span>';
+            const modelHtml = modelPath ? integrationSavedPathLink(modelPath) : '<span style="color:#999;">N/A</span>';
             target.innerHTML = `
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
                     <div>2 Card2Tab2Card Results CSV: ${tableHtml}</div>
@@ -1119,8 +1165,7 @@
                 const tablePathsList = run.table_paths || [];
                 if (modelIds.length > 0) {
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    const basename = (p) => String(p).split('/').pop();
-                    const tablePathsStr = tablePathsList.length > 0 ? tablePathsList.map(basename).join(' ') : '';
+                    const tablePathsLinks = tablePathsList.length > 0 ? integrationTablePathLinksRow(tablePathsList, ', ') : '';
                     const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
                     const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : tablePathsList.length;
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
@@ -1131,7 +1176,7 @@
                             </summary>
                             <div style="margin-top: 6px; font-size: 11px;">
                                 <div><strong>Models:</strong> ${links}</div>
-                                ${tablePathsStr ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
+                                ${tablePathsLinks ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-size: 11px;">${tablePathsLinks}</span></div>` : ''}
                             </div>
                         </details>
                     </div>`;
@@ -1252,8 +1297,7 @@
                 const tablePathsList = run.table_paths || [];
                 if (modelIds.length > 0) {
                     const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    const basename = (p) => String(p).split('/').pop();
-                    const tablePathsStr = tablePathsList.length > 0 ? tablePathsList.map(basename).join(' ') : '';
+                    const tablePathsLinks = tablePathsList.length > 0 ? integrationTablePathLinksRow(tablePathsList, ', ') : '';
                     const stats = run.stats || {};
                     const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
                     const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : tablePathsList.length;
@@ -1265,7 +1309,7 @@
                             </summary>
                             <div style="margin-top: 6px; font-size: 11px;">
                                 <div><strong>Models:</strong> ${links}</div>
-                                ${tablePathsStr ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-family: monospace;">${tablePathsStr}</span></div>` : ''}
+                                ${tablePathsLinks ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-size: 11px;">${tablePathsLinks}</span></div>` : ''}
                             </div>
                         </details>
                     </div>`;
@@ -1434,7 +1478,7 @@
                 ? `preview ${previewDims} of ${fullDims} (download CSV for full table)`
                 : `all ${previewDims}`;
             const footer = [];
-            if (savedPath) footer.push(`<span style="font-size: 12px; color: #666;">Saved to: <code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px;">${savedPath}</code></span>`);
+            if (savedPath) footer.push(`<span style="font-size: 12px; color: #666;">Saved to: ${integrationSavedPathLink(savedPath)}</span>`);
             footer.push(`<button type="button" onclick="downloadIntegrationTableAsCsv('${downloadId}')" style="margin-left: 10px; padding: 6px 12px; font-size: 13px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">📥 Download full CSV (${totalRows} rows)</button>`);
             const infoRows = buildTableInfo(table, displayColCount);
             const infoHeaderRow = '<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px;"> </th>' + infoRows.map(({ col }) => `<th style="border:1px solid #dee2e6;padding:4px 8px; background: #e9ecef; font-size: 11px; white-space: nowrap;">${normalizeIntegrationText(col)}</th>`).join('');
@@ -1517,13 +1561,7 @@
                     if (modelIds.length > 0) {
                         const modelToTables = modelRes.model_to_table_paths || {};
                         const relatedTablesHtml = modelIds
-                            .map(m => {
-                                const paths = modelToTables[m] || [];
-                                const basenames = paths.map(p => String(p).split('/').pop());
-                                const shown = basenames.slice(0, 6).join(', ');
-                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
-                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
-                            })
+                            .map(m => integrationRelatedTablesBlock(m, modelToTables[m] || []))
                             .join('');
                         const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
                         const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
@@ -1554,13 +1592,7 @@
                         const mids = (Array.isArray(modelRes.model_ids) && modelRes.model_ids.length) ? modelRes.model_ids : Object.keys(mtp);
                         const relatedTablesHtml = mids
                             .slice(0, 12)
-                            .map(m => {
-                                const paths = mtp[m] || [];
-                                const basenames = paths.map(p => String(p).split('/').pop());
-                                const shown = basenames.slice(0, 6).join(', ');
-                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
-                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
-                            })
+                            .map(m => integrationRelatedTablesBlock(m, mtp[m] || []))
                             .join('');
                         debugHtml = `<div style="margin-top: 10px; padding: 8px; border: 1px solid #f1b0b7; background: #fff6f7; border-radius: 4px;">
                             <div style="font-size: 11px; color:#b02a37;"><strong>Debug: resolved related tables</strong> (first 12 models)</div>
@@ -1582,13 +1614,7 @@
                     if (tableModelIds.length > 0) {
                         const modelToTables = tableRes.model_to_table_paths || {};
                         const relatedTablesHtml = tableModelIds
-                            .map(m => {
-                                const paths = modelToTables[m] || [];
-                                const basenames = paths.map(p => String(p).split('/').pop());
-                                const shown = basenames.slice(0, 6).join(', ');
-                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
-                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
-                            })
+                            .map(m => integrationRelatedTablesBlock(m, modelToTables[m] || []))
                             .join('');
                         const links = tableModelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
                         const modelsCount = (tableRes.stats && tableRes.stats.models_with_tables != null) ? tableRes.stats.models_with_tables : tableModelIds.length;
@@ -1619,13 +1645,7 @@
                         const mids = (Array.isArray(tableRes.model_ids) && tableRes.model_ids.length) ? tableRes.model_ids : Object.keys(mtp);
                         const relatedTablesHtml = mids
                             .slice(0, 12)
-                            .map(m => {
-                                const paths = mtp[m] || [];
-                                const basenames = paths.map(p => String(p).split('/').pop());
-                                const shown = basenames.slice(0, 6).join(', ');
-                                const more = basenames.length > 6 ? ` (+${basenames.length - 6} more)` : '';
-                                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${m}</span>: ${basenames.length} tables${basenames.length ? ` — ${shown}${more}` : ''}</div>`;
-                            })
+                            .map(m => integrationRelatedTablesBlock(m, mtp[m] || []))
                             .join('');
                         debugHtml = `<div style="margin-top: 10px; padding: 8px; border: 1px solid #f1b0b7; background: #fff6f7; border-radius: 4px;">
                             <div style="font-size: 11px; color:#b02a37;"><strong>Debug: resolved related tables</strong> (first 12 models)</div>
