@@ -6,7 +6,9 @@ All job outputs (search results, integration, evaluation, QA) go under data/jobs
 Minimal imports for fast startup.
 """
 
-import os, sys, json, random, string, threading, subprocess, time, math, re, shutil, shlex, numpy as np, pandas as pd
+import os, sys, json, random, string, threading, subprocess, time, math, re, shutil, shlex, html
+import numpy as np
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from typing import Dict, List, Optional, Any, Tuple
@@ -15,7 +17,7 @@ from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
-from src.utils import model_id_has_resolvable_local_tables
+from src.utils import model_id_has_resolvable_local_tables, resolve_table_path
 #from src.utils import filter_results_by_classify_results
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -97,6 +99,114 @@ def _require_job_dir(job_id: str) -> tuple:
     if not os.path.isdir(job_dir):
         return None, _api_error(f"Job directory not found: {job_id}", 404)
     return job_dir, None
+
+
+def _allowed_csv_roots() -> List[str]:
+    roots: List[str] = []
+    for d in list(TABLE_BASE_DIRS) + [JOBS_DIR, MODELTABLES_DATA]:
+        if not d:
+            continue
+        try:
+            if os.path.isdir(d):
+                roots.append(os.path.realpath(d))
+        except OSError:
+            continue
+    return roots
+
+
+def _path_is_under_roots(candidate: str, roots: List[str]) -> bool:
+    try:
+        cr = os.path.realpath(candidate)
+    except OSError:
+        return False
+    for r in roots:
+        if cr == r or cr.startswith(r + os.sep):
+            return True
+    return False
+
+
+def _resolve_table_file_for_preview(raw_path: str) -> Optional[str]:
+    """Resolve a CSV path from UI (absolute, basename, or repo-relative) to a readable file under allowed dirs."""
+    if not raw_path or not isinstance(raw_path, str):
+        return None
+    s = raw_path.strip()
+    if not s or ".." in s.split(os.sep):
+        return None
+    roots = _allowed_csv_roots()
+    if not roots:
+        return None
+    if os.path.isabs(s) and os.path.isfile(s):
+        cand = os.path.realpath(s)
+        if _path_is_under_roots(cand, roots):
+            return cand
+    r = resolve_table_path(s)
+    if r and os.path.isfile(r):
+        cand = os.path.realpath(r)
+        if _path_is_under_roots(cand, roots):
+            return cand
+    rel = os.path.normpath(os.path.join(REPO_ROOT, s.lstrip("/\\")))
+    if os.path.isfile(rel):
+        cand = os.path.realpath(rel)
+        if _path_is_under_roots(cand, roots):
+            return cand
+    return None
+
+
+def _html_table_cell(v: Any) -> str:
+    try:
+        if pd.isna(v):
+            return ""
+    except Exception:
+        pass
+    if v is None:
+        return ""
+    return html.escape(str(v))
+
+
+def _dataframe_to_html_table(df: pd.DataFrame) -> str:
+    col_html = "".join(f"<th>{_html_table_cell(c)}</th>" for c in df.columns)
+    body_rows: List[str] = []
+    for _, row in df.iterrows():
+        cells = "".join(f"<td>{_html_table_cell(v)}</td>" for v in row)
+        body_rows.append(f"<tr>{cells}</tr>")
+    return (
+        "<table style=\"border-collapse:collapse;font-size:12px;min-width:100%;\">"
+        f"<thead><tr style=\"background:#f8f9fa;\">{col_html}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody></table>"
+    )
+
+
+MAX_TABLE_PAGE_ROWS = 25000
+MAX_TABLE_PAGE_COLS = 200
+MAX_TABLE_PREVIEW_JSON_ROWS = 500
+MAX_TABLE_PREVIEW_JSON_COLS = 50
+
+
+TABLE_PAGE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; background: #f5f5f5; color: #212529; }
+    h1 { font-size: 1.15rem; margin: 0 0 8px 0; color: #333; }
+    .path { font-size: 12px; color: #666; word-break: break-all; margin-bottom: 12px; font-family: ui-monospace, monospace; }
+    .note { font-size: 12px; color: #856404; background: #fff3cd; border: 1px solid #ffc107; padding: 8px 10px; border-radius: 6px; margin-bottom: 12px; }
+    .wrap { overflow: auto; max-height: calc(100vh - 140px); border: 1px solid #dee2e6; border-radius: 6px; background: #fff; }
+    table { border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #dee2e6; padding: 6px 8px; text-align: left; vertical-align: top; }
+    thead th { position: sticky; top: 0; background: #f8f9fa; z-index: 2; box-shadow: 0 1px 0 #dee2e6; white-space: nowrap; }
+    td { max-width: 28rem; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <div class="path">{{ path_display }}</div>
+  {% if note %}<div class="note">{{ note }}</div>{% endif %}
+  <div class="wrap">{{ table_html|safe }}</div>
+</body>
+</html>"""
 
 
 app = Flask(__name__)
@@ -996,7 +1106,71 @@ def get_preset_queries():
 
 @app.route("/api/table-preview", methods=["GET"])
 def get_table_preview():
-    return jsonify({"status": "error", "message": "Use legacy backend for table preview"}), 501
+    """JSON snippet for inline expand (integration / toggles); caps rows/cols for speed."""
+    path_q = (request.args.get("path") or "").strip()
+    if not path_q:
+        return jsonify({"status": "error", "message": "path query parameter required"}), 400
+    resolved = _resolve_table_file_for_preview(path_q)
+    if not resolved:
+        return jsonify({"status": "error", "message": "Table file not found or access denied"}), 404
+    try:
+        df = pd.read_csv(resolved, nrows=MAX_TABLE_PREVIEW_JSON_ROWS)
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Failed to read CSV: {e}"}), 500
+    ncols = int(df.shape[1])
+    if ncols > MAX_TABLE_PREVIEW_JSON_COLS:
+        df = df.iloc[:, :MAX_TABLE_PREVIEW_JSON_COLS]
+    preview = df.head(min(120, len(df)))
+    return jsonify(
+        {
+            "status": "success",
+            "html": _dataframe_to_html_table(preview),
+            "rows": int(len(df)),
+            "columns": int(df.shape[1]),
+        }
+    )
+
+
+@app.route("/api/table-page", methods=["GET"])
+def table_page():
+    """Full-page HTML table view (new tab from retrieval results)."""
+    path_q = (request.args.get("path") or "").strip()
+    if not path_q:
+        return Response("Missing path", status=400, mimetype="text/plain; charset=utf-8")
+    resolved = _resolve_table_file_for_preview(path_q)
+    if not resolved:
+        return Response(
+            "<!DOCTYPE html><html><body><p>Table file not found or access denied.</p></body></html>",
+            status=404,
+            mimetype="text/html; charset=utf-8",
+        )
+    try:
+        df = pd.read_csv(resolved, nrows=MAX_TABLE_PAGE_ROWS)
+    except Exception as e:
+        msg = html.escape(str(e))
+        return Response(
+            f"<!DOCTYPE html><html><body><p>Failed to read CSV: {msg}</p></body></html>",
+            status=500,
+            mimetype="text/html; charset=utf-8",
+        )
+    total_cols = int(df.shape[1])
+    col_note = ""
+    if total_cols > MAX_TABLE_PAGE_COLS:
+        df = df.iloc[:, :MAX_TABLE_PAGE_COLS]
+        col_note = f" Showing first {MAX_TABLE_PAGE_COLS} of {total_cols} columns."
+    row_note = ""
+    if len(df) >= MAX_TABLE_PAGE_ROWS:
+        row_note = f" Showing first {MAX_TABLE_PAGE_ROWS} rows (file may contain more)."
+    note = (row_note + col_note).strip()
+    title = os.path.basename(resolved)
+    body = render_template_string(
+        TABLE_PAGE_HTML,
+        title=title,
+        path_display=resolved,
+        note=note,
+        table_html=_dataframe_to_html_table(df),
+    )
+    return Response(body, mimetype="text/html; charset=utf-8")
 
 
 @app.route("/api/saved-searches", methods=["GET"])

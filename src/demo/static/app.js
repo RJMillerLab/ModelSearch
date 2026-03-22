@@ -640,7 +640,15 @@
             const basename = (p) => String(p).split('/').pop();
             const tablesNoteCell = results.error
                 ? '<span style="' + headerStyle + '">—</span>'
-                : `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${queryTables.length ? queryTables.map(basename).join(' ') : '—'}</span></span>`;
+                : `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${
+                    queryTables.length
+                        ? queryTables.map((p) => {
+                            const bn = basename(p);
+                            const href = '{{BACKEND_URL}}/api/table-page?path=' + encodeURIComponent(p);
+                            return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;margin-right:6px;">${escapeHtml(bn)}</a>`;
+                          }).join('')
+                        : '—'
+                  }</span></span>`;
             const runLogPath = results.run_log_path || results.folder_path ? (results.folder_path + '/pipeline_run.log') : null;
             const folderPath = results.folder_path || '';
             const runLogRow = (folderPath || runLogPath)
@@ -2177,7 +2185,7 @@
                             // Use HTML directly from backend
                             div.innerHTML = `
                                 <div style="font-size: 10px; color: #999; margin-bottom: 5px;">
-                                    Preview: ${data.rows} rows × ${data.columns} columns (first 5 rows, first 5 columns)
+                                    Preview excerpt: up to ${data.rows} rows × ${data.columns} columns loaded (subset shown below)
                                 </div>
                                 <div style="max-height: 200px; overflow: auto;">
                                     ${data.html || ''}
