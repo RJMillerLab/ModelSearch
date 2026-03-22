@@ -5,6 +5,25 @@
         // Preset queries (loaded from backend); index in select value
         let presetQueriesList = [];
         
+        // Feature flags (declared early so all handlers see them; not related to fetch/network).
+        const SHOW_CARD2TAB2CARD_MODEL_TABLES = false;
+        const ENABLE_POST_INTEGRATION_ANALYSIS = false;
+        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 480px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
+        const DISPLAY_MAX_ROWS = 50;
+        const DISPLAY_MAX_COLS = 20;
+        const INTEGRATION_MAX_CELL_CHARS = 120;
+        window.__integrationTables = window.__integrationTables || {};
+        window.__modelSearchRuns = window.__modelSearchRuns || [];
+        window.__tableSearchRuns = window.__tableSearchRuns || [];
+        
+        function formatFetchError(err) {
+            const m = err && err.message ? String(err.message) : 'Unknown error';
+            if (m === 'Failed to fetch' || m === 'Load failed' || m.includes('NetworkError')) {
+                return 'Cannot reach the API. Start the backend on port 5002 (e.g. python -m src.demo.backend in another terminal). The UI on port 5001 only serves the page; API requests go to port 5002.';
+            }
+            return m;
+        }
+        
         async function loadPresetQueries() {
             const sel = document.getElementById('preset_query_select');
             if (!sel) return;
@@ -191,7 +210,7 @@
                     listContainer.innerHTML = '<div style="text-align: center; color: #dc3545; padding: 20px;">Error loading saved searches</div>';
                 }
             } catch (error) {
-                listContainer.innerHTML = `<div style="text-align: center; color: #dc3545; padding: 20px;">Error: ${error.message}</div>`;
+                listContainer.innerHTML = `<div style="text-align: center; color: #dc3545; padding: 20px;">Error: ${formatFetchError(error)}</div>`;
             }
         }
         
@@ -223,7 +242,7 @@
                     showError(data.message || 'Failed to load saved search');
                 }
             } catch (error) {
-                showError('Error: ' + error.message);
+                showError('Error: ' + formatFetchError(error));
             }
         }
         
@@ -1019,17 +1038,6 @@
                 </div>
             `;
         }
-        
-        // Feature flags for UI verbosity/control.
-        const SHOW_CARD2TAB2CARD_MODEL_TABLES = false;
-        const ENABLE_POST_INTEGRATION_ANALYSIS = false;
-        const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 480px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
-        const DISPLAY_MAX_ROWS = 50;
-        const DISPLAY_MAX_COLS = 20;
-        const INTEGRATION_MAX_CELL_CHARS = 120;
-        window.__integrationTables = window.__integrationTables || {};
-        window.__modelSearchRuns = window.__modelSearchRuns || [];
-        window.__tableSearchRuns = window.__tableSearchRuns || [];
         
         function getModelSearchKey(integrationType, card2cardMode) {
             return [(integrationType || 'union'), (card2cardMode || 'dense')].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
