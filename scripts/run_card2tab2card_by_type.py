@@ -121,7 +121,7 @@ def main() -> int:
             "query_tables": [],
             "searched_tables": [],
             "model_ids": [],
-            "intermediate": {"retrieved_table_ids": [], "retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}},
+            "intermediate": {"retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}},
         }
         os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
@@ -177,7 +177,7 @@ def main() -> int:
             "query_tables": query_tables,
             "searched_tables": [],
             "model_ids": [],
-            "intermediate": {"retrieved_table_ids": [], "retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}},
+            "intermediate": {"retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}},
         }
         os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
@@ -278,7 +278,6 @@ def main() -> int:
         "searched_tables": retrieved_filenames,
         "model_ids": final_model_ids,
         "intermediate": {
-            "retrieved_table_ids": similar_table_ids,
             "retrieved_table_filenames": retrieved_filenames,
             "table_id_to_filename": table_id_to_filename_str,
             "table_to_models": table_to_models,

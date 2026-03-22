@@ -73,6 +73,14 @@ TAB2KNOW_REPO = os.path.join(REPO_ROOT, "others", "tab2know")
 CARD2CARD_MODES = ["dense", "sparse", "hybrid"]
 CARD2TAB2CARD_TYPES = ["keyword", "single_column", "unionable"]
 
+# Model Search (left / card2card_* in job JSON):
+# - False (default): in **query** mode, skip `python -m src.search.card2card` and reuse the
+#   query2modelcard ranking (neighbors = same list minus seed). Restores old behavior with
+#   USE_CARD2CARD_CLI=1 or set below to True.
+# - True: always run legacy card2card CLI for dense/sparse/hybrid (slower; needs FAISS/sparse artifacts).
+# Use False or 0 only — strings like "no" are truthy and wrongly enable the CLI.
+USE_CARD2CARD_CLI = False
+
 # Table search / Card2Tab2Card post-filtering by table filename source.
 # "github", "arxiv", "hugging"
 TABLE_RESOURCE_ALLOWLIST = ["hugging"]

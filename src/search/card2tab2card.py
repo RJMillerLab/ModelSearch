@@ -3,36 +3,20 @@ Card -> Tab -> Card (simplified)
 
 Pipeline:
 1) Read model-related tables from relationship parquet (modelId -> csv_path)
-2) Search related tables using src.search.tab2tab.search_table2table
-3) Map retrieved table ids -> filenames via modellake.db
-4) Reverse map filenames -> modelIds via relationship parquet
+2) tab2tab search → CSV basenames from Blend
+3) load_csvs_to_modelids(basenames) → model ids (relationship parquet only; no modellake here)
 """
 
 import os
 import json
 import time
 import argparse
-from typing import Dict, List, Optional, Set
-
-import duckdb
+from typing import Dict, List, Optional
 
 #from src.config import MODELLAKE_DB, CARD2TAB2CARD_OUTPUT_JSON
 from src.config import *
 from src.search.tab2tab import search_table2table
 from src.utils import load_modelid_to_csvlist, load_csvs_to_modelids, resolve_table_path
-
-
-def _table_ids_to_filenames(table_ids: List[int], db_path: str) -> Dict[int, str]:
-    if not table_ids:
-        return {}
-    sql = f"""
-        SELECT DISTINCT tableid, filename
-        FROM modellake_index
-        WHERE rowid = -1 AND tableid IN ({",".join(["?"] * len(table_ids))})
-    """
-    with duckdb.connect(db_path, read_only=True) as con:
-        rows = con.execute(sql, table_ids).fetchall()
-    return {int(tid): str(fname) for tid, fname in rows}
 
 
 def search_card2tab2card(   
@@ -62,7 +46,7 @@ def search_card2tab2card(
         if output_json:
             os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
             with open(output_json, "w", encoding="utf-8") as f:
-                json.dump({"query_model": model_id, "query_tables": [], "searched_tables": [], "model_ids": [], "intermediate": {"retrieved_table_ids": [], "retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}}}, f, ensure_ascii=False, indent=2)
+                json.dump({"query_model": model_id, "query_tables": [], "searched_tables": [], "model_ids": [], "intermediate": {"retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}}}, f, ensure_ascii=False, indent=2)
         return []
     else:
         print(f"query_tables example: {query_tables[0]}")
@@ -70,24 +54,24 @@ def search_card2tab2card(
     for qp in query_tables:
         print(f"  seed_csv: {os.path.basename(qp)}  path={qp}", flush=True)
 
-    # table2table search
-    similar_table_ids: List[int] = []
+    # table2table search (tab2tab returns CSV basenames)
+    similar_basenames: List[str] = []
     for csv_path in query_tables:
         if not os.path.exists(csv_path):
             continue
-        ids = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path)
-        id_list = list(ids) if ids else []
-        sample = id_list[:15]
-        more = f" ...(+{len(id_list) - 15})" if len(id_list) > 15 else ""
+        names = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path)
+        n_list = list(names) if names else []
+        sample = n_list[:15]
+        more = f" ...(+{len(n_list) - 15})" if len(n_list) > 15 else ""
         print(
             f"[c2t2c-trace] tab2tab query={os.path.basename(csv_path)} search_type={search_type} k={table_top_k} "
-            f"-> n_ids={len(id_list)} sample_table_ids={sample}{more}",
+            f"-> n_filenames={len(n_list)} sample={sample}{more}",
             flush=True,
         )
-        if ids:
-            similar_table_ids.extend(ids)
+        if names:
+            similar_basenames.extend(names)
 
-    if not similar_table_ids:
+    if not similar_basenames:
         print("⚠️ No similar tables returned by tab2tab.")
         # Downstream expects `--output_json` to always be written so that
         # backend/frontend don't fail with "No JSON at ...".
@@ -101,7 +85,6 @@ def search_card2tab2card(
                         "searched_tables": [],
                         "model_ids": [],
                         "intermediate": {
-                            "retrieved_table_ids": [],
                             "retrieved_table_filenames": [],
                             "table_id_to_filename": {},
                             "table_to_models": {},
@@ -114,26 +97,23 @@ def search_card2tab2card(
             print(f"✅ Results saved to {output_json} (empty)")
         return []
 
-    # map table ids to tables name (dedupe while preserving order)
-    unique_tids = list(dict.fromkeys(int(tid) for tid in similar_table_ids))
-    unique_tids = unique_tids[: max(table_top_k, 1) * max(len(query_tables), 1)]
-    table_id_to_filename = _table_ids_to_filenames(unique_tids, db_path)
-    missing_tid = [tid for tid in unique_tids if tid not in table_id_to_filename]
-    if missing_tid:
-        print(
-            f"[c2t2c-trace] WARN modellake_index: {len(missing_tid)} table_ids have no filename "
-            f"(sample: {missing_tid[:20]}{'...' if len(missing_tid) > 20 else ''})",
-            flush=True,
-        )
-    retrieved_tables = list(dict.fromkeys(table_id_to_filename.get(tid) for tid in unique_tids if table_id_to_filename.get(tid)))
+    retrieved_tables = list(dict.fromkeys(similar_basenames))
+    retrieved_tables = retrieved_tables[: max(table_top_k, 1) * max(len(query_tables), 1)]
     print(
-        f"[c2t2c-trace] after dedupe: unique_table_ids={len(unique_tids)} -> filenames_resolved={len(retrieved_tables)}",
+        f"[c2t2c-trace] after dedupe: unique_basenames={len(retrieved_tables)} (tab2tab → parquet only)",
         flush=True,
     )
 
-    reverse = load_csvs_to_modelids([os.path.basename(fname) for fname in retrieved_tables])
-    table_to_models = {table: [mid for mid in reverse.get(os.path.basename(table), []) if mid != model_id] for table in retrieved_tables}
-    similar_models = list(dict.fromkeys(mid for mids in table_to_models.values() for mid in mids))
+    reverse = load_csvs_to_modelids(retrieved_tables)
+    table_to_models = {
+        bn: [mid for mid in reverse.get(bn, []) if mid != model_id] for bn in retrieved_tables
+    }
+    # Tab→card: never return the query model (defense in depth vs parquet / multi-table paths).
+    similar_models = list(
+        dict.fromkeys(
+            mid for mids in table_to_models.values() for mid in mids if mid != model_id
+        )
+    )
     # `k` in this pipeline is controlled by the frontend's per-table top-k.
     # Many different model_ids can be related to a single retrieved table,
     # so we should not cap the number of returned model_ids to `k`.
@@ -141,10 +121,7 @@ def search_card2tab2card(
     final_results = similar_models[:model_top_k] if model_top_k > 0 else similar_models
 
     print("[c2t2c-trace] parquet load_csvs_to_modelids: retrieved_csv_basename -> modelIds (query model excluded per row)", flush=True)
-    _rows = sorted(
-        ((os.path.basename(t), mids) for t, mids in table_to_models.items()),
-        key=lambda x: -len(x[1]),
-    )
+    _rows = sorted(table_to_models.items(), key=lambda x: -len(x[1]))
     _max_tbl_lines = 60
     for bn, mids in _rows[:_max_tbl_lines]:
         prev = ", ".join(mids[:6])
@@ -170,9 +147,8 @@ def search_card2tab2card(
                     "searched_tables": retrieved_tables,
                     "model_ids": final_results,
                     "intermediate": {
-                        "retrieved_table_ids": unique_tids,
-                        "retrieved_table_filenames": retrieved_tables,
-                        "table_id_to_filename": {str(k_): v for k_, v in table_id_to_filename.items()},
+                        "retrieved_table_filenames": list(retrieved_tables),
+                        "table_id_to_filename": {},
                         "table_to_models": table_to_models,
                     },
                 },

@@ -41,7 +41,45 @@ def _get_classification_module():
         spec.loader.exec_module(_classification_module)
     return _classification_module
 
-from src.config import MODELLAKE_DB, CLASSIFICATION_JSON, TAB2TAB_BY_TYPE_OUTPUT_JSON
+from src.config import CLASSIFICATION_JSON, INDEX_TABLE, MODELLAKE_DB, TAB2TAB_BY_TYPE_OUTPUT_JSON
+
+
+def _basenames_to_ordered_table_ids(basenames: List[str], db_path: str) -> List[int]:
+    """tab2tab returns basenames; type filter matches on modellake table ids."""
+    if not basenames:
+        return []
+    unique_bn = list(dict.fromkeys(basenames))
+    ph = ",".join(["?"] * len(unique_bn))
+    sql = f"""
+        SELECT DISTINCT tableid, filename
+        FROM {INDEX_TABLE}
+        WHERE rowid = -1 AND filename IN ({ph})
+    """
+    with duckdb.connect(db_path, read_only=True) as con:
+        rows = con.execute(sql, unique_bn).fetchall()
+    bn_to_tid: Dict[str, int] = {}
+    for tid, fname in rows:
+        tid = int(tid)
+        bn = os.path.basename(str(fname)).strip()
+        if bn not in bn_to_tid:
+            bn_to_tid[bn] = tid
+    seen: Set[int] = set()
+    out: List[int] = []
+    for bn in basenames:
+        tid = bn_to_tid.get(bn)
+        if tid is None or tid in seen:
+            continue
+        seen.add(tid)
+        out.append(tid)
+    return out
+
+
+def _tab2tab_output_to_table_ids(raw: List[Any], db_path: Optional[str]) -> List[int]:
+    if not raw:
+        return []
+    if isinstance(raw[0], str):
+        return _basenames_to_ordered_table_ids(raw, db_path or MODELLAKE_DB)
+    return [int(x) for x in raw]
 from src.search.classification import (
     classify_table,
     classify_table_from_db,
@@ -243,6 +281,7 @@ def search_table2table_by_type(
         source_column=source_column,
         target_column=target_column
     )
+    all_results = _tab2tab_output_to_table_ids(all_results, db_path)
     
     # If single_column returned 0, it means no tables have overlapping cell values.
     # Fall back to keyword search (column names) so we still get same-type tables with similar schema.
@@ -256,6 +295,7 @@ def search_table2table_by_type(
                 k=k * 20,
                 db_path=db_path,
             )
+            all_results = _tab2tab_output_to_table_ids(all_results, db_path)
     if len(all_results) == 0 and search_type == "single_column":
         print(f"   Tip: single_column matches on cell values. Try --search_type keyword to match on column headers.")
     
