@@ -48,7 +48,7 @@ RAW_HTML_TEMPLATE = """
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 880px;
+            max-width: 1560px;
             margin: 0 auto;
             padding: 12px;
             background: #f5f5f5;
@@ -58,6 +58,24 @@ RAW_HTML_TEMPLATE = """
             padding: 16px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .dashboard-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 16px;
+            align-items: start;
+        }
+        @media (max-width: 1100px) {
+            .dashboard-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+        .dashboard-col-scroll {
+            max-height: calc(100vh - 88px);
+            overflow-y: auto;
+            overflow-x: hidden;
+            min-width: 0;
+            padding-right: 4px;
         }
         h1 {
             color: #333;
@@ -347,6 +365,8 @@ RAW_HTML_TEMPLATE = """
         <h1 style="margin-bottom: 8px; font-size: 22px;">🔍 ModelSearch Demo</h1>
         <p style="margin-bottom: 12px; font-size: 13px;">Compare <span class="number-badge">1</span> Card2Card vs <span class="number-badge">2</span> Card2Tab2Card</p>
         
+        <div class="dashboard-layout">
+        <div class="dashboard-col-scroll">
         <div class="input-section">
             <div style="margin-bottom: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
                 <label style="display: flex; align-items: center; cursor: pointer; gap: 6px; font-size: 13px;">
@@ -460,6 +480,13 @@ RAW_HTML_TEMPLATE = """
             <div id="resultsMetaStrip" style="display: none; margin-bottom: 8px; padding: 6px 10px; line-height: 1.35; font-size: 12px; color: #495057; background: #fafafa; border: 1px solid #e9ecef; border-radius: 6px;"></div>
             <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; font-weight: bold;">Retrieval results</h3>
             <div id="resultsContent"></div>
+        </div>
+        </div>
+        <div class="dashboard-col-scroll">
+            <div id="integrationPanelMount" style="font-size: 12px; color: #888; padding: 8px 4px;">
+                Table Integration will appear here after a search completes.
+            </div>
+        </div>
         </div>
     </div>
     
