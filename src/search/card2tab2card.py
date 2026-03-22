@@ -66,6 +66,9 @@ def search_card2tab2card(
         return []
     else:
         print(f"query_tables example: {query_tables[0]}")
+    print(f"[c2t2c-trace] query_tables ({len(query_tables)}):", flush=True)
+    for qp in query_tables:
+        print(f"  seed_csv: {os.path.basename(qp)}  path={qp}", flush=True)
 
     # table2table search
     similar_table_ids: List[int] = []
@@ -73,6 +76,14 @@ def search_card2tab2card(
         if not os.path.exists(csv_path):
             continue
         ids = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path)
+        id_list = list(ids) if ids else []
+        sample = id_list[:15]
+        more = f" ...(+{len(id_list) - 15})" if len(id_list) > 15 else ""
+        print(
+            f"[c2t2c-trace] tab2tab query={os.path.basename(csv_path)} search_type={search_type} k={table_top_k} "
+            f"-> n_ids={len(id_list)} sample_table_ids={sample}{more}",
+            flush=True,
+        )
         if ids:
             similar_table_ids.extend(ids)
 
@@ -107,7 +118,18 @@ def search_card2tab2card(
     unique_tids = list(dict.fromkeys(int(tid) for tid in similar_table_ids))
     unique_tids = unique_tids[: max(table_top_k, 1) * max(len(query_tables), 1)]
     table_id_to_filename = _table_ids_to_filenames(unique_tids, db_path)
+    missing_tid = [tid for tid in unique_tids if tid not in table_id_to_filename]
+    if missing_tid:
+        print(
+            f"[c2t2c-trace] WARN modellake_index: {len(missing_tid)} table_ids have no filename "
+            f"(sample: {missing_tid[:20]}{'...' if len(missing_tid) > 20 else ''})",
+            flush=True,
+        )
     retrieved_tables = list(dict.fromkeys(table_id_to_filename.get(tid) for tid in unique_tids if table_id_to_filename.get(tid)))
+    print(
+        f"[c2t2c-trace] after dedupe: unique_table_ids={len(unique_tids)} -> filenames_resolved={len(retrieved_tables)}",
+        flush=True,
+    )
 
     reverse = load_csvs_to_modelids([os.path.basename(fname) for fname in retrieved_tables])
     table_to_models = {table: [mid for mid in reverse.get(os.path.basename(table), []) if mid != model_id] for table in retrieved_tables}
@@ -117,6 +139,25 @@ def search_card2tab2card(
     # so we should not cap the number of returned model_ids to `k`.
     # Keep UI-consistent cap: models capped at 50.
     final_results = similar_models[:model_top_k] if model_top_k > 0 else similar_models
+
+    print("[c2t2c-trace] parquet load_csvs_to_modelids: retrieved_csv_basename -> modelIds (query model excluded per row)", flush=True)
+    _rows = sorted(
+        ((os.path.basename(t), mids) for t, mids in table_to_models.items()),
+        key=lambda x: -len(x[1]),
+    )
+    _max_tbl_lines = 60
+    for bn, mids in _rows[:_max_tbl_lines]:
+        prev = ", ".join(mids[:6])
+        extra = f" ...+{len(mids) - 6} models" if len(mids) > 6 else ""
+        print(f"  {bn} | n={len(mids)} | {prev}{extra}", flush=True)
+    if len(_rows) > _max_tbl_lines:
+        print(f"  ... [{len(_rows) - _max_tbl_lines} more tables omitted]", flush=True)
+    print(
+        f"[c2t2c-trace] unique models before model_top_k cap: {len(similar_models)} "
+        f"(model_top_k={model_top_k}); after cap: {len(final_results)}",
+        flush=True,
+    )
+    print(f"[c2t2c-trace] final model_ids order: {final_results}", flush=True)
 
     print(f"✅ query_tables={len(query_tables)} retrieved_tables={len(retrieved_tables)} model_ids={len(final_results)}")
     if output_json:
