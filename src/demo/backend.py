@@ -2,7 +2,7 @@
 Backend API for ModelSearch Demo (CLI-based)
 
 Runs search via subprocess commands from docs/build_index.md.
-All job outputs (search results, integration, evaluation, QA) go under data/jobs/<job_id>.
+All job outputs (search results, integration, evaluation, QA) go under JOBS_DIR from config (e.g. data_<tag>/jobs_<tag>/<job_id>).
 Minimal imports for fast startup.
 """
 
@@ -99,6 +99,11 @@ def _require_job_dir(job_id: str) -> tuple:
     if not os.path.isdir(job_dir):
         return None, _api_error(f"Job directory not found: {job_id}", 404)
     return job_dir, None
+
+
+def _integration_saved_path_for_api(job_id: str, csv_name: str) -> str:
+    """Repo-relative path for API/UI display only (fixed prefix; files still written under JOBS_DIR)."""
+    return f"data_251117/jobs_251117/{job_id}/{csv_name}"
 
 
 def _allowed_csv_roots() -> List[str]:
@@ -1287,7 +1292,7 @@ def integrate():
             csv_name = f"integrated_table_search_{run_key}.csv"
             save_path = os.path.join(job_dir, csv_name)
             integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-            saved_path = os.path.join("data", "jobs", job_id, csv_name)
+            saved_path = _integration_saved_path_for_api(job_id, csv_name)
         if saved_path:
             result["saved_path"] = saved_path
         # Ensure models_with_tables is always present for Table Search (model IDs used in this integration; may differ from full retrieval list)
@@ -1353,7 +1358,7 @@ def integrate_model_search():
             csv_name = f"integrated_model_search_{run_key}.csv"
             save_path = os.path.join(job_dir, csv_name)
             integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-            saved_path = os.path.join("data", "jobs", job_id, csv_name)
+            saved_path = _integration_saved_path_for_api(job_id, csv_name)
         if saved_path:
             result["saved_path"] = saved_path
         save_payload = {"status": "success", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, **result}
