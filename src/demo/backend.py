@@ -17,7 +17,7 @@ from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
-from src.utils import model_id_has_resolvable_local_tables, resolve_table_path
+from src.utils import model_id_has_resolvable_local_tables, resolve_table_path, classify_results
 #from src.utils import filter_results_by_classify_results
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -125,29 +125,110 @@ def _path_is_under_roots(candidate: str, roots: List[str]) -> bool:
     return False
 
 
-def _resolve_table_file_for_preview(raw_path: str) -> Optional[str]:
-    """Resolve a CSV path from UI (absolute, basename, or repo-relative) to a readable file under allowed dirs."""
+def _extra_csv_allow_roots() -> List[str]:
+    raw = (os.environ.get("MODELSEARCH_CSV_ALLOW_ROOTS") or "").strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    for p in re.split(r"[;:]", raw):
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            rp = os.path.realpath(p)
+            if os.path.isdir(rp):
+                out.append(rp)
+        except OSError:
+            continue
+    return out
+
+
+def _basename_like_modellake_table(name: str) -> bool:
+    try:
+        classify_results(name)
+        return True
+    except ValueError:
+        return False
+
+
+def _allow_external_modeltables_csv(cand: str) -> bool:
+    """
+    Allow CSVs that live outside REPO_ROOT's TABLE_BASE_DIRS (e.g. sibling clone
+    .../Repo/ModelTables/data/... while config points at .../ModelSearchDemo/ModelTables/...).
+    Requires known table basename pattern + path containing 'ModelTables' or an extra allow-root.
+    """
+    try:
+        cr = os.path.realpath(cand)
+    except OSError:
+        return False
+    if not os.path.isfile(cr):
+        return False
+    bn = os.path.basename(cr)
+    if not bn.lower().endswith(".csv") or not _basename_like_modellake_table(bn):
+        return False
+    norm = cr.replace("\\", "/").lower()
+    if "/modeltables/" in norm:
+        return True
+    for er in _extra_csv_allow_roots():
+        if cr == er or cr.startswith(er + os.sep):
+            return True
+    return False
+
+
+def _real_file_candidates(raw_path: str) -> List[str]:
+    """Absolute realpaths to try for a path string from search results (may contain ../)."""
     if not raw_path or not isinstance(raw_path, str):
-        return None
+        return []
     s = raw_path.strip()
-    if not s or ".." in s.split(os.sep):
-        return None
+    if not s:
+        return []
+    seen = set()
+    out: List[str] = []
+
+    def push(p: str) -> None:
+        try:
+            rp = os.path.realpath(p)
+            if os.path.isfile(rp) and rp not in seen:
+                seen.add(rp)
+                out.append(rp)
+        except OSError:
+            return
+
+    if os.path.isabs(s):
+        push(s)
+    else:
+        # Paths like ../Repo/ModelTables/data/processed/... are stored relative to job CWD
+        # or repo root; anchoring to REPO_ROOT collapses .. correctly.
+        push(os.path.join(str(REPO_ROOT), s))
+    return out
+
+
+def _resolve_table_file_for_preview(raw_path: str) -> Optional[str]:
+    """Resolve a CSV path from UI (absolute, ../-relative, basename, or repo-relative) under allowed dirs."""
     roots = _allowed_csv_roots()
+    for cand in _real_file_candidates(raw_path):
+        if roots and _path_is_under_roots(cand, roots):
+            return cand
+        if _allow_external_modeltables_csv(cand):
+            return cand
+    s = (raw_path or "").strip()
+    if not s:
+        return None
     if not roots:
         return None
-    if os.path.isabs(s) and os.path.isfile(s):
-        cand = os.path.realpath(s)
-        if _path_is_under_roots(cand, roots):
-            return cand
     r = resolve_table_path(s)
     if r and os.path.isfile(r):
         cand = os.path.realpath(r)
         if _path_is_under_roots(cand, roots):
             return cand
-    rel = os.path.normpath(os.path.join(REPO_ROOT, s.lstrip("/\\")))
+        if _allow_external_modeltables_csv(cand):
+            return cand
+    rel = os.path.normpath(os.path.join(str(REPO_ROOT), s.lstrip("/\\")))
     if os.path.isfile(rel):
         cand = os.path.realpath(rel)
         if _path_is_under_roots(cand, roots):
+            return cand
+        if _allow_external_modeltables_csv(cand):
             return cand
     return None
 
