@@ -24,6 +24,11 @@
       "id": "table_foundation_model_for_missing_values",
       "title": "table_foundation_model_for_missing_values",
       "query": "Are there table foundation models that can handle small tables (≤100 rows/columns) with many missing values and produce column embeddings?"
+    },
+    {
+      "id": "example_slide",
+      "title": "example_slide",
+      "query": "table foundation models that handle small tables with hetergeneous structure"
     }
   ]
 }
