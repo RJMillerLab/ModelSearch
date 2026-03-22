@@ -194,6 +194,14 @@ RAW_HTML_TEMPLATE = """
             border-radius: 3px;
             border-left: 3px solid #007bff;
             font-size: 13px;
+            line-height: 1.45;
+        }
+        .result-item a {
+            color: #0056b3;
+            text-decoration: none;
+        }
+        .result-item a:hover {
+            text-decoration: underline;
         }
         .comparison-section {
             margin-top: 20px;

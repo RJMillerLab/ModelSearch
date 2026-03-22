@@ -3,8 +3,9 @@
 Generate markdown files for table comparison/viewing.
 
 Usage:
-  python -m src.postprocess.generate_table_md --table_ids 3690 46228 --output table_comparison.md
-  python -m src.postprocess.generate_table_md --model_id google-bert/bert-base-uncased --output model_tables.md
+  python -m src.utils.generate_table_md --table_ids 3690 46228 --output table_comparison.md
+  python -m src.utils.generate_table_md --model_id google-bert/bert-base-uncased --output model_tables.md
+  python -m src.utils.generate_table_md --csv_files 9ba9372b41_table1.csv a48291951a_table1.csv --output csv_preview.md
 """
 
 import os
@@ -26,6 +27,7 @@ from . import (
 def generate_markdown(
     table_ids: Optional[List[int]] = None,
     model_id: Optional[str] = None,
+    csv_files: Optional[List[str]] = None,
     db_path: str = None,
     classification_json: Optional[str] = None,
     output_path: str = "table_comparison.md",
@@ -35,7 +37,7 @@ def generate_markdown(
     db_path = db_path or MODELLAKE_DB
     classification_json = classification_json or CLASSIFICATION_JSON
     classifications = {}
-    if classification_json:
+    if classification_json and os.path.exists(classification_json):
         classifications = load_classifications(classification_json)
 
     tables_metadata = []
@@ -46,8 +48,23 @@ def generate_markdown(
             return
     elif table_ids:
         tables_metadata = get_tables_metadata(table_ids, db_path)
+    elif csv_files:
+        seen = set()
+        for csv in csv_files:
+            filename = os.path.basename(str(csv).strip())
+            if not filename or filename in seen:
+                continue
+            seen.add(filename)
+            tables_metadata.append(
+                {
+                    "tableid": f"csv:{filename}",
+                    "filename": filename,
+                    "table_group": "N/A",
+                    "table_type": "N/A",
+                }
+            )
     else:
-        print("Must provide --table_ids or --model_id")
+        print("Must provide --table_ids, --model_id, or --csv_files")
         return
 
     if not tables_metadata:
@@ -57,6 +74,8 @@ def generate_markdown(
     lines = []
     if model_id:
         lines.append(f"# Tables for Model: `{model_id}`\n\n**Total tables:** {len(tables_metadata)}\n\n---\n")
+    elif csv_files:
+        lines.append(f"# CSV Preview\n\n**Total tables:** {len(tables_metadata)}\n\n---\n")
     else:
         lines.append(f"# Table Comparison\n\n**Total tables:** {len(tables_metadata)}\n\n---\n")
 
@@ -90,17 +109,22 @@ def generate_markdown(
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Generate markdown for table(s) by ID or model ID")
+    ap = argparse.ArgumentParser(description="Generate markdown for table(s) by ID, model ID, or CSV files")
     ap.add_argument("--table_ids", type=int, nargs="+", default=None)
     ap.add_argument("--model_id", type=str, default=None)
+    ap.add_argument("--csv_files", type=str, nargs="+", default=None, help="CSV basenames or paths")
     ap.add_argument("--output", type=str, default="table_comparison.md")
     ap.add_argument("--max_rows", type=int, default=50)
     args = ap.parse_args()
-    if not args.table_ids and not args.model_id:
-        ap.error("Provide --table_ids or --model_id")
+    selected_modes = sum(bool(v) for v in [args.table_ids, args.model_id, args.csv_files])
+    if selected_modes == 0:
+        ap.error("Provide --table_ids, --model_id, or --csv_files")
+    if selected_modes > 1:
+        ap.error("Use only one of: --table_ids, --model_id, --csv_files")
     generate_markdown(
         table_ids=args.table_ids,
         model_id=args.model_id,
+        csv_files=args.csv_files,
         db_path=MODELLAKE_DB,
         classification_json=CLASSIFICATION_JSON,
         output_path=args.output,

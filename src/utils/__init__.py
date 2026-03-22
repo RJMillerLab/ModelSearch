@@ -622,11 +622,15 @@ def get_tables_metadata(
     ]
 
 def table_to_markdown(df, max_rows: int = 50) -> str:
-    """Render DataFrame as markdown code block (first max_rows)."""
+    """Render DataFrame as a markdown table (first max_rows)."""
     if df is None or df.empty:
         return "*Empty table*"
     df_display = df.head(max_rows)
-    md = "```\n" + df_display.to_string(index=False) + "\n```"
+    # Prefer pipe-style markdown table; fallback to plain text if tabulate is unavailable.
+    try:
+        md = df_display.to_markdown(index=False)
+    except Exception:
+        md = "```\n" + df_display.to_string(index=False) + "\n```"
     if len(df) > max_rows:
         md += f"\n\n*... and {len(df) - max_rows} more rows*"
     return md

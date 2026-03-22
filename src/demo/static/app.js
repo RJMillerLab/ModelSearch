@@ -725,16 +725,16 @@
                         }).join('')}
                     </div>
                     <div class="result-card" style="min-width: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                        <h3 style="margin-top: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #343a40;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
+                        <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
                         ${(() => {
                             // Filter: show keyword, unionable, and joinable types
                             const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
                             // Map joinable types to display names
                             const typeDisplayNames = {
-                                'single_column': 'joinable (single_column)',
-                                'multi_column': 'joinable (multi_column)',
-                                'keyword': 'keyword',
-                                'unionable': 'unionable'
+                                'single_column': 'Joinable (single_column)',
+                                'multi_column': 'Joinable (multi_column)',
+                                'keyword': 'Keyword',
+                                'unionable': 'Unionable'
                             };
                             const entries = Object.entries(card2tab2cardResults)
                                 .filter(([type, data]) => allowedTypes.includes(type))
@@ -782,9 +782,9 @@
                             });
                             
                             return `
-                                <div class="search-type-section">
+                                <div class="search-type-section" style="margin-bottom: 15px;">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
-                                        <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                                        <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${displayName}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">
                                                 ${models.length} models${(SHOW_CARD2TAB2CARD_MODEL_TABLES && realTableCount) ? ` from ${realTableCount} tables` : ''}
@@ -794,19 +794,21 @@
                                     <div class="collapsible-content" id="${sectionId}">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
                                             ${sortedModels.length > 0 ? sortedModels.map((m, idx) => {
+                                                if (!SHOW_CARD2TAB2CARD_MODEL_TABLES) {
+                                                    return `<li class="result-item">${formatModel(m)}</li>`;
+                                                }
                                                 let modelId = typeof m === 'string' ? m : (m.model_id || m);
                                                 modelId = String(modelId).trim();
                                                 const modelUrl = typeof m === 'string' ? `https://huggingface.co/${modelId}` : (m.url || `https://huggingface.co/${modelId}`);
                                                 const modelTables = modelToTables[modelId] || [];
                                                 const hasTables = modelTables.length > 0;
-                                                
                                                 const tableLine = hasTables ? modelTables.map(t => String(t).split('/').pop()).join(' ') : '';
                                                 return `
-                                                    <li class="result-item" style="margin-bottom: 4px;">
-                                                        <div style="display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap;">
-                                                            <a href="${modelUrl}" target="_blank" style="color: #007bff; text-decoration: none; font-weight: 500; font-size: 13px;">${modelId}</a>
-                                                            ${(SHOW_CARD2TAB2CARD_MODEL_TABLES && hasTables) ? ` <span style="font-size: 10px; color: #888;">(${modelTables.length} tables)</span>` : ''}
-                                                            ${(SHOW_CARD2TAB2CARD_MODEL_TABLES && hasTables) ? `<span style="font-size: 10px; color: #999; font-family: monospace;">${tableLine}</span>` : ''}
+                                                    <li class="result-item">
+                                                        <div style="display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; line-height: 1.45;">
+                                                            <a href="${modelUrl}" target="_blank" style="color: #0056b3; text-decoration: none; font-size: 13px;">${modelId}</a>
+                                                            ${hasTables ? ` <span style="font-size: 10px; color: #888;">(${modelTables.length} tables)</span>` : ''}
+                                                            ${hasTables ? `<span style="font-size: 10px; color: #999; font-family: monospace;">${tableLine}</span>` : ''}
                                                         </div>
                                                     </li>
                                                 `;
