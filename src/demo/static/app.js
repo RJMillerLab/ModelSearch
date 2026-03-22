@@ -221,11 +221,18 @@
             el.innerHTML = '';
         }
         
+        function clearIntegrationPanel() {
+            const m = document.getElementById('integrationPanelMount');
+            if (!m) return;
+            m.innerHTML = '<span style="font-size:12px;color:#888;">Table Integration will appear here after a search completes.</span>';
+        }
+        
         async function loadSavedSearchFolder(folderName) {
             // Reset UI
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.remove('active');
             clearResultsMetaStrip();
+            clearIntegrationPanel();
             document.getElementById('errorMsg').style.display = 'none';
             document.getElementById('logContainer').innerHTML = '';
             
@@ -348,6 +355,8 @@
             // Reset UI
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.remove('active');
+            clearResultsMetaStrip();
+            clearIntegrationPanel();
             document.getElementById('errorMsg').style.display = 'none';
             document.getElementById('logContainer').innerHTML = '';
             
@@ -396,6 +405,7 @@
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.remove('active');
             clearResultsMetaStrip();
+            clearIntegrationPanel();
             document.getElementById('errorMsg').style.display = 'none';
             document.getElementById('logContainer').innerHTML = '';
             
@@ -464,6 +474,7 @@
             document.getElementById('progressSection').classList.add('active');
             document.getElementById('resultsSection').classList.remove('active');
             clearResultsMetaStrip();
+            clearIntegrationPanel();
             document.getElementById('errorMsg').style.display = 'none';
             document.getElementById('logContainer').innerHTML = '';
             
@@ -714,7 +725,7 @@
             ];
             const currentMode = results.card2card_retrieval_mode || 'dense';
             
-            let html = `
+            let retrievalHtml = `
                 ${errorBlock}
                 ${headerRowHtml}
                 <div class="results-grid">
@@ -904,8 +915,8 @@
             const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
             const defaultIntegrationK = results.table_search_k || 10;
             const defaultIntegrationMaxModels = results.model_top_k || 5;
-            html += `
-                <div class="integration-section" style="${integrationCardStyle}; margin-top: 16px;">
+            let integrationPanelHtml = `
+                <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Model Search and Table Search are saved separately. Switch via dropdowns to view different saved results. <strong>Integrated</strong> runs the current combination; <strong>Run all (Table Search)</strong> precomputes all table search types in parallel.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
@@ -966,7 +977,7 @@
             `;
             
             if (ENABLE_POST_INTEGRATION_ANALYSIS) {
-            html += `
+            integrationPanelHtml += `
                 <div id="integrationShortAnalysis" class="integration-summary-section" style="margin-top: 16px; padding: 14px; background: #e2e3e5; border-radius: 6px; border: 2px solid #6c757d; display: none;">
                     <h4 style="margin: 0 0 6px 0; font-size: 14px; color: #383d41;">Summary (between Table Integration and Evaluation)</h4>
                     <p style="font-size: 11px; color: #6c757d; margin: 0 0 10px 0;">Deterministic comparison: column overlap, Jaccard, containment, coverage. No LLM.</p>
@@ -1028,7 +1039,13 @@
             `;
             }
             
-            container.innerHTML = html;
+            container.innerHTML = retrievalHtml;
+            const intMount = document.getElementById('integrationPanelMount');
+            if (intMount) {
+                intMount.innerHTML = integrationPanelHtml;
+            } else {
+                container.innerHTML += integrationPanelHtml;
+            }
             window.__modelSearchRuns = [];
             window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
