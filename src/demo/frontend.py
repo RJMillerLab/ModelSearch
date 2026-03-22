@@ -380,7 +380,7 @@ RAW_HTML_TEMPLATE = """
             <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
                 <p style="margin-bottom: 4px; font-size: 12px; color: #666;">Pick a saved search</p>
                 <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px;">
-                    <select id="saved_search_select" class="form-control" style="min-width: 200px; max-width: 100%; height: 26px; font-size: 12px; padding: 2px 6px;">
+                    <select id="saved_search_select" class="form-control" style="flex: 1 1 360px; min-width: min(100%, 360px); max-width: 100%; height: 26px; font-size: 12px; padding: 2px 6px;">
                         <option value="">— select folder —</option>
                     </select>
                     <button id="loadMimicBtn" type="button" onclick="loadMimicSearch()" style="padding: 2px 10px; font-size: 12px; height: 26px;">Load Saved Results</button>

@@ -180,7 +180,7 @@
                             const opt = document.createElement('option');
                             opt.value = search.folder_name || search.id || '';
                             const qShort = search.query
-                                ? (search.query.length > 40 ? search.query.substring(0, 40) + '...' : search.query)
+                                ? (search.query.length > 96 ? search.query.substring(0, 96) + '...' : search.query)
                                 : '';
                             const tail = search.query ? qShort : (search.model_id || search.folder_name || opt.value || '');
                             const label = [search.timestamp_str || '', tail].filter(Boolean).join(' ').trim() || opt.value;
@@ -193,7 +193,7 @@
                     } else {
                         const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                         searches.forEach(search => {
-                            const qShort = search.query ? (search.query.length > 45 ? search.query.substring(0, 45) + '...' : search.query) : '';
+                            const qShort = search.query ? (search.query.length > 96 ? search.query.substring(0, 96) + '...' : search.query) : '';
                             const oneLine = search.query
                                 ? [search.timestamp_str || '', qShort].filter(Boolean).join(' ').trim()
                                 : [search.timestamp_str || '', search.model_id || ''].filter(Boolean).join(' ').trim();
@@ -925,7 +925,7 @@
             let integrationPanelHtml = `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
-                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">${INT_TITLE_C2C_HTML} and ${INT_TITLE_C2T2C_HTML} are saved separately. Use the dropdowns to switch saved runs. <strong>Integrated</strong> runs the current combination; <strong>Run all (Integration)</strong> precomputes all Card2Tab2Card search types in parallel.</p>
+                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches. <strong>Integrated</strong> runs the current combination; <strong>Run all (Integration)</strong> precomputes all Card2Tab2Card search types in parallel.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="alite">ALITE</option>
@@ -1412,10 +1412,11 @@
         }
 
         function renderIntegrationTable(table, stats, options) {
-            const { title = 'Integration', successColor = '#28a745', extraHtml = '', savedPath = '', downloadId = '' } = options || {};
+            const { title = 'Integration', successColor = '#28a745', extraHtml = '', savedPath = '', downloadId = '', omitSectionTitle = true } = options || {};
+            const titleHtml = omitSectionTitle ? '' : `<h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>`;
             if (!table || (stats && stats.output_rows === 0)) {
                 return `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
-                    <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
+                    ${titleHtml}
                     <div style="margin-bottom: 15px;">${(stats && stats.output_columns === 0) ? '⚠️ No common columns. Intersection result is empty.' : '⚠️ No common rows. Intersection result is empty.'}</div></div>`;
             }
             if (downloadId) window.__integrationTables[downloadId] = table;
@@ -1440,7 +1441,7 @@
             const infoNonNullRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Non-Null %</td>' + infoRows.map(({ nonNullPct }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${nonNullPct}</td>`).join('');
             const infoDtypeRow = '<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px; font-weight: 600;">Dtype</td>' + infoRows.map(({ dtype }) => `<td style="border:1px solid #dee2e6;padding:4px 8px; font-size: 11px;">${dtype}</td>`).join('');
             let html = `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
-                <h4 style="margin-top: 0; color: ${successColor};">✅ ${title}</h4>
+                ${titleHtml}
                 <div style="margin-bottom: 10px; font-size: 13px;">Input: ${stats.input_tables} tables, ${stats.input_rows} rows → Output: ${stats.output_rows} rows, ${stats.output_columns} cols (${previewLabel})</div>
                 ${extraHtml}
                 <div style="position: relative;">
