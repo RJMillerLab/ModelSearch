@@ -8,6 +8,10 @@
         // Feature flags (declared early so all handlers see them; not related to fetch/network).
         const SHOW_CARD2TAB2CARD_MODEL_TABLES = false;
         const ENABLE_POST_INTEGRATION_ANALYSIS = false;
+        const INT_TITLE_C2C_HTML = '<span class="number-badge">1</span> Card2Card Results';
+        const INT_TITLE_C2T2C_HTML = '<span class="number-badge">2</span> Card2Tab2Card Results';
+        const INT_MODEL_IDS_C2C = 'Model IDs (1 Card2Card Results)';
+        const INT_MODEL_IDS_C2T2C = 'Model IDs (2 Card2Tab2Card Results)';
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 480px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         const DISPLAY_MAX_ROWS = 50;
         const DISPLAY_MAX_COLS = 20;
@@ -175,8 +179,11 @@
                         searches.forEach(search => {
                             const opt = document.createElement('option');
                             opt.value = search.folder_name || search.id || '';
-                            const settingsPart = ['K=' + (search.top_k || '-'), search.card2card_retrieval_mode || ''].filter(Boolean).join(' ');
-                            const label = (search.timestamp_str || '') + ' ' + (search.query ? search.query.substring(0, 40) + (search.query.length > 40 ? '...' : '') : search.model_id || search.folder_name || opt.value) + (settingsPart ? ' | ' + settingsPart : '');
+                            const qShort = search.query
+                                ? (search.query.length > 40 ? search.query.substring(0, 40) + '...' : search.query)
+                                : '';
+                            const tail = search.query ? qShort : (search.model_id || search.folder_name || opt.value || '');
+                            const label = [search.timestamp_str || '', tail].filter(Boolean).join(' ').trim() || opt.value;
                             opt.textContent = label;
                             selectEl.appendChild(opt);
                         });
@@ -186,11 +193,10 @@
                     } else {
                         const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                         searches.forEach(search => {
-                            const settingsLabel = ['K=' + (search.top_k || '-'), (search.card2card_retrieval_mode || '')].filter(Boolean).join(', ');
                             const qShort = search.query ? (search.query.length > 45 ? search.query.substring(0, 45) + '...' : search.query) : '';
                             const oneLine = search.query
-                                ? `${search.timestamp_str || ''} - ${qShort} | K: ${search.top_k || '-'} | ${settingsLabel}`
-                                : `${search.timestamp_str || ''} - ${search.model_id || ''} | K: ${search.top_k || '-'} | ${settingsLabel}`;
+                                ? [search.timestamp_str || '', qShort].filter(Boolean).join(' ').trim()
+                                : [search.timestamp_str || '', search.model_id || ''].filter(Boolean).join(' ').trim();
                             const folder = (search.folder_name || search.id || '').replace(/'/g, "\\'").replace(/\\/g, '\\\\');
                             const titleText = [search.query || search.model_id || '', 'top_k: ' + (search.top_k || '-'), 'card2card: ' + (search.card2card_retrieval_mode || '-')].join(' | ');
                             const titleSafe = escapeHtml(titleText.substring(0, 200));
@@ -909,16 +915,17 @@
                 </div>
             ` : '';
             
-            // Table Integration: Model Search and Table Search SEPARATE - each has its own params and dropdown switching
+            // Table Integration: 1 Card2Card vs 2 Card2Tab2Card — separate params and dropdown switching
             const integrationCardStyle = 'padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 8px; border: 1px solid #dee2e6; font-size: 13px; color: #212529; min-width: 0;';
             const integrationTitleStyle = 'margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;';
             const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
+            const intH4Flex = 'margin: 0 0 6px 0; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;';
             const defaultIntegrationK = results.table_search_k || 10;
             const defaultIntegrationMaxModels = results.model_top_k || 5;
             let integrationPanelHtml = `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
-                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Model Search and Table Search are saved separately. Switch via dropdowns to view different saved results. <strong>Integrated</strong> runs the current combination; <strong>Run all (Table Search)</strong> precomputes all table search types in parallel.</p>
+                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">${INT_TITLE_C2C_HTML} and ${INT_TITLE_C2T2C_HTML} are saved separately. Use the dropdowns to switch saved runs. <strong>Integrated</strong> runs the current combination; <strong>Run all (Integration)</strong> precomputes all Card2Tab2Card search types in parallel.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="alite">ALITE</option>
@@ -935,7 +942,7 @@
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
                         <div style="margin-bottom: 16px; padding: 10px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #007bff;">
-                            <h4 style="margin: 0 0 6px 0; font-size: 13px; color: #004085;">Model Search</h4>
+                            <h4 style="${intH4Flex} color: #004085;">${INT_TITLE_C2C_HTML}</h4>
                             <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
                                 <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">retrieval mode:</label><select id="integration_model_search_mode" class="form-control" onchange="syncModelSearchDisplay()" style="width: 90px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                                     <option value="dense">Dense</option>
@@ -946,7 +953,7 @@
                             <div id="integrationModelSearchResults"></div>
                         </div>
                         <div style="padding: 10px; background: #d4edda; border-radius: 6px; border-left: 4px solid #28a745;">
-                            <h4 style="margin: 0 0 6px 0; font-size: 13px; color: #155724;">Table Search</h4>
+                            <h4 style="${intH4Flex} color: #155724;">${INT_TITLE_C2T2C_HTML}</h4>
                             <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
                                 <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">tables source:</label><select id="integration_tables_source" class="form-control" onchange="syncTableSearchDisplay()" style="width: 175px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" title="Intermediate: from search. All from Modelcards: parquet (DuckDB).">
                                     <option value="intermediate" selected>Intermediate tables</option>
@@ -988,7 +995,7 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                         <div>
                             <h3 style="margin: 0 0 4px 0; color: #856404; font-size: 15px;">📊 Evaluation on Integrated Tables</h3>
-                            <p style="font-size: 12px; color: #666; margin: 0;">Evaluate diversity between Table Search and Model Search integration results using LLM.</p>
+                            <p style="font-size: 12px; color: #666; margin: 0;">Evaluate diversity between 2 Card2Tab2Card Results and 1 Card2Card Results integrations using LLM.</p>
                         </div>
                         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                             <button id="evalQaBothBtn" onclick="runEvaluationAndQABoth('${results.job_id || currentJobId}')" 
@@ -1018,18 +1025,18 @@
                         <div id="qa_after_click" style="display: none; margin-top: 20px;">
                             <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Integrated tables</h4>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 6px;">
-                                <div><strong style="font-size: 13px; color: #0c5460;">Table Search Integration</strong></div>
-                                <div><strong style="font-size: 13px; color: #0c5460;">Model Search Integration</strong></div>
+                                <div><strong style="font-size: 13px; color: #0c5460;">2 Card2Tab2Card Results</strong></div>
+                                <div><strong style="font-size: 13px; color: #0c5460;">1 Card2Card Results</strong></div>
                             </div>
                             <div id="qaIntegratedPaths" style="font-size: 11px; color: #555; margin-bottom: 12px;"></div>
                             <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Answers compare</h4>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                                 <div>
-                                    <strong style="font-size: 13px; color: #0c5460;">Table Search</strong>
+                                    <strong style="font-size: 13px; color: #0c5460;">2 Card2Tab2Card Results</strong>
                                     <div id="qaResultsTableSearch" style="margin-top: 8px;"></div>
                                 </div>
                                 <div>
-                                    <strong style="font-size: 13px; color: #0c5460;">Model Search</strong>
+                                    <strong style="font-size: 13px; color: #0c5460;">1 Card2Card Results</strong>
                                     <div id="qaResultsModelSearch" style="margin-top: 8px;"></div>
                                 </div>
                             </div>
@@ -1074,8 +1081,8 @@
                 : '<span style="color:#999;">N/A</span>';
             target.innerHTML = `
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                    <div>Table Search CSV: ${tableHtml}</div>
-                    <div>Model Search CSV: ${modelHtml}</div>
+                    <div>2 Card2Tab2Card Results CSV: ${tableHtml}</div>
+                    <div>1 Card2Card Results CSV: ${modelHtml}</div>
                 </div>
             `;
         }
@@ -1119,7 +1126,7 @@
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
                         <details style="margin: 0;">
                             <summary style="cursor: pointer; list-style: none; outline: none;">
-                                <span style="font-weight: 600;">Model IDs (Model Search)</span>
+                                <span style="font-weight: 600;">${INT_MODEL_IDS_C2C}</span>
                                 <span style="color:#004085;">(${modelsCount} models, ${tablesCount} tables)</span>
                             </summary>
                             <div style="margin-top: 6px; font-size: 11px;">
@@ -1129,9 +1136,9 @@
                         </details>
                     </div>`;
                 } else {
-                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
+                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Card2Card Results): — (none or not available)</div>';
                 }
-                leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
+                leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
             } else {
                 leftDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
@@ -1190,7 +1197,7 @@
                     const iB = modelT.columns.indexOf(col);
                     const pctA = iA >= 0 ? nonNullPct(tableT, iA) : '-';
                     const pctB = iB >= 0 ? nonNullPct(modelT, iB) : '-';
-                    missingHtml += `<li><code>${col}</code>: Table Search ${pctA}%, Model Search ${pctB}%</li>`;
+                    missingHtml += `<li><code>${col}</code>: 2 Card2Tab2Card ${pctA}%, 1 Card2Card ${pctB}%</li>`;
                 });
                 if (overlap.length > 5) missingHtml += `<li>… and ${overlap.length - 5} more</li>`;
                 missingHtml += '</ul>';
@@ -1201,21 +1208,21 @@
                         <strong>Schema-level (column overlap)</strong>
                         <ul style="margin: 6px 0 0 0; padding-left: 18px;">
                             <li>In both: <strong>${colsCommon}</strong></li>
-                            <li>Only in Table Search: <strong>${colsOnlyInTable}</strong>${onlyTable.length ? ' (' + onlyTable.slice(0, 3).join(', ') + (onlyTable.length > 3 ? '…' : '') + ')' : ''}</li>
-                            <li>Only in Model Search: <strong>${colsOnlyInModel}</strong>${onlyModel.length ? ' (' + onlyModel.slice(0, 3).join(', ') + (onlyModel.length > 3 ? '…' : '') + ')' : ''}</li>
+                            <li>Only in 2 Card2Tab2Card Results: <strong>${colsOnlyInTable}</strong>${onlyTable.length ? ' (' + onlyTable.slice(0, 3).join(', ') + (onlyTable.length > 3 ? '…' : '') + ')' : ''}</li>
+                            <li>Only in 1 Card2Card Results: <strong>${colsOnlyInModel}</strong>${onlyModel.length ? ' (' + onlyModel.slice(0, 3).join(', ') + (onlyModel.length > 3 ? '…' : '') + ')' : ''}</li>
                         </ul>
                     </div>
                     <div style="padding: 8px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                         <strong>Deterministic metrics (no LLM)</strong>
                         <ul style="margin: 6px 0 0 0; padding-left: 18px;">
                             <li>Column Jaccard: <strong>${jaccardCols}</strong> (|A∩B|/|A∪B|)</li>
-                            <li>Containment (Table→Model): <strong>${containmentTableInModel}</strong> (|A∩B|/|A|)</li>
-                            <li>Containment (Model→Table): <strong>${containmentModelInTable}</strong> (|A∩B|/|B|)</li>
+                            <li>Containment (2 Card2Tab2Card→1 Card2Card): <strong>${containmentTableInModel}</strong> (|A∩B|/|A|)</li>
+                            <li>Containment (1 Card2Card→2 Card2Tab2Card): <strong>${containmentModelInTable}</strong> (|A∩B|/|B|)</li>
                         </ul>
                     </div>
                 </div>
                 <div style="margin-top: 8px; padding: 8px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6; font-size: 12px;">
-                    <strong>Row counts</strong>: Table Search <strong>${totalRowsA}</strong> rows, ${tableT.columns.length} cols; Model Search <strong>${totalRowsB}</strong> rows, ${modelT.columns.length} cols.
+                    <strong>Row counts</strong>: 2 Card2Tab2Card Results <strong>${totalRowsA}</strong> rows, ${tableT.columns.length} cols; 1 Card2Card Results <strong>${totalRowsB}</strong> rows, ${modelT.columns.length} cols.
                 </div>
                 ${missingHtml}
                 <p style="margin: 8px 0 0 0; font-size: 10px; color: #6c757d;">Schema + data-consistency metrics only (overlap, Jaccard, containment, coverage). Deterministic; no LLM.</p>
@@ -1253,7 +1260,7 @@
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
                         <details style="margin: 0;">
                             <summary style="cursor: pointer; list-style: none; outline: none;">
-                                <span style="font-weight: 600;">Model IDs (Table Search)</span>
+                                <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
                                 <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
                             </summary>
                             <div style="margin-top: 6px; font-size: 11px;">
@@ -1263,9 +1270,9 @@
                         </details>
                     </div>`;
                 } else {
-                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';
+                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Card2Tab2Card Results): — (none or not available)</div>';
                 }
-                rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: 'Table Search integration', successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
+                rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
             } else {
                 rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
@@ -1484,8 +1491,8 @@
             btn.disabled = true;
             btn.textContent = '⏳ Integrating...';
             container.style.display = 'block';
-            leftDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Model Search integration...</div>';
-            rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for Table Search integration...</div>';
+            leftDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for 1 Card2Card Results integration...</div>';
+            rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for 2 Card2Tab2Card Results integration...</div>';
             
             try {
                 const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
@@ -1523,7 +1530,7 @@
                         extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
                             <details style="margin: 0;">
                                 <summary style="cursor: pointer; list-style: none; outline: none;">
-                                    <span style="font-weight: 600;">Model IDs (Model Search)</span>
+                                    <span style="font-weight: 600;">${INT_MODEL_IDS_C2C}</span>
                                     <span style="color:#004085;">(${modelsCount} models, ${tablesCount} rows)</span>
                                 </summary>
                                 <div style="margin-top: 6px; font-size: 11px;">
@@ -1536,9 +1543,9 @@
                             </details>
                         </div>`;
                     } else {
-                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
+                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Card2Card Results): — (none or not available)</div>';
                     }
-                    leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
+                    leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                 } else {
                     let debugHtml = '';
                     if (modelRes.model_to_table_paths) {
@@ -1588,7 +1595,7 @@
                         tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
                             <details style="margin: 0;">
                                 <summary style="cursor: pointer; list-style: none; outline: none;">
-                                    <span style="font-weight: 600;">Model IDs (Table Search)</span>
+                                    <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
                                     <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
                                 </summary>
                                 <div style="margin-top: 6px; font-size: 11px;">
@@ -1601,9 +1608,9 @@
                             </details>
                         </div>`;
                     } else {
-                        tableExtra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Table Search): — (none or not available)</div>';
+                        tableExtra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Card2Tab2Card Results): — (none or not available)</div>';
                     }
-                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Table Search integration', successColor: '#28a745', extraHtml: tableExtra, savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
+                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: tableExtra, savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                 } else {
                     let debugHtml = '';
                     if (tableRes.model_to_table_paths) {
@@ -1742,9 +1749,9 @@
                     let extra = '';
                     if (modelIds.length > 0) {
                         const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Table Search):</strong> ${links} (${modelIds.length} models)</div>`;
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>${INT_MODEL_IDS_C2T2C}:</strong> ${links} (${modelIds.length} models)</div>`;
                     }
-                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Integration Successful', successColor: '#28a745', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'table-search-single' });
+                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'table-search-single' });
                     initTablePanZoom(resultsDiv);
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
@@ -1777,11 +1784,11 @@
                     let extra = '';
                     if (modelIds.length > 0) {
                         const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>Model IDs (Model Search):</strong> ${links} (${modelIds.length} models)</div>`;
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>${INT_MODEL_IDS_C2C}:</strong> ${links} (${modelIds.length} models)</div>`;
                     } else {
-                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (Model Search): — (none or not available)</div>';
+                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Card2Card Results): — (none or not available)</div>';
                     }
-                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: 'Model Search integration', successColor: '#007bff', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'model-search-single' });
+                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'model-search-single' });
                     initTablePanZoom(resultsDiv);
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;
@@ -1851,13 +1858,13 @@
                     <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                             <div style="padding: 15px; background: ${winner === 'model_search' ? '#d4edda' : '#e7f3ff'}; border-radius: 4px; border: 2px solid ${winner === 'model_search' ? '#28a745' : '#007bff'};">
-                                <div style="font-size: 14px; color: #666;">Model Search</div>
+                                <div style="font-size: 14px; color: #666;">1 Card2Card Results</div>
                                 <div style="font-size: 28px; font-weight: bold; color: ${winner === 'model_search' ? '#28a745' : '#004085'};">${modelSearchScore}/100</div>
                                 ${winner === 'model_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
                                 ${avgModelSearch != null ? `<div style="font-size: 10px; color: #666; margin-top: 4px;">Avg of sub-scores: ${avgModelSearch}/100</div>` : ''}
                             </div>
                             <div style="padding: 15px; background: ${winner === 'table_search' ? '#d4edda' : '#fff3cd'}; border-radius: 4px; border: 2px solid ${winner === 'table_search' ? '#28a745' : '#ffc107'};">
-                                <div style="font-size: 14px; color: #666;">Table Search</div>
+                                <div style="font-size: 14px; color: #666;">2 Card2Tab2Card Results</div>
                                 <div style="font-size: 28px; font-weight: bold; color: ${winner === 'table_search' ? '#28a745' : '#856404'};">${tableSearchScore}/100</div>
                                 ${winner === 'table_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
                                 ${avgTableSearch != null ? `<div style="font-size: 10px; color: #666; margin-top: 4px;">Avg of sub-scores: ${avgTableSearch}/100</div>` : ''}
@@ -1873,8 +1880,8 @@
                                 <div style="padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #ffc107;">
                                     <div style="font-weight: 600; font-size: 12px;">${escTpl(ss.name)}</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-top: 4px;">
-                                        <span>Model Search: <strong>${ss.model_search != null ? ss.model_search : '–'}/100</strong></span>
-                                        <span>Table Search: <strong>${ss.table_search != null ? ss.table_search : '–'}/100</strong></span>
+                                        <span>1 Card2Card: <strong>${ss.model_search != null ? ss.model_search : '–'}/100</strong></span>
+                                        <span>2 Card2Tab2Card: <strong>${ss.table_search != null ? ss.table_search : '–'}/100</strong></span>
                                     </div>
                                     ${ss.evidence ? '<div style="font-size: 11px; color: #666; margin-top: 6px;">Evidence: ' + escTpl(ss.evidence) + '</div>' : ''}
                                 </div>
@@ -1884,12 +1891,12 @@
                     ` : ''}
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
                         <div style="padding: 15px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
-                            <h5 style="margin-top: 0; color: #004085; font-size: 13px;">Model Search</h5>
+                            <h5 style="margin-top: 0; color: #004085; font-size: 13px;">1 Card2Card Results</h5>
                             ${modelSearchAnalysis.strengths && modelSearchAnalysis.strengths.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + modelSearchAnalysis.strengths.map(s => '<li>' + escTpl(s) + '</li>').join('') + '</ul></div>' : ''}
                             ${modelSearchAnalysis.weaknesses && modelSearchAnalysis.weaknesses.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + modelSearchAnalysis.weaknesses.map(w => '<li>' + escTpl(w) + '</li>').join('') + '</ul></div>' : ''}
                         </div>
                         <div style="padding: 15px; background: #fff3cd; border-radius: 4px; border-left: 4px solid #ffc107;">
-                            <h5 style="margin-top: 0; color: #856404; font-size: 13px;">Table Search</h5>
+                            <h5 style="margin-top: 0; color: #856404; font-size: 13px;">2 Card2Tab2Card Results</h5>
                             ${tableSearchAnalysis.strengths && tableSearchAnalysis.strengths.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + tableSearchAnalysis.strengths.map(s => '<li>' + escTpl(s) + '</li>').join('') + '</ul></div>' : ''}
                             ${tableSearchAnalysis.weaknesses && tableSearchAnalysis.weaknesses.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + tableSearchAnalysis.weaknesses.map(w => '<li>' + escTpl(w) + '</li>').join('') + '</ul></div>' : ''}
                         </div>

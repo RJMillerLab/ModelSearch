@@ -362,8 +362,10 @@ RAW_HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1 style="margin-bottom: 8px; font-size: 22px;">🔍 ModelSearch Demo</h1>
-        <p style="margin-bottom: 12px; font-size: 13px;">Compare <span class="number-badge">1</span> Card2Card vs <span class="number-badge">2</span> Card2Tab2Card</p>
+        <h1 style="margin: 0 0 12px 0; font-size: 22px; font-weight: 600; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px;">
+            <span>🔍 ModelSearch Demo</span>
+            <span style="font-size: 13px; font-weight: normal; color: #555;">Compare <span class="number-badge">1</span> Card2Card vs <span class="number-badge">2</span> Card2Tab2Card</span>
+        </h1>
         
         <div class="dashboard-layout">
         <div class="dashboard-col-scroll">
@@ -376,7 +378,7 @@ RAW_HTML_TEMPLATE = """
             </div>
             
             <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
-                <p style="margin-bottom: 4px; font-size: 12px; color: #666;">Pick a saved search from the folder select:</p>
+                <p style="margin-bottom: 4px; font-size: 12px; color: #666;">Pick a saved search</p>
                 <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px;">
                     <select id="saved_search_select" class="form-control" style="min-width: 200px; max-width: 100%; height: 26px; font-size: 12px; padding: 2px 6px;">
                         <option value="">— select folder —</option>
