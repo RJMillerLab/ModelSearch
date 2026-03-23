@@ -355,38 +355,6 @@ def _build_retrieved_table_model_rows(
     return rt_rows
 
 
-def preview_card2tab2card_trace(
-    search_results: Dict[str, Any],
-    search_type: str,
-    tables_source: str = "intermediate",
-    table_resources: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """
-    Trace for demo UI: query tables + retrieved table → models (+ per-model tables for all_from_modelcards).
-    Independent of ALITE/union merge; safe to call before / without running integrate_tables.
-    """
-    prep, err = _prepare_card2tab2card_inputs(search_results, search_type, tables_source, table_resources)
-    if err:
-        return {"status": "error", "error": err}
-    assert prep is not None
-    rt_rows = _build_retrieved_table_model_rows(prep["table_paths"], prep["model_to_table_paths_ts"])
-    mtp = {k: list(v) for k, v in prep["model_to_table_paths_ts"].items()}
-    return {
-        "status": "success",
-        "query_tables": prep["query_tables"],
-        "retrieved_table_model_rows": rt_rows,
-        "model_to_table_paths": mtp,
-        "table_paths": list(prep["table_paths"]),
-        "tables_source": tables_source,
-        "models_with_tables": list(prep["models_with_tables_list"]),
-        "stats": {
-            "total_unique_tables": len(prep["table_paths"]),
-            "models_with_tables": len(prep["models_with_tables_list"]),
-            "tables_source": tables_source,
-        },
-    }
-
-
 def integrate_tables(table_paths: List[str], integration_type: str = "union", k: int = 10, filename_to_tableid: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """
     Integrate multiple tables from modellake.db (by tableid) or from CSV paths.

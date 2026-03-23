@@ -1298,39 +1298,6 @@ def integrate():
         return _api_error(str(e), 500)
 
 
-@app.route("/api/table-search-trace", methods=["POST"])
-def table_search_trace():
-    """Trace for Query2Tab2Card (query/retrieved tables → models; nested model→tables for all_from_modelcards). No merge."""
-    data = request.get_json() or {}
-    job_id, err = _require_job_id(data)
-    if err is not None:
-        return err
-    job_dir, results_file, err = _require_results_file(job_id)
-    if err is not None:
-        return err
-    search_type = data.get("search_type", "unionable")
-    tables_source = data.get("tables_source", "intermediate")
-    tr_override = data.get("table_resources")
-    tr_list = tr_override if isinstance(tr_override, list) else None
-    try:
-        sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from integration.table_integration import preview_card2tab2card_trace
-
-        with open(results_file, "r", encoding="utf-8") as f:
-            search_results = json.load(f)
-        out = preview_card2tab2card_trace(
-            search_results,
-            search_type=search_type,
-            tables_source=tables_source,
-            table_resources=tr_list,
-        )
-        return jsonify(out)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return _api_error(str(e), 500)
-
-
 @app.route("/api/integrate-model-search", methods=["POST"])
 def integrate_model_search():
     """Integrate tables from Card2Card (model search) results"""

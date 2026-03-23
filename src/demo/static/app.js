@@ -27,40 +27,6 @@
             }
             return m;
         }
-
-        /**
-         * Read fetch body as text and parse JSON. If the server returned an HTML page (404/login/wrong host),
-         * return ok:false instead of throwing (avoids "Unexpected token '<'").
-         */
-        async function parseFetchResponseJson(response) {
-            const text = await response.text();
-            const t = text.trim();
-            if (!t) {
-                return { ok: false, data: null, httpStatus: response.status, message: `Empty response (HTTP ${response.status})` };
-            }
-            const head = t.slice(0, 32).trim().toLowerCase();
-            if (head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<!')) {
-                return {
-                    ok: false,
-                    data: null,
-                    httpStatus: response.status,
-                    message:
-                        `Server returned HTML (HTTP ${response.status}), not JSON — often a 404 or wrong base URL. ` +
-                        `Restart the API process so it includes POST /api/table-search-trace, or set BACKEND_URL to the Flask app (e.g. http://127.0.0.1:5002).`,
-                };
-            }
-            try {
-                return { ok: true, data: JSON.parse(text), httpStatus: response.status, message: null };
-            } catch (e) {
-                const hint = t.length <= 160 ? t : t.slice(0, 160) + '…';
-                return {
-                    ok: false,
-                    data: null,
-                    httpStatus: response.status,
-                    message: `Invalid JSON (${e && e.message ? e.message : e}): ${hint}`,
-                };
-            }
-        }
         
         function escapeHtmlIntegration(s) {
             return String(s == null ? '' : s)
@@ -127,43 +93,6 @@
                 };
             });
         }
-
-        /** Client-side trace for tables_source=intermediate (same logic as integration prep; no DuckDB). */
-        function buildIntermediateTraceFromResults(results, searchType) {
-            const c2t2c = (results && results.card2tab2card_results) || {};
-            const data = c2t2c[searchType];
-            if (!data || typeof data !== 'object') {
-                return { query_tables: [], retrieved_table_model_rows: [], model_to_table_paths: {} };
-            }
-            const intermediate = data.intermediate || {};
-            const tableToModels = intermediate.table_to_models || {};
-            let retrieved = [];
-            if (Array.isArray(data.searched_tables) && data.searched_tables.length) {
-                retrieved = data.searched_tables.slice();
-            } else if (Array.isArray(intermediate.retrieved_table_filenames)) {
-                retrieved = intermediate.retrieved_table_filenames.slice();
-            }
-            const query_tables = Array.isArray(data.query_tables) ? data.query_tables : [];
-            const modelToPaths = {};
-            const basenameToKey = {};
-            Object.keys(tableToModels).forEach(k => {
-                basenameToKey[integrationBasename(k)] = k;
-            });
-            retrieved.forEach(tp => {
-                const key = tableToModels[tp] !== undefined ? tp : basenameToKey[integrationBasename(tp)];
-                const mlist = key ? tableToModels[key] : [];
-                (mlist || []).forEach(m => {
-                    const mid = typeof m === 'string' ? m : (m && (m.model_id || m.modelId));
-                    if (!mid) return;
-                    const sm = String(mid).trim();
-                    if (!sm) return;
-                    if (!modelToPaths[sm]) modelToPaths[sm] = [];
-                    if (!modelToPaths[sm].includes(tp)) modelToPaths[sm].push(tp);
-                });
-            });
-            const retrieved_table_model_rows = buildRetrievedTableModelRowsFallback(modelToPaths, retrieved);
-            return { query_tables, retrieved_table_model_rows, model_to_table_paths: modelToPaths };
-        }
         
         function formatQuery2CardModelTableLinesHtml(modelIds, modelToTables) {
             const ids = Array.isArray(modelIds) ? modelIds : [];
@@ -229,62 +158,6 @@
                 return `<div style="margin-top:4px;line-height:1.4;"><strong>${label}</strong> ${tableFrag} → related models: ${modelLinks}</div>`;
             }).join('');
             return qLine + rLines;
-        }
-
-        async function refreshIntegrationTableTracePreview() {
-            const el = document.getElementById('integrationTableTracePreview');
-            if (!el) return;
-            const res = window.__lastSearchResults;
-            const jobId = (res && res.job_id) || (typeof currentJobId !== 'undefined' ? currentJobId : null);
-            const searchType = (document.getElementById('integration_search_type') || {}).value || 'unionable';
-            const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
-            if (!jobId || !res || res.error) {
-                el.innerHTML = '';
-                el.style.display = 'none';
-                return;
-            }
-            el.style.display = 'block';
-            el.innerHTML = '<div style="color:#6c757d;font-size:11px;">⏳ Loading trace…</div>';
-            try {
-                if (tablesSource === 'intermediate') {
-                    const b = buildIntermediateTraceFromResults(res, searchType);
-                    const html = formatQuery2Tab2CardTraceHtml(b.query_tables, b.retrieved_table_model_rows, {
-                        tablesSource: 'intermediate',
-                        modelToTablePaths: b.model_to_table_paths,
-                    });
-                    el.innerHTML = `<div style="font-weight:600;margin-bottom:4px;color:#155724;font-size:12px;">Table search trace (from retrieval — searched tables)</div>${html || '<span style="color:#999;font-size:11px;">No data for this search type.</span>'}`;
-                } else {
-                    const apiBase = String('{{BACKEND_URL}}' || '').trim().replace(/\/+$/, '');
-                    const traceUrl = apiBase ? `${apiBase}/api/table-search-trace` : '/api/table-search-trace';
-                    const r = await fetch(traceUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json',
-                        },
-                        body: JSON.stringify({ job_id: jobId, search_type: searchType, tables_source: tablesSource }),
-                    });
-                    const parsed = await parseFetchResponseJson(r);
-                    if (!parsed.ok) {
-                        el.innerHTML = `<div style="color:#b02a37;font-size:11px;">${escapeHtmlIntegration(parsed.message)}</div>`;
-                        return;
-                    }
-                    const j = parsed.data;
-                    if (!j || j.status !== 'success') {
-                        el.innerHTML = `<div style="color:#b02a37;font-size:11px;">${escapeHtmlIntegration((j && (j.error || j.message)) || 'Trace failed')}</div>`;
-                        return;
-                    }
-                    const html = formatQuery2Tab2CardTraceHtml(j.query_tables || [], j.retrieved_table_model_rows || [], {
-                        tablesSource: 'all_from_modelcards',
-                        modelToTablePaths: j.model_to_table_paths || {},
-                    });
-                    const st = j.stats || {};
-                    const meta = [st.total_unique_tables != null ? `${st.total_unique_tables} tables` : '', st.models_with_tables != null ? `${st.models_with_tables} models` : ''].filter(Boolean).join(', ');
-                    el.innerHTML = `<div style="font-weight:600;margin-bottom:4px;color:#155724;font-size:12px;">Table search trace (all tables from model cards)</div>${meta ? `<div style="font-size:10px;color:#666;margin-bottom:6px;">${escapeHtmlIntegration(meta)}</div>` : ''}${html || '<span style="color:#999;">No rows.</span>'}`;
-                }
-            } catch (e) {
-                el.innerHTML = `<div style="color:#b02a37;font-size:11px;">${escapeHtmlIntegration(formatFetchError(e))}</div>`;
-            }
         }
         
         async function loadPresetQueries() {
@@ -849,9 +722,6 @@
         }
         
         function displayResults(results) {
-            window.__lastSearchResults = results && typeof results === 'object'
-                ? { ...results, job_id: results.job_id || (typeof currentJobId !== 'undefined' ? currentJobId : null) }
-                : {};
             const container = document.getElementById('resultsContent');
             // Pipeline error (e.g. query2modelcard failed or no model from query) - shown at top of results
             const errorBlock = results.error
@@ -1211,7 +1081,6 @@
                                     -->
                                 </select></div>
                             </div>
-                            <div id="integrationTableTracePreview" style="display:none; margin-bottom:10px; padding:8px 10px; background:#f1f8f4; border-radius:6px; border:1px solid #c3e6cb; font-size:11px; line-height:1.4;"></div>
                             <div id="integrationResults"></div>
                         </div>
                     </div>
@@ -1512,7 +1381,6 @@
                 rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
             initTablePanZoom(rightDiv);
-            void refreshIntegrationTableTracePreview();
             refreshIntegrationShortAnalysis();
         }
         
