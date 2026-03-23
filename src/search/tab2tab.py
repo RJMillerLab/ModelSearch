@@ -1,19 +1,13 @@
 """
-Table to Table Search (Blend_internal) via subprocess.
+Table to Table Search (Blend_internal) via in-process import.
 
-Why subprocess?
-- Blend_internal lives in another repo and also uses a top-level package named `src`.
-- Importing Blend_internal classes in-process can cause `src` namespace conflicts.
-- Using a subprocess isolates sys.path / sys.modules so Blend_internal can run safely.
+The legacy subprocess wrapper is preserved in `src/search/tab2tab_CLI.py`.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
-import tempfile
-import threading
 from typing import Any, List, Optional
 
 import pandas as pd
@@ -21,9 +15,6 @@ import pandas as pd
 #from src.config import MODELLAKE_DB, TAB2TAB_OUTPUT_JSON, BLEND_INTERNAL_REPO, INDEX_TABLE
 from src.config import *
 from src.utils import resolve_table_path
-
-# Guard Blend_internal config.ini mutation (it is shared on disk).
-_blend_subprocess_lock = threading.Lock()
 
 
 def _normalize_header_token_for_index(s: str) -> str:
@@ -89,49 +80,9 @@ def _extract_single_column_query_from_table(table_path: str, max_rows_per_table:
     return out
 
 
-def _blend_file_lock_path() -> str:
-    """
-    Cross-process lock file path for Blend_internal config.ini mutation.
-
-    We need an inter-process lock because backend runs multiple card2tab2card
-    search types concurrently, and each one spawns its own Python subprocess
-    that calls Blend_internal (another repo) and writes shared config.ini.
-    """
-    lock_dir = os.path.join(BLEND_INTERNAL_REPO or "", "config")
-    if not lock_dir:
-        # Fall back to repo-local temp (should never happen if config is valid).
-        lock_dir = tempfile.gettempdir()
-    os.makedirs(lock_dir, exist_ok=True)
-    return os.path.join(lock_dir, ".tab2tab_filelock")
-
-
-class _BlendFileLock:
-    def __enter__(self):
-        # Only used on Unix-like platforms (macOS/Linux).
-        import fcntl
-
-        self._lock_fh = open(_blend_file_lock_path(), "w", encoding="utf-8")
-        fcntl.flock(self._lock_fh, fcntl.LOCK_EX)
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        import fcntl
-
-        try:
-            fcntl.flock(self._lock_fh, fcntl.LOCK_UN)
-        finally:
-            try:
-                self._lock_fh.close()
-            except Exception:
-                pass
-
-
-def _blend_module() -> str:
-    """
-    Module path used by build_index.md examples.
-    Assumes Blend_internal is available under `others/Blend_internal` as a package.
-    """
-    return "others.Blend_internal.scripts.tab2tab"
+def _load_blend_tab2tab_module():
+    from others.Blend_internal.scripts import tab2tab as blend_tab2tab
+    return blend_tab2tab
 
 
 def _ensure_blend_exists() -> None:
@@ -140,34 +91,6 @@ def _ensure_blend_exists() -> None:
             "Blend_internal not found. Please clone it into `others/Blend_internal` "
             f"(expected at: {BLEND_INTERNAL_REPO})."
         )
-
-
-def _parse_blend_tab2tab_filenames(payload: Any) -> List[str]:
-    """
-    Blend tab2tab --output_json: list of CSV filenames (basenames or paths).
-
-    Accepted shapes:
-    - JSON array: ["a_table1.csv", ...]
-    - Object: {"results": ["a_table1.csv", ...]} (other keys ignored)
-    """
-    if isinstance(payload, list):
-        raw = payload
-    elif isinstance(payload, dict):
-        raw = payload.get("results")
-        if not isinstance(raw, list):
-            raise ValueError(
-                "Blend tab2tab JSON dict must contain key 'results' with a list of filenames; "
-                f"got keys={list(payload)!r}"
-            )
-    else:
-        raise ValueError(f"Blend tab2tab JSON must be a list or object, got {type(payload).__name__}")
-
-    out: List[str] = []
-    for i, x in enumerate(raw):
-        if not isinstance(x, str) or not str(x).strip():
-            raise ValueError(f"Blend tab2tab results[{i}] expected non-empty filename string, got {x!r}")
-        out.append(os.path.basename(str(x).strip()))
-    return out
 
 
 def search_table2table(
@@ -180,102 +103,68 @@ def search_table2table(
     parse_payload: bool = True,
 ) -> List[str]:
     """
-    Run Blend_internal tab2tab in a subprocess. Returns CSV **basenames** only (same as Blend output),
-    minus the query table basename if it appears. No modellake id mapping here — callers resolve ids if needed.
+    Run Blend_internal tab2tab in-process and return CSV **basenames** only.
+
+    The query table basename is filtered out from results if present.
     """
     _ensure_blend_exists()
-
-    # Use caller-provided output path (deterministic) or a temp file (isolated).
-    out_path: str
-    if output_json:
-        out_path = output_json
-        parent = os.path.dirname(os.path.abspath(out_path))
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-    else:
-        out_fd, out_path = tempfile.mkstemp(prefix="tab2tab_", suffix=".json")
-        os.close(out_fd)
+    blend_tab2tab = _load_blend_tab2tab_module()
 
     # Used for debug prints (keyword/single_column paths).
     query_tokens: List[str] = []
-    query_arg_preview: str = ""
+    blend_query: Any
 
-    try:
-        if not isinstance(query, str):
-            raise ValueError("query must be a table name/path string")
-        table_path = resolve_table_path(query) or (query if os.path.exists(query) else None)
-        if not table_path:
-            raise ValueError(f"No existing table found for query: {query!r}")
+    if not isinstance(query, str):
+        raise ValueError("query must be a table name/path string")
+    table_path = resolve_table_path(query) or (query if os.path.exists(query) else None)
+    if not table_path:
+        raise ValueError(f"No existing table found for query: {query!r}")
 
-        if search_type in ("single_column", "keyword"):
-            if search_type == "keyword":
-                query_tokens = _extract_keyword_query_from_table(table_path)
-            else:
-                query_tokens = _extract_single_column_query_from_table(table_path)
-            if not query_tokens:
-                raise ValueError(f"Empty extracted query from table path: {table_path!r}")
-            # Pass as JSON so tokens may contain commas; Blend tab2tab CLI accepts JSON arrays.
-            query_arg = json.dumps(query_tokens, ensure_ascii=False)
-            query_arg_preview = query_arg[:300] + ("..." if len(query_arg) > 300 else "")
-            print(
-                f"[tab2tab-debug] search_type={search_type} "
-                f"table={os.path.basename(table_path)} "
-                f"query_tokens={len(query_tokens)} "
-                f"tokens_preview={query_tokens[:20]!r} "
-                f"query_arg_preview={query_arg_preview!r}",
-                flush=True,
-            )
-        elif search_type in ("multi_column", "unionable"):
-            # Blend expects query csv path for these modes.
-            query_arg = table_path
+    if search_type in ("single_column", "keyword"):
+        if search_type == "keyword":
+            query_tokens = _extract_keyword_query_from_table(table_path)
         else:
-            raise ValueError(f"Unknown search_type: {search_type}")
-
-        cmd = ["python", "-m", _blend_module(), "--db_path", db_path, "--output_json", out_path, "--search_type", search_type, "--query", str(query_arg), "--k", str(k)]
-
-        # Serialize to avoid concurrent writes to Blend_internal config.ini.
-        # This must be a cross-process lock, not only a thread lock.
-        with _blend_subprocess_lock:
-            with _BlendFileLock():
-                proc = subprocess.run(
-                    cmd,
-                    cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
-                    capture_output=True,
-                    text=True,
-                )
-
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "Blend_internal tab2tab failed.\n"
-                f"cmd: {' '.join(cmd)}\n"
-                f"stdout:\n{proc.stdout}\n"
-                f"stderr:\n{proc.stderr}\n"
-            )
-
-        if not parse_payload:
-            # Caller only wants the json file written by Blend_internal.
-            return []
-
-        with open(out_path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-
-        query_bn = os.path.basename(table_path)
-        filenames = _parse_blend_tab2tab_filenames(payload)
-        filenames = [f for f in filenames if f != query_bn]
-        if not filenames and search_type in ("keyword", "single_column"):
-            print(
-                f"[tab2tab-debug] empty filename list from Blend after self-filter. "
-                f"search_type={search_type} query_arg_preview={query_arg_preview!r} "
-                f"tokens_preview={query_tokens[:20]!r}",
-                flush=True,
-            )
-        return filenames
-    finally:
+            query_tokens = _extract_single_column_query_from_table(table_path)
+        if not query_tokens:
+            raise ValueError(f"Empty extracted query from table path: {table_path!r}")
+        print(
+            f"[tab2tab-debug] search_type={search_type} "
+            f"table={os.path.basename(table_path)} "
+            f"query_tokens={len(query_tokens)} "
+            f"tokens_preview={query_tokens[:20]!r}",
+            flush=True,
+        )
+        blend_query = query_tokens
+    elif search_type in ("multi_column", "unionable"):
         try:
-            if not output_json and os.path.exists(out_path):
-                os.remove(out_path)
-        except Exception:
-            pass
+            blend_query = pd.read_csv(table_path)
+        except Exception as e:
+            raise ValueError(f"Failed to load query table for {search_type}: {table_path!r}: {e}") from e
+    else:
+        raise ValueError(f"Unknown search_type: {search_type}")
+
+    raw_table_ids = blend_tab2tab.search_table2table(
+        query=blend_query,
+        search_type=search_type,
+        k=k,
+        db_path=db_path,
+    )
+    table_ids = [int(tid) for tid in (raw_table_ids or [])]
+    table_names = blend_tab2tab._table_ids_to_table_names(table_ids, db_path=db_path)
+    query_bn = os.path.basename(table_path)
+    filenames = [os.path.basename(str(name).strip()) for name in table_names if str(name).strip()]
+    filenames = [f for f in filenames if f != query_bn]
+
+    if output_json:
+        parent = os.path.dirname(os.path.abspath(output_json))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(output_json, "w", encoding="utf-8") as f:
+            json.dump(filenames, f, ensure_ascii=False, indent=2)
+
+    if not parse_payload:
+        return []
+    return filenames
 
 def main() -> None:
     """
@@ -283,7 +172,7 @@ def main() -> None:
     """
     import argparse
     import time
-    parser = argparse.ArgumentParser(description="Table to Table Search using Blend_internal (subprocess wrapper)")
+    parser = argparse.ArgumentParser(description="Table to Table Search using Blend_internal (in-process wrapper)")
     parser.add_argument("--search_type", choices=["single_column", "multi_column", "keyword", "unionable"], required=True)
     parser.add_argument(
         "--query",
