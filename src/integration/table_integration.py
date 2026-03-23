@@ -257,6 +257,17 @@ def _prepare_card2tab2card_inputs(
     """
     Resolve table paths and model↔table mappings for Card2Tab2Card integration / trace preview.
     Does not load CSVs or run merge algorithms.
+
+    JSON pipeline (card2tab2card_results[search_type]) after backend save:
+      1) query_tables — seed CSV paths from the query model card.
+      2) Tab2Tab writes searched_tables + intermediate.retrieved_table_filenames (same list,
+         tab2tab order) and intermediate.table_to_models (basename -> model ids from parquet).
+      3) Backend dense-reranks model_ids, then _sync_payload_intermediate_to_model_ids drops
+         models not in the shortlist and removes tables with no remaining shortlist model.
+         So searched_tables can still list *many* rows: every retrieved table that still hits
+         at least one shortlist model (e.g. one model with 9 card tables → 9 bridge lines).
+      4) tables_source=all_from_modelcards: integration uses model_ids order + parquet expansion
+         (_resolve_table_paths_for_model_ids); trace section ② is that expansion.
     """
     parquet_resources: Optional[List[str]] = (
         table_resources

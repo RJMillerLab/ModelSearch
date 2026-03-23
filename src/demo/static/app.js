@@ -125,10 +125,35 @@
                 }).filter(Boolean).join(', ')}</div>`
                 : '';
 
-            const useModelFirst = tablesSource === 'all_from_modelcards' && rankedModelIds.length > 0;
+            const usePipelineAllFromCards = tablesSource === 'all_from_modelcards' && rankedModelIds.length > 0;
 
-            if (useModelFirst) {
-                const modelSection = `<div style="margin-top:8px;margin-bottom:4px;line-height:1.35;"><strong>Final models (dense rerank order)</strong> <span style="color:#666;">— union of these models' parquet tables is integrated</span></div>` +
+            function renderBridgeRows(rows) {
+                return rows.map((row, i) => {
+                    const tPath = row.table_path || row.table || '';
+                    const tLabel = row.table || integrationBasename(tPath);
+                    const tableFrag = tPath
+                        ? integrationTablePathLink(tPath, tLabel)
+                        : (tLabel ? `<code>${escapeHtmlIntegration(tLabel)}</code>` : '<span style="color:#999;">—</span>');
+                    const models = Array.isArray(row.models) ? row.models : [];
+                    const modelLinks = models.length
+                        ? models.map(mid => {
+                            const ss = String(mid).trim();
+                            return `<a href="https://huggingface.co/${ss}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(ss)}</a>`;
+                        }).join(', ')
+                        : '<span style="color:#999;">—</span>';
+                    const label = rows.length > 1 ? `Retrieved table ${i + 1}:` : 'Retrieved table:';
+                    return `<div style="margin-top:4px;line-height:1.4;"><strong>${label}</strong> ${tableFrag} <span style="color:#666;">→ related models:</span> ${modelLinks}</div>`;
+                }).join('');
+            }
+
+            if (usePipelineAllFromCards) {
+                const ir = (intermediateRows && intermediateRows.length) ? intermediateRows : retrievedRows;
+                const rows = Array.isArray(ir) ? ir : [];
+                const secBridge = rows.length
+                    ? `<div style="margin-top:8px;line-height:1.35;"><strong>① Tab2Tab → reverse lookup (same as “searched tables”)</strong> <span style="color:#666;">each retrieved CSV → model IDs still in the shortlist after dense rerank sync</span></div>${renderBridgeRows(rows)}`
+                    : '';
+
+                const secParquet = `<div style="margin-top:10px;line-height:1.35;"><strong>② Shortlist + card tables (same as 1 Query2Card trace)</strong> <span style="color:#666;">dense rerank order; union of these parquet lists is what gets integrated</span></div>` +
                     rankedModelIds.map((mid, idx) => {
                         const s = String(mid).trim();
                         if (!s) return '';
@@ -140,29 +165,7 @@
                         return `<div style="margin:6px 0 2px 4px;padding-left:8px;border-left:3px solid #2e7d32;line-height:1.35;"><strong>${idx + 1}.</strong> ${link} <span style="color:#666;">→ related tables:</span> ${tbls}</div>`;
                     }).join('');
 
-                const ir = (intermediateRows && intermediateRows.length) ? intermediateRows : retrievedRows;
-                const rows = Array.isArray(ir) ? ir : [];
-                let sec2 = '';
-                if (rows.length) {
-                    sec2 = `<div style="margin-top:10px;line-height:1.35;"><strong>Retrieved tables → related models</strong> <span style="color:#666;">(after model top-k; tab2tab bridge — may omit tables with no surviving model)</span></div>` +
-                        rows.map((row, i) => {
-                            const tPath = row.table_path || row.table || '';
-                            const tLabel = row.table || integrationBasename(tPath);
-                            const tableFrag = tPath
-                                ? integrationTablePathLink(tPath, tLabel)
-                                : (tLabel ? `<code>${escapeHtmlIntegration(tLabel)}</code>` : '<span style="color:#999;">—</span>');
-                            const models = Array.isArray(row.models) ? row.models : [];
-                            const modelLinks = models.length
-                                ? models.map(mid => {
-                                    const ss = String(mid).trim();
-                                    return `<a href="https://huggingface.co/${ss}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(ss)}</a>`;
-                                }).join(', ')
-                                : '<span style="color:#999;">—</span>';
-                            const label = rows.length > 1 ? `Retrieved table ${i + 1}:` : 'Retrieved table:';
-                            return `<div style="margin-top:4px;line-height:1.4;"><strong>${label}</strong> ${tableFrag} <span style="color:#666;">→ related models:</span> ${modelLinks}</div>`;
-                        }).join('');
-                }
-                return qLine + modelSection + sec2;
+                return qLine + secBridge + secParquet;
             }
 
             const rows = Array.isArray(retrievedRows) ? retrievedRows : [];
