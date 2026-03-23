@@ -469,8 +469,15 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         return EMB_NPZ_HUGGING
 
     dense_runtime_table = None
+    dense_runtime_full = None
     try:
         from src.search.query2modelcard import get_query2modelcard_dense_runtime
+        full_emb_npz = _table_emb_npz_for_resources(model_resources_full)
+        logger.log(f"[Query2ModelCard-FULL] Preload dense runtime from npz: {full_emb_npz}")
+        t_preload_full = time.time()
+        dense_runtime_full = get_query2modelcard_dense_runtime(emb_npz_path=full_emb_npz)
+        logger.log(f"[Query2ModelCard-FULL] Dense runtime ready in {time.time() - t_preload_full:.2f}s")
+
         table_emb_npz = _table_emb_npz_for_resources(table_resources)
         logger.log(f"[Query2Tab2Card] Preload dense runtime from npz: {table_emb_npz}")
         t_preload = time.time()
@@ -525,7 +532,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     q2m_ordered_model_ids: Optional[List[str]] = None
 
-    logger.log("Step 1a: query2modelcard (full embeddings / full sparse for hybrid)...")
+    logger.log("Step 1a: query2modelcard (full embeddings / full sparse for hybrid, INPROC)...")
     logger.log(f"query2modelcard input query: {query!r}")
     q2m_full_path = os.path.join(job_dir, "query2modelcard_full.json")
     legacy_q2m_path = os.path.join(job_dir, "query2modelcard.json")
@@ -535,15 +542,38 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     logger.log(
         f"query2modelcard FULL: top_k={q2m_top_k_here}, resources={model_resources_full} → {os.path.basename(q2m_full_path)}"
     )
-    cmd_full = _build_q2m_cmd(q=query, q_top_k=q2m_top_k_here, out_path=q2m_full_path, resources=model_resources_full)
     t0 = time.time()
-    rc, out, err = _run_cmd(cmd_full, REPO_ROOT)
+    rc = 0
+    err = ""
+    try:
+        from src.search.query2modelcard import search_query2modelcard
+        logger.log(
+            f"[query2modelcard_full] INPROC: search_query2modelcard("
+            f"query={query!r}, top_k={q2m_top_k_here}, retrieval_mode={card2card_retrieval_mode!r}, "
+            f"sparse_index_path={SPARSE_INDEX!r})"
+        )
+        _ = search_query2modelcard(
+            query=query,
+            top_k=q2m_top_k_here,
+            output_json=q2m_full_path,
+            retrieval_mode=card2card_retrieval_mode,
+            candidate_factor=10,
+            emb_npz_path=EMB_NPZ,
+            sparse_index_path=SPARSE_INDEX,
+            dense_runtime=dense_runtime_full,
+        )
+    except Exception:
+        import traceback
+        rc = 1
+        err = traceback.format_exc()
     elapsed = time.time() - t0
-    logger.log_cmd("query2modelcard_full", cmd_full, q2m_full_path, elapsed, rc)
+    logger.log(f"[query2modelcard_full] SAVED: {q2m_full_path}")
+    logger.log(f"[query2modelcard_full] ELAPSED: {elapsed:.2f}s")
+    logger.log(f"[query2modelcard_full] EXIT: {rc}")
     if rc != 0:
-        logger.log(f"query2modelcard (full) failed (exit {rc}): {err or out}")
+        logger.log(f"query2modelcard (full) failed (exit {rc}): {err}")
         logger.set_status("error")
-        logger.set_results({"error": f"query2modelcard (full) failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        logger.set_results({"error": f"query2modelcard (full) failed: {err}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
         return
     data = _read_json(q2m_full_path)
     if not data or "results" not in data or not data["results"]:
