@@ -17,7 +17,7 @@ from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
-from src.utils import model_id_has_resolvable_local_tables, resolve_table_path
+from src.utils import resolve_table_path
 #from src.utils import filter_results_by_classify_results
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -467,27 +467,23 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         ]
         return _with_resources(base, model_resources_full)
 
-    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str, mid: str) -> List[str]:
+    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str, q: str) -> List[str]:
         base = [
-            sys.executable, "-m", "src.search.card2tab2card",
-            "--model_id", mid,
+            sys.executable, "-m", "src.search.query2tab2card",
+            "--query", q,
             "--search_type", st,
             "--table_top_k", str(table_k_value),
-            "--model_top_k", str(c2t2c_model_top_k_cli),
-            "--query", (query or ""),
             "--output_json", out_path,
         ]
         return _with_resources(base, table_resources)
 
-    # Query2Card: query2modelcard on **full** index (EMB_NPZ). Table seed: second q2m on **hugging** index (EMB_NPZ_HUGGING)
-    # when require_seed_has_tables, then first hit with parquet + local CSV in that list.
-    seed_no_tables_skip_table_search = False
-    valid_model_ids: Optional[Set[str]] = None
+    # Table Search now delegates full flow to query2tab2card:
+    # query -> query2modelcard -> card2tab2card -> query-rerank.
+    # `require_seed_has_tables` is kept for API compatibility but no longer gates execution here.
     if require_seed_has_tables:
-        valid_model_ids = _valid_model_ids_for_table_resources(table_resources)
         logger.log(
-            f"Table-search seed: parquet allowlist size = {len(valid_model_ids)} "
-            "(scan hugging q2m list; require local CSV under TABLE_BASE_DIRS)"
+            "require_seed_has_tables=True is accepted for backward compatibility; "
+            "table flow now always runs query2tab2card and lets that module own seed + mapping logic."
         )
 
     q2m_ordered_model_ids: Optional[List[str]] = None
@@ -539,65 +535,15 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     )
 
     table_search_seed_model_id = query_seed_model_id
-    results_list_w_table: List[Any] = []
     q2m_w_table_path: Optional[str] = None
-
-    if require_seed_has_tables:
-        assert valid_model_ids is not None
-        q2m_w_table_path = os.path.join(job_dir, "query2modelcard_w_table.json")
-        logger.log(
-            f"Step 1b: query2modelcard (hugging subset) top_k={q2m_top_k_relaxed} → {os.path.basename(q2m_w_table_path)}"
-        )
-        cmd_w = _build_q2m_cmd(
-            q=query, q_top_k=q2m_top_k_relaxed, out_path=q2m_w_table_path, resources=model_resources_hugging
-        )
-        t0w = time.time()
-        rc_w, out_w, err_w = _run_cmd(cmd_w, REPO_ROOT)
-        elapsed_w = time.time() - t0w
-        logger.log_cmd("query2modelcard_w_table", cmd_w, q2m_w_table_path, elapsed_w, rc_w)
-        if rc_w != 0:
-            logger.log(f"query2modelcard (hugging) failed (exit {rc_w}): {err_w or out_w}; skip Card2Tab2Card")
-            seed_no_tables_skip_table_search = True
-        else:
-            data_w = _read_json(q2m_w_table_path)
-            if not data_w or "results" not in data_w or not data_w["results"]:
-                logger.log("query2modelcard (hugging) returned no results; skip Card2Tab2Card")
-                seed_no_tables_skip_table_search = True
-            else:
-                results_list_w_table = data_w["results"]
-                _res_key = tuple(sorted(table_resources))
-                chosen = None
-                for i, r in enumerate(results_list_w_table):
-                    mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
-                    if not mid:
-                        continue
-                    mid_s = str(mid).strip()
-                    if mid_s not in valid_model_ids:
-                        continue
-                    if not model_id_has_resolvable_local_tables(mid_s, _res_key):
-                        logger.log(
-                            f"Table-search seed: skip #{i+1} {mid_s!r} (parquet allowlist but no local CSV under TABLE_BASE_DIRS)"
-                        )
-                        continue
-                    chosen = mid_s
-                    logger.log(f"Table-search seed (hugging q2m × parquet × local CSV): #{i+1} → {chosen}")
-                    break
-                if chosen is not None:
-                    table_search_seed_model_id = chosen
-                else:
-                    seed_no_tables_skip_table_search = True
-                    logger.log(
-                        f"Table-search seed: none of top-{len(results_list_w_table)} hugging-q2m hits pass parquet + local CSV; "
-                        "Card2Tab2Card skipped."
-                    )
-    else:
-        logger.log("require_seed_has_tables=False: Card2Tab2Card seed = full-index top-1 (no hugging q2m)")
+    logger.log(
+        "Step 1b removed: backend no longer selects table seed with query2modelcard_w_table; "
+        "query2tab2card handles seed selection internally."
+    )
 
     model_id = query_seed_model_id  # API / UI: primary seed from full q2m
     table_search_seed_model_id = str(table_search_seed_model_id).strip()
-    logger.log(
-        f"Seeds: Query2Card (full)={query_seed_model_id!r}, Query2Tab2Card={table_search_seed_model_id!r}"
-    )
+    logger.log(f"Seeds: Query2Card (full)={query_seed_model_id!r}, Query2Tab2Card=(internal to query2tab2card)")
 
     if not USE_CARD2CARD_CLI:
         q2m_ordered_model_ids = _ordered_model_ids_from_q2m_results(results_list)
@@ -610,9 +556,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # IMPORTANT: keep true per-query-table top-k for Tab2Tab (no hidden multiplier).
     k_table = table_search_k_input
 
-    # Card2Tab2Card CLI should keep enough model candidates before backend dense-rerank.
-    c2t2c_model_top_k_cli = max(100, int(model_top_k) * 20)
-
     # Card2Card: scaled `--top_k` for first (and only) dense/sparse/hybrid subprocess.
     card2card_top_k = max(100, int(model_top_k) * 20)
 
@@ -623,31 +566,94 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     def _normalize_card2tab2card_payload(payload: Any) -> Dict[str, Any]:
         """
-        Normalize historical/variant card2tab2card output formats into:
-          { "model_ids": [...], "intermediate": {...}, "query_tables": [...]? }
-        The frontend/integration expects at least `model_ids` + `intermediate`.
+        Normalize historical/variant card2tab2card output formats into a canonical schema:
+          {
+            "model_ids": [...],
+            "query_tables": [...],
+            "searched_tables": [...],
+            "mappings": {
+              "card_to_related_tables": {...},
+              "query_table_to_retrieved_tables": {...},
+              "retrieved_table_to_related_models": {...}
+            },
+            "intermediate": {...},
+            "pipeline_trace": {...}
+          }
         """
+        def _canonicalize(d: Dict[str, Any]) -> Dict[str, Any]:
+            model_ids = d.get("model_ids", [])
+            if not isinstance(model_ids, list):
+                model_ids = []
+            query_tables = d.get("query_tables", [])
+            if not isinstance(query_tables, list):
+                query_tables = []
+            searched_tables = d.get("searched_tables", [])
+            if not isinstance(searched_tables, list):
+                searched_tables = []
+
+            mappings = d.get("mappings", {})
+            if not isinstance(mappings, dict):
+                mappings = {}
+            m_card_to_related = mappings.get("card_to_related_tables", {})
+            if not isinstance(m_card_to_related, dict):
+                m_card_to_related = {}
+            m_qt_to_rt = mappings.get("query_table_to_retrieved_tables", {})
+            if not isinstance(m_qt_to_rt, dict):
+                m_qt_to_rt = {}
+            m_rt_to_models = mappings.get("retrieved_table_to_related_models", {})
+            if not isinstance(m_rt_to_models, dict):
+                m_rt_to_models = {}
+
+            inter = d.get("intermediate")
+            if not isinstance(inter, dict):
+                inter = {}
+            inter_table_to_models = inter.get("table_to_models")
+            if not isinstance(inter_table_to_models, dict):
+                inter_table_to_models = m_rt_to_models
+            inter_retrieved = inter.get("retrieved_table_filenames")
+            if not isinstance(inter_retrieved, list):
+                inter_retrieved = list(searched_tables)
+            inter_qt_to_rt = inter.get("query_table_to_retrieved_tables")
+            if not isinstance(inter_qt_to_rt, dict):
+                inter_qt_to_rt = m_qt_to_rt
+
+            inter["table_to_models"] = inter_table_to_models
+            inter["retrieved_table_filenames"] = inter_retrieved
+            inter["query_table_to_retrieved_tables"] = inter_qt_to_rt
+            if not isinstance(inter.get("table_id_to_filename"), dict):
+                inter["table_id_to_filename"] = {}
+
+            out = dict(d)
+            out["model_ids"] = model_ids
+            out["query_tables"] = query_tables
+            out["searched_tables"] = searched_tables
+            out["mappings"] = {
+                "card_to_related_tables": m_card_to_related,
+                "query_table_to_retrieved_tables": m_qt_to_rt,
+                "retrieved_table_to_related_models": m_rt_to_models if m_rt_to_models else inter_table_to_models,
+            }
+            out["intermediate"] = inter
+            if not isinstance(out.get("pipeline_trace"), dict):
+                out["pipeline_trace"] = {}
+            return out
+
         if payload is None:
-            return {"model_ids": [], "intermediate": {}}
+            return _canonicalize({"model_ids": [], "intermediate": {}, "mappings": {}})
         # Current schema: dict with model_ids + intermediate
         if isinstance(payload, dict) and "model_ids" in payload:
-            if "intermediate" not in payload or not isinstance(payload.get("intermediate"), dict):
-                payload["intermediate"] = payload.get("intermediate") or {}
-            return payload
+            return _canonicalize(payload)
         # Variant: just a list of model_ids
         if isinstance(payload, list):
-            return {"model_ids": payload, "intermediate": {}}
+            return _canonicalize({"model_ids": payload, "intermediate": {}, "mappings": {}})
         # Historical batch schema: { queryKey: [...]} or { queryKey: {...} }
         if isinstance(payload, dict):
             for v in payload.values():
                 if isinstance(v, dict) and "model_ids" in v:
-                    if "intermediate" not in v or not isinstance(v.get("intermediate"), dict):
-                        v["intermediate"] = v.get("intermediate") or {}
-                    return v
+                    return _canonicalize(v)
                 if isinstance(v, list):
-                    return {"model_ids": v, "intermediate": {}}
+                    return _canonicalize({"model_ids": v, "intermediate": {}, "mappings": {}})
         # Fallback
-        return {"model_ids": [], "intermediate": {}}
+        return _canonicalize({"model_ids": [], "intermediate": {}, "mappings": {}})
 
     # Step 2: Card2Tab2Card always via CLI. Card2Card subprocess is optional:
     #   USE_CARD2CARD_CLI True  -> legacy `python -m src.search.card2card` (dense/sparse/hybrid).
@@ -672,7 +678,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
-        cmd = _build_card2tab2card_cmd(st=st, table_k_value=k_table, out_path=out_path, mid=table_search_seed_model_id)
+        cmd = _build_card2tab2card_cmd(st=st, table_k_value=k_table, out_path=out_path, q=(query or ""))
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -686,9 +692,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         if run_card2card_subprocess:
             for m in CARD2CARD_MODES:
                 futures[ex.submit(run_card2card, m)] = ("card2card", m)
-        if not seed_no_tables_skip_table_search:
-            for st in card2tab2card_types:
-                futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
+        for st in card2tab2card_types:
+            futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
 
     card2card_all = {}
     card2tab2card_all = {}
@@ -777,13 +782,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 card2card_all[mode] = []
             logger.log("[Card2Card] Skipped CLI but missing query2modelcard ordering list; left panel empty.")
 
-    # When we skipped Table Search (require_seed_has_tables but none had tables), record reason only
-    if seed_no_tables_skip_table_search and table_search_empty_reason is None:
-        table_search_empty_reason = (
-            "❌ No suitable table-search seed (hugging query2modelcard + parquet + local CSV). "
-            "❌ Query2Tab2Card skipped; Query2Card still uses full-index top-1."
-        )
-
     # --- Cap for UI: min(requested model_top_k, max Card2Tab2Card list length) ---
     right_max_models = 0
     for st, payload in card2tab2card_all.items():
@@ -798,7 +796,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         effective_model_top_k = 0
     logger.log(f"effective_model_top_k: input={model_top_k}, right_max_models={right_max_models} => cap={effective_model_top_k}")
 
-    # Card2Tab2Card dense rerank now happens inside src.search.card2tab2card CLI.
+    # Query2Tab2Card now owns query-driven dense rerank and emits mapping-rich payloads.
     # Here we only ensure pipeline_trace exists for legacy payloads.
     def _norm_table_to_models_json(t2m: Any) -> Dict[str, List[str]]:
         out: Dict[str, List[str]] = {}
@@ -1169,6 +1167,56 @@ def make_table_page_response(path_q: str) -> Response:
 def table_page():
     """Full-page HTML table view (new tab from retrieval results)."""
     return make_table_page_response(request.args.get("path") or "")
+
+
+@app.route("/api/table-search-preview", methods=["POST"])
+def table_search_preview():
+    """Prepare query2tab2card relationship preview without running integration."""
+    data = request.get_json() or {}
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
+    search_type = str(data.get("search_type") or "single_column").strip()
+    tables_source = str(data.get("tables_source") or "intermediate").strip()
+    tr_override = data.get("table_resources")
+    tr_list = tr_override if isinstance(tr_override, list) else None
+
+    sr = _read_json_job(job_id, "search_results.json")
+    if not isinstance(sr, dict):
+        return _api_error(f"search_results.json not found for job {job_id}", 404)
+    try:
+        from integration.pipeline_preview import prepare_query2tab2card_preview
+
+        preview, prep_err = prepare_query2tab2card_preview(
+            search_results=sr,
+            search_type=search_type,
+            tables_source=tables_source,
+            table_resources=tr_list,
+        )
+        if prep_err:
+            return jsonify({"status": "no_result", "message": prep_err, "search_type": search_type, "tables_source": tables_source})
+        return jsonify(
+            {
+                "status": "success",
+                "search_type": search_type,
+                "tables_source": tables_source,
+                "query_tables": preview.get("query_tables", []),
+                "table_paths": preview.get("table_paths", []),
+                "model_to_table_paths": preview.get("model_to_table_paths_ts", {}),
+                "models_with_tables": preview.get("models_with_tables_list", []),
+                "pipeline_trace": preview.get("pipeline_trace", {}),
+                "tab2tab_trace_rows": preview.get("tab2tab_trace_rows", []),
+                "after_model_cap_trace_rows": preview.get("after_model_cap_trace_rows", []),
+                "retrieved_table_model_rows": preview.get("after_model_cap_trace_rows", []),
+                "stats": {
+                    "total_unique_tables": len(preview.get("table_paths", [])),
+                    "models_with_tables": len(preview.get("models_with_tables_list", [])),
+                    "tables_source": tables_source,
+                },
+            }
+        )
+    except Exception as e:
+        return _api_error(f"preview failed: {e}", 500)
 
 
 @app.route("/api/saved-searches", methods=["GET"])

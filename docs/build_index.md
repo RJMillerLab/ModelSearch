@@ -113,13 +113,26 @@ python -m src.search.tab2tab --resources hugging --search_type multi_column --qu
 python -m src.search.tab2tab --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json > logs/tab2tab_unionable.log 2>&1
 ```
 
-## 2.4 card2tab2card (keyword, single_column, unionable)
+## 2.4 query2tab2card (recommended) + card2tab2card (deprecated mapping-only)
 
 ```bash
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type keyword --k 10 > logs/card2tab2card_keyword_hugging.log 2>&1
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type single_column --k 10 > logs/card2tab2card_single_column_hugging.log 2>&1
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type multi_column --k 10 > logs/card2tab2card_multi_column_hugging.log 2>&1
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type unionable --k 10 > logs/card2tab2card_unionable_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type keyword --table_top_k 3 --output_json results/card2tab2card_keyword_hugging.json > logs/card2tab2card_keyword_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type single_column --table_top_k 3 --output_json results/card2tab2card_single_column_hugging.json > logs/card2tab2card_single_column_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type multi_column --table_top_k 3 --output_json results/card2tab2card_multi_column_hugging.json > logs/card2tab2card_multi_column_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type unionable --table_top_k 3 --output_json results/card2tab2card_unionable_hugging.json > logs/card2tab2card_unionable_hugging.log 2>&1
+```
+
+is wrapped in below script.
+
+```bash
+# query2tab2card (new default): query -> seed card -> tab2tab -> related models
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type keyword --table_top_k 3 --output_json results/query2tab2card_keyword_hugging.json > logs/query2tab2card_keyword_hugging.log 2>&1
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type single_column --table_top_k 3 --output_json results/query2tab2card_single_column_hugging.json > logs/query2tab2card_single_column_hugging.log 2>&1
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type multi_column --table_top_k 3 --output_json results/query2tab2card_multi_column_hugging.json > logs/query2tab2card_multi_column_hugging.log 2>&1
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type unionable --table_top_k 3 --output_json results/query2tab2card_unionable_hugging.json > logs/query2tab2card_unionable_hugging.log 2>&1
+
+# Optional controls for query2tab2card:
+#   --q2m_top_k 20 --seed_rank_index 0 --disable_query_rerank
 ```
 
 <details><summary>Optional 2.5 tab2tab_by_type</summary>
@@ -182,7 +195,8 @@ python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 -
 | **Part 2** | |
 | query2modelcard | query2modelcard --query "..." --top_k 20 |
 | card2card | search --retrieval_mode dense \| sparse \| hybrid (test all 3) |
-| card2tab2card | --search_type keyword/single_column/unionable (simplified) |
+| query2tab2card | --query + --search_type (keyword/single_column/multi_column/unionable) + --table_top_k |
+| card2tab2card (deprecated) | --model_id + --search_type + --table_top_k (mapping-only; no model_top_k/query args) |
 | tab2tab | --search_type keyword \| single_column \| multi_column \| unionable (test all 4) |
 | tab2tab_by_type | same 4 search_type with --classification_json (test all 4) |
 | Generate table MD | `python -m src.postprocess.generate_table_md` (--table_ids / --model_id); `generate_md_from_logs` for logs → md/ |

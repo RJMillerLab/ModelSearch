@@ -22,6 +22,7 @@ from typing import List, Dict, Optional, Any, Set, Tuple
 from collections import Counter
 
 from src.utils import resolve_table_path, load_table, _get_models_to_tables_batch_sql
+from src.integration.pipeline_preview import prepare_query2tab2card_preview
 
 
 def _mid_from_intermediate_entry(m: Any) -> Optional[str]:
@@ -274,144 +275,36 @@ def _prepare_card2tab2card_inputs(
     tables_source: str,
     table_resources: Optional[List[str]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """
-    Resolve table paths and model↔table mappings for Card2Tab2Card integration / trace preview.
-    Does not load CSVs or run merge algorithms.
-
-    ``search_payload.pipeline_trace`` (when present) holds:
-      - tab2tab: full Tab2Tab list + table_to_models **before** dense rerank / model-cap sync
-      - model_ids_before_dense_rerank, model_ids_after_dense_rerank
-      - after_model_cap: searched_tables + table_to_models **after** sync (matches top-level payload)
-
-    JSON pipeline summary (card2tab2card_results[search_type]):
-      1) query_tables — seed CSV paths from the query model card.
-      2) Tab2Tab writes searched_tables + table_to_models (parquet reverse lookup).
-      3) Backend dense-reranks model_ids, then sync drops non-shortlist models/tables.
-      4) tables_source=all_from_modelcards: parquet expansion via reranked model_ids order.
-    """
-    parquet_resources: Optional[List[str]] = (
-        table_resources
-        if isinstance(table_resources, list) and table_resources
-        else _table_resources_for_integration(search_results)
+    preview, err = prepare_query2tab2card_preview(
+        search_results=search_results,
+        search_type=search_type,
+        tables_source=tables_source,
+        table_resources=table_resources,
     )
+    if err is not None or preview is None:
+        return None, err or "failed to prepare query2tab2card preview"
 
-    card2tab2card_results = search_results.get("card2tab2card_results")
-    if not isinstance(card2tab2card_results, dict):
-        return None, "search_results must contain card2tab2card_results"
-
-    search_payload = card2tab2card_results.get(search_type)
-    if not isinstance(search_payload, dict):
-        available_types = list(card2tab2card_results.keys())
-        return None, f"Search type {search_type!r} not found. Available: {', '.join(available_types)}"
-
-    intermediate = search_payload.get("intermediate")
-    if not isinstance(intermediate, dict):
-        return None, f"Search type {search_type!r} has no intermediate payload"
-
-    table_to_models = intermediate.get("table_to_models", {})
-    if not isinstance(table_to_models, dict):
-        table_to_models = {}
-    table_id_to_filename = intermediate.get("table_id_to_filename", {})
-
-    pipeline_trace = search_payload.get("pipeline_trace")
-    if not isinstance(pipeline_trace, dict):
-        pipeline_trace = None
-
-    retrieved_filenames = search_payload.get("searched_tables", []) if isinstance(search_payload, dict) else []
-    if not retrieved_filenames:
-        retrieved_filenames = intermediate.get("retrieved_table_filenames", [])
-    if not isinstance(retrieved_filenames, list):
-        retrieved_filenames = []
-
-    if tables_source == "intermediate" and not retrieved_filenames:
-        return None, "No retrieved tables (searched_tables or intermediate.retrieved_table_filenames)"
-
-    if tables_source == "all_from_modelcards":
-        # Parquet union for dense-reranked model_ids only (not every model in table_to_models).
-        c2t2c_ordered = list(search_payload["model_ids"]) if isinstance(search_payload.get("model_ids"), (list, tuple)) else []
-        model_ids_list = [str(x) for x in c2t2c_ordered if x is not None]
-        if not model_ids_list:
-            model_ids: Set[str] = set()
-            for _table_path, model_list in table_to_models.items():
-                for m in (model_list if isinstance(model_list, list) else []):
-                    mid = _mid_from_intermediate_entry(m)
-                    if mid:
-                        model_ids.add(mid)
-            model_ids_list = list(model_ids)
-        if not model_ids_list:
-            return None, "No model IDs for all_from_modelcards (empty model_ids and table_to_models)"
-        table_paths, model_to_table_paths_ts = _resolve_table_paths_for_model_ids(model_ids_list, resources=parquet_resources)
-        models_with_tables_list = model_ids_list
-    else:
-        table_paths = list(retrieved_filenames)
-        c2t2c_model_ids = list(search_payload["model_ids"]) if isinstance(search_payload.get("model_ids"), (list, tuple)) else []
-        if c2t2c_model_ids:
-            models_with_tables_list = [str(x) for x in c2t2c_model_ids]
-        else:
-            basename_to_key = {os.path.basename(key): key for key in table_to_models}
-            model_ids_set: Set[str] = set()
-            for tp in table_paths:
-                model_list = table_to_models.get(tp) or table_to_models.get(basename_to_key.get(os.path.basename(tp)))
-                for m in (model_list or []):
-                    mid = _mid_from_intermediate_entry(m)
-                    if mid:
-                        model_ids_set.add(mid)
-            models_with_tables_list = list(model_ids_set)
-        model_to_table_paths_ts = {}
-        basename_to_key = {os.path.basename(key): key for key in table_to_models}
-        for tp in table_paths:
-            key = tp if tp in table_to_models else basename_to_key.get(os.path.basename(tp))
-            model_list = table_to_models.get(key, []) if key else []
-            for m in (model_list or []):
-                mid = _mid_from_intermediate_entry(m)
-                if mid:
-                    model_to_table_paths_ts.setdefault(mid, []).append(tp)
-
-    if not table_paths:
-        return None, "No tables to integrate"
-
+    card2tab2card_results = search_results.get("card2tab2card_results", {})
+    search_payload = card2tab2card_results.get(search_type, {}) if isinstance(card2tab2card_results, dict) else {}
+    intermediate = search_payload.get("intermediate") if isinstance(search_payload, dict) and isinstance(search_payload.get("intermediate"), dict) else {}
+    table_id_to_filename = intermediate.get("table_id_to_filename", {}) if isinstance(intermediate, dict) else {}
     filename_to_tableid: Dict[str, Any] = {}
-    if table_id_to_filename:
+    if isinstance(table_id_to_filename, dict):
         for tid, fname in table_id_to_filename.items():
             bn = os.path.basename(str(fname))
             if bn:
                 filename_to_tableid[bn] = int(tid) if isinstance(tid, (int, float)) else tid
 
-    qt_raw = search_payload.get("query_tables")
-    query_tables = list(qt_raw) if isinstance(qt_raw, list) else []
-
-    after_cap = (pipeline_trace or {}).get("after_model_cap") if pipeline_trace else None
-    if isinstance(after_cap, dict) and isinstance(after_cap.get("searched_tables"), list):
-        after_model_cap_trace_rows = _table_model_rows_ordered(
-            after_cap["searched_tables"],
-            after_cap.get("table_to_models") or {},
-        )
-    else:
-        after_model_cap_trace_rows = _table_model_rows_ordered(retrieved_filenames, table_to_models)
-
-    tab2tab_block = (pipeline_trace or {}).get("tab2tab") if pipeline_trace else None
-    if isinstance(tab2tab_block, dict) and isinstance(tab2tab_block.get("searched_tables"), list):
-        tab2tab_trace_rows = _table_model_rows_ordered(
-            tab2tab_block["searched_tables"],
-            tab2tab_block.get("table_to_models") or {},
-        )
-    else:
-        tab2tab_trace_rows = []
-
+    table_to_models = intermediate.get("table_to_models", {}) if isinstance(intermediate.get("table_to_models"), dict) else {}
+    retrieved_filenames = search_payload.get("searched_tables", []) if isinstance(search_payload.get("searched_tables"), list) else []
+    if not retrieved_filenames:
+        retrieved_filenames = intermediate.get("retrieved_table_filenames", []) if isinstance(intermediate.get("retrieved_table_filenames"), list) else []
     intermediate_table_model_rows = _build_intermediate_table_model_rows(retrieved_filenames, table_to_models)
 
-    return {
-        "table_paths": table_paths,
-        "model_to_table_paths_ts": model_to_table_paths_ts,
-        "query_tables": query_tables,
-        "filename_to_tableid": filename_to_tableid,
-        "models_with_tables_list": models_with_tables_list,
-        "parquet_resources": parquet_resources,
-        "pipeline_trace": pipeline_trace,
-        "tab2tab_trace_rows": tab2tab_trace_rows,
-        "after_model_cap_trace_rows": after_model_cap_trace_rows,
-        "intermediate_table_model_rows": intermediate_table_model_rows,
-    }, None
+    merged = dict(preview)
+    merged["filename_to_tableid"] = filename_to_tableid
+    merged["intermediate_table_model_rows"] = intermediate_table_model_rows
+    return merged, None
 
 
 def _build_intermediate_table_model_rows(

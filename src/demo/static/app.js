@@ -754,6 +754,7 @@
         }
         
         function displayResults(results) {
+            window.__latestSearchResults = results || {};
             const container = document.getElementById('resultsContent');
             // Pipeline error (e.g. query2modelcard failed or no model from query) - shown at top of results
             const errorBlock = results.error
@@ -1360,7 +1361,7 @@
             container.style.display = 'block';
         }
         
-        function syncTableSearchDisplay() {
+        async function syncTableSearchDisplay() {
             const rightDiv = document.getElementById('integrationResults');
             const container = document.getElementById('integrationResultsContainer');
             if (!rightDiv || !container) return;
@@ -1413,8 +1414,134 @@
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Query2Tab2Card Results): — (none or not available)</div>';
                 }
                 rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
+            } else if (run && !run.integrated_table && (run.pipeline_trace || run.tab2tab_trace_rows || run.query_tables || run.model_to_table_paths || run.models_with_tables)) {
+                // Pre-integration preview (already have retrieval relationship info, but integration not run yet).
+                const modelIds = run.models_with_tables || [];
+                const tablePathsList = run.table_paths || [];
+                const modelToTables = run.model_to_table_paths || {};
+                let rtRows = run.retrieved_table_model_rows;
+                if (!Array.isArray(rtRows) || !rtRows.length) {
+                    rtRows = buildRetrievedTableModelRowsFallback(modelToTables, tablePathsList);
+                }
+                const tsRun = run.tables_source || (run.stats && run.stats.tables_source) || 'intermediate';
+                const traceHtml = formatQuery2Tab2CardTraceHtml(run.query_tables || [], rtRows, {
+                    tablesSource: tsRun,
+                    modelToTablePaths: modelToTables,
+                    rankedModelIds: modelIds,
+                    pipelineTrace: run.pipeline_trace,
+                    tab2tabTraceRows: run.tab2tab_trace_rows,
+                    afterModelCapTraceRows: run.after_model_cap_trace_rows,
+                });
+                rightDiv.innerHTML = `<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px;">
+                    <div style="font-size: 13px; color: #6c757d; margin-bottom: 8px;">Integration not run yet. Click <strong>Integrated</strong> to build merged table.</div>
+                    <details open style="margin: 0;">
+                        <summary style="cursor: pointer; list-style: none; outline: none;">
+                            <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
+                            <span style="color:#155724;">(pre-integration preview)</span>
+                        </summary>
+                        <div style="margin-top: 8px; font-size: 11px;">
+                            ${traceHtml}
+                        </div>
+                    </details>
+                </div>`;
             } else {
-                rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
+                // First try backend preview API (decoupled from integration execution).
+                try {
+                    const jobId = (currentJobId || ((window.__latestSearchResults || {}).job_id) || '').toString().trim();
+                    if (jobId) {
+                        const resp = await fetch('{{BACKEND_URL}}/api/table-search-preview', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ job_id: jobId, search_type: searchType, tables_source: tablesSource })
+                        });
+                        const preview = await resp.json();
+                        if (preview && preview.status === 'success') {
+                            const previewRun = {
+                                key,
+                                integration_type: integrationType,
+                                search_type: searchType,
+                                tables_source: tablesSource,
+                                ...preview
+                            };
+                            let runsMutable = window.__tableSearchRuns || [];
+                            const idx = runsMutable.findIndex(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === key);
+                            if (idx >= 0) runsMutable[idx] = { ...runsMutable[idx], ...previewRun };
+                            else runsMutable.push(previewRun);
+                            window.__tableSearchRuns = runsMutable;
+
+                            const modelIds = preview.models_with_tables || [];
+                            const tablePathsList = preview.table_paths || [];
+                            const modelToTables = preview.model_to_table_paths || {};
+                            let rtRows = preview.retrieved_table_model_rows;
+                            if (!Array.isArray(rtRows) || !rtRows.length) {
+                                rtRows = buildRetrievedTableModelRowsFallback(modelToTables, tablePathsList);
+                            }
+                            const traceHtml = formatQuery2Tab2CardTraceHtml(preview.query_tables || [], rtRows, {
+                                tablesSource,
+                                modelToTablePaths: modelToTables,
+                                rankedModelIds: modelIds,
+                                pipelineTrace: preview.pipeline_trace,
+                                tab2tabTraceRows: preview.tab2tab_trace_rows,
+                                afterModelCapTraceRows: preview.after_model_cap_trace_rows,
+                            });
+                            rightDiv.innerHTML = `<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px;">
+                                <div style="font-size: 13px; color: #6c757d; margin-bottom: 8px;">Preloaded retrieval relationship info. Click <strong>Integrated</strong> to run table integration.</div>
+                                <details open style="margin: 0;">
+                                    <summary style="cursor: pointer; list-style: none; outline: none;">
+                                        <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
+                                        <span style="color:#155724;">(from backend preview)</span>
+                                    </summary>
+                                    <div style="margin-top: 8px; font-size: 11px;">${traceHtml}</div>
+                                </details>
+                            </div>`;
+                            initTablePanZoom(rightDiv);
+                            refreshIntegrationShortAnalysis();
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    // Fallback to local parse below.
+                }
+                // If no integration run exists yet, try to present retrieval relationship info directly from latest search payload.
+                const sr = window.__latestSearchResults || {};
+                const c2 = sr.card2tab2card_results || {};
+                const searchPayload = c2[searchType];
+                if (searchPayload && typeof searchPayload === 'object') {
+                    const inter = searchPayload.intermediate || {};
+                    const mappings = searchPayload.mappings || {};
+                    const modelToTables = {};
+                    const tableToModels = mappings.retrieved_table_to_related_models || inter.table_to_models || {};
+                    Object.entries(tableToModels || {}).forEach(([tp, mids]) => {
+                        (Array.isArray(mids) ? mids : []).forEach(midObj => {
+                            const mid = (typeof midObj === 'string' ? midObj : (midObj && (midObj.model_id || midObj))) || '';
+                            const s = String(mid).trim();
+                            if (!s) return;
+                            if (!modelToTables[s]) modelToTables[s] = [];
+                            modelToTables[s].push(tp);
+                        });
+                    });
+                    const modelIds = Array.isArray(searchPayload.model_ids) ? searchPayload.model_ids : Object.keys(modelToTables);
+                    const tablePathsList = Array.isArray(searchPayload.searched_tables) ? searchPayload.searched_tables : (inter.retrieved_table_filenames || []);
+                    const rtRows = buildRetrievedTableModelRowsFallback(modelToTables, tablePathsList);
+                    const traceHtml = formatQuery2Tab2CardTraceHtml(searchPayload.query_tables || [], rtRows, {
+                        tablesSource,
+                        modelToTablePaths: modelToTables,
+                        rankedModelIds: modelIds,
+                        pipelineTrace: searchPayload.pipeline_trace || {},
+                    });
+                    rightDiv.innerHTML = `<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px;">
+                        <div style="font-size: 13px; color: #6c757d; margin-bottom: 8px;">Preloaded retrieval relationship info. Click <strong>Integrated</strong> to run table integration.</div>
+                        <details open style="margin: 0;">
+                            <summary style="cursor: pointer; list-style: none; outline: none;">
+                                <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
+                                <span style="color:#155724;">(from search results)</span>
+                            </summary>
+                            <div style="margin-top: 8px; font-size: 11px;">${traceHtml}</div>
+                        </details>
+                    </div>`;
+                } else {
+                    rightDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
+                }
             }
             initTablePanZoom(rightDiv);
             refreshIntegrationShortAnalysis();

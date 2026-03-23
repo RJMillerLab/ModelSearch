@@ -16,7 +16,6 @@ from typing import Dict, List, Optional
 #from src.config import MODELLAKE_DB, CARD2TAB2CARD_OUTPUT_JSON
 from src.config import *
 from src.search.tab2tab import search_table2table
-from src.search.query2modelcard import dense_rerank_model_ids_by_query
 from src.utils import load_modelid_to_csvlist, load_csvs_to_modelids, resolve_table_path
 
 
@@ -26,12 +25,10 @@ def search_card2tab2card(
     output_json: str = "",
     db_path: str = MODELLAKE_DB,
     table_top_k: int = 10,
-    model_top_k: int = 20,
     table_resources: Optional[List[str]] = None,
-    query: Optional[str] = None,
-) -> List[str]:
+)-> Dict[str, object]:
     """Simplified card->tab->card search using relationship parquet + tab2tab import."""
-    print(f"[Card2Tab2Card] model_id={model_id} search_type={search_type} table_top_k={table_top_k} model_top_k={model_top_k} table_resources={table_resources!r}")
+    print(f"[Card2Tab2Card] model_id={model_id} search_type={search_type} table_top_k={table_top_k} table_resources={table_resources!r}")
     # model_id -> csv_basenames (only columns for --resources, e.g. hugging-only)
     query_table_basenames = load_modelid_to_csvlist(model_id, resources=table_resources)
     # utils returns csv basenames; resolve to local csv paths for reading.
@@ -45,11 +42,28 @@ def search_card2tab2card(
 
     if not query_tables:
         print(f"⚠️ No tables found for model_id={model_id}")
+        empty_payload: Dict[str, object] = {
+            "query_model": model_id,
+            "query_tables": [],
+            "searched_tables": [],
+            "model_ids": [],
+            "mappings": {
+                "card_to_related_tables": {model_id: []},
+                "query_table_to_retrieved_tables": {},
+                "retrieved_table_to_related_models": {},
+            },
+            "intermediate": {
+                "retrieved_table_filenames": [],
+                "table_id_to_filename": {},
+                "table_to_models": {},
+                "query_table_to_retrieved_tables": {},
+            },
+        }
         if output_json:
             os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
             with open(output_json, "w", encoding="utf-8") as f:
-                json.dump({"query_model": model_id, "query_tables": [], "searched_tables": [], "model_ids": [], "intermediate": {"retrieved_table_filenames": [], "table_id_to_filename": {}, "table_to_models": {}}}, f, ensure_ascii=False, indent=2)
-        return []
+                json.dump(empty_payload, f, ensure_ascii=False, indent=2)
+        return empty_payload
     else:
         print(f"query_tables example: {query_tables[0]}")
     print(f"[c2t2c-trace] query_tables ({len(query_tables)}):", flush=True)
@@ -58,6 +72,7 @@ def search_card2tab2card(
 
     # table2table search (tab2tab returns CSV basenames)
     similar_basenames: List[str] = []
+    query_table_to_retrieved_tables: Dict[str, List[str]] = {}
     for csv_path in query_tables:
         if not os.path.exists(csv_path):
             continue
@@ -72,32 +87,35 @@ def search_card2tab2card(
         )
         if names:
             similar_basenames.extend(names)
+        query_table_to_retrieved_tables[os.path.basename(csv_path)] = list(dict.fromkeys(n_list))
 
     if not similar_basenames:
         print("⚠️ No similar tables returned by tab2tab.")
+        empty_payload = {
+            "query_model": model_id,
+            "query_tables": query_tables,
+            "searched_tables": [],
+            "model_ids": [],
+            "mappings": {
+                "card_to_related_tables": {model_id: [os.path.basename(p) for p in query_tables]},
+                "query_table_to_retrieved_tables": query_table_to_retrieved_tables,
+                "retrieved_table_to_related_models": {},
+            },
+            "intermediate": {
+                "retrieved_table_filenames": [],
+                "table_id_to_filename": {},
+                "table_to_models": {},
+                "query_table_to_retrieved_tables": query_table_to_retrieved_tables,
+            },
+        }
         # Downstream expects `--output_json` to always be written so that
         # backend/frontend don't fail with "No JSON at ...".
         if output_json:
             os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
             with open(output_json, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "query_model": model_id,
-                        "query_tables": query_tables,
-                        "searched_tables": [],
-                        "model_ids": [],
-                        "intermediate": {
-                            "retrieved_table_filenames": [],
-                            "table_id_to_filename": {},
-                            "table_to_models": {},
-                        },
-                    },
-                    f,
-                    ensure_ascii=False,
-                    indent=2,
-                )
+                json.dump(empty_payload, f, ensure_ascii=False, indent=2)
             print(f"✅ Results saved to {output_json} (empty)")
-        return []
+        return empty_payload
 
     retrieved_tables = list(dict.fromkeys(similar_basenames))
     retrieved_tables = retrieved_tables[: max(table_top_k, 1) * max(len(query_tables), 1)]
@@ -116,32 +134,7 @@ def search_card2tab2card(
             mid for mids in table_to_models.values() for mid in mids if mid != model_id
         )
     )
-    # Candidate models from reverse lookup (before dense rerank / top-k cap).
-    candidate_model_ids = list(similar_models)
-
-    rerank_applied = False
-    if isinstance(model_top_k, int) and model_top_k > 0 and len(candidate_model_ids) > model_top_k:
-        q = str(query).strip() if query is not None else ""
-        if q:
-            reranked = dense_rerank_model_ids_by_query(q, candidate_model_ids, emb_npz_path=EMB_NPZ)
-            final_results = reranked[:model_top_k]
-            rerank_applied = True
-        else:
-            # Fallback when no query string is supplied by caller.
-            final_results = candidate_model_ids[:model_top_k]
-    elif isinstance(model_top_k, int) and model_top_k == 0:
-        final_results = []
-    else:
-        final_results = list(candidate_model_ids)
-
-    keep_set = set(final_results)
-    synced_table_to_models = {}
-    for bn in retrieved_tables:
-        mids = table_to_models.get(bn, [])
-        kept = [m for m in mids if m in keep_set]
-        if kept:
-            synced_table_to_models[bn] = kept
-    synced_retrieved_tables = [bn for bn in retrieved_tables if bn in synced_table_to_models]
+    final_results = list(similar_models)
 
     print("[c2t2c-trace] parquet load_csvs_to_modelids: retrieved_csv_basename -> modelIds (query model excluded per row)", flush=True)
     _rows = sorted(table_to_models.items(), key=lambda x: -len(x[1]))
@@ -153,53 +146,46 @@ def search_card2tab2card(
     if len(_rows) > _max_tbl_lines:
         print(f"  ... [{len(_rows) - _max_tbl_lines} more tables omitted]", flush=True)
     print(
-        f"[c2t2c-trace] unique models before model_top_k cap: {len(candidate_model_ids)} "
-        f"(model_top_k={model_top_k}); after cap: {len(final_results)} | rerank_applied={rerank_applied}",
+        f"[c2t2c-trace] unique models from tab2tab->parquet: {len(final_results)} (no model_top_k cap in card2tab2card)",
         flush=True,
     )
     print(f"[c2t2c-trace] final model_ids order: {final_results}", flush=True)
-    print(
-        f"[c2t2c-trace] synced searched_tables after model cap: {len(synced_retrieved_tables)} "
-        f"(from raw {len(retrieved_tables)})",
-        flush=True,
-    )
 
-    print(f"✅ query_tables={len(query_tables)} retrieved_tables={len(synced_retrieved_tables)} model_ids={len(final_results)}")
+    print(f"✅ query_tables={len(query_tables)} retrieved_tables={len(retrieved_tables)} model_ids={len(final_results)}")
+    result_payload: Dict[str, object] = {
+        "query_model": model_id,
+        "query_tables": query_tables,
+        "searched_tables": retrieved_tables,
+        "model_ids": final_results,
+        "mappings": {
+            "card_to_related_tables": {model_id: [os.path.basename(p) for p in query_tables]},
+            "query_table_to_retrieved_tables": query_table_to_retrieved_tables,
+            "retrieved_table_to_related_models": table_to_models,
+        },
+        "intermediate": {
+            "retrieved_table_filenames": list(retrieved_tables),
+            "table_id_to_filename": {},
+            "table_to_models": table_to_models,
+            "query_table_to_retrieved_tables": query_table_to_retrieved_tables,
+        },
+        "pipeline_trace": {
+            "tab2tab": {
+                "searched_tables": list(retrieved_tables),
+                "retrieved_table_filenames": list(retrieved_tables),
+                "table_to_models": table_to_models,
+                "query_table_to_retrieved_tables": query_table_to_retrieved_tables,
+            },
+            "model_ids_before_dense_rerank": list(final_results),
+            "model_ids_after_dense_rerank": list(final_results),
+            "dense_rerank_applied": False,
+        },
+    }
     if output_json:
         os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "query_model": model_id,
-                    "query_tables": query_tables,
-                    "searched_tables": synced_retrieved_tables,
-                    "model_ids": final_results,
-                    "intermediate": {
-                        "retrieved_table_filenames": list(synced_retrieved_tables),
-                        "table_id_to_filename": {},
-                        "table_to_models": synced_table_to_models,
-                    },
-                    "pipeline_trace": {
-                        "tab2tab": {
-                            "searched_tables": list(retrieved_tables),
-                            "retrieved_table_filenames": list(retrieved_tables),
-                            "table_to_models": table_to_models,
-                        },
-                        "model_ids_before_dense_rerank": list(candidate_model_ids),
-                        "model_ids_after_dense_rerank": list(final_results),
-                        "after_model_cap": {
-                            "searched_tables": list(synced_retrieved_tables),
-                            "table_to_models": synced_table_to_models,
-                        },
-                        "dense_rerank_applied": rerank_applied,
-                    },
-                },
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+            json.dump(result_payload, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {output_json}")
-    return final_results
+    return result_payload
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Card -> Tab -> Card search (simplified)")
@@ -208,8 +194,6 @@ def main() -> None:
     parser.add_argument("--output_json", default="")
     parser.add_argument("--resources", nargs="+", default=["hugging"], choices=["hugging", "github", "arxiv", "llm"], help="Optional table resource filter on card2tab2card results.")
     parser.add_argument("--table_top_k", type=int, default=10, help="Top-k table ids")
-    parser.add_argument("--model_top_k", type=int, default=20, help="Top-k model ids")
-    parser.add_argument("--query", default="", help="Original user query for dense rerank")
     args = parser.parse_args()
 
     resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
@@ -232,16 +216,15 @@ def main() -> None:
 
     t0 = time.time()
     
-    results = search_card2tab2card(
+    payload = search_card2tab2card(
         model_id=args.model_id,
         search_type=args.search_type,
         table_top_k=args.table_top_k,
         output_json=args.output_json,
         db_path=db_path,
-        model_top_k=args.model_top_k,
         table_resources=resources,
-        query=args.query,
     )
+    results = payload.get("model_ids", []) if isinstance(payload, dict) else []
     print(f"Found {len(results)} model ids for {args.model_id}")
     for i, mid in enumerate(results[:20], 1):
         print(f"  {i}. {mid}")
