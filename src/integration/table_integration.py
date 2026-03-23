@@ -234,6 +234,159 @@ def _resolve_table_paths_for_model_ids(
     return table_paths, model_to_table_paths
 
 
+def _prepare_card2tab2card_inputs(
+    search_results: Dict[str, Any],
+    search_type: str,
+    tables_source: str,
+    table_resources: Optional[List[str]] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Resolve table paths and model↔table mappings for Card2Tab2Card integration / trace preview.
+    Does not load CSVs or run merge algorithms.
+    """
+    parquet_resources: Optional[List[str]] = (
+        table_resources
+        if isinstance(table_resources, list) and table_resources
+        else _table_resources_for_integration(search_results)
+    )
+
+    card2tab2card_results = search_results.get("card2tab2card_results")
+    if not isinstance(card2tab2card_results, dict):
+        return None, "search_results must contain card2tab2card_results"
+
+    search_payload = card2tab2card_results.get(search_type)
+    if not isinstance(search_payload, dict):
+        available_types = list(card2tab2card_results.keys())
+        return None, f"Search type {search_type!r} not found. Available: {', '.join(available_types)}"
+
+    intermediate = search_payload.get("intermediate")
+    if not isinstance(intermediate, dict):
+        return None, f"Search type {search_type!r} has no intermediate payload"
+
+    table_to_models = intermediate.get("table_to_models", {})
+    table_id_to_filename = intermediate.get("table_id_to_filename", {})
+
+    retrieved_filenames = search_payload.get("searched_tables", []) if isinstance(search_payload, dict) else []
+    if not retrieved_filenames:
+        retrieved_filenames = intermediate.get("retrieved_table_filenames", [])
+    if not retrieved_filenames:
+        return None, "No retrieved tables (searched_tables or intermediate.retrieved_table_filenames)"
+
+    if tables_source == "all_from_modelcards":
+        model_ids: Set[str] = set()
+        for _table_path, model_list in table_to_models.items():
+            for m in (model_list if isinstance(model_list, list) else []):
+                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
+                if mid:
+                    model_ids.add(str(mid))
+        model_ids_list = list(model_ids)
+        if not model_ids_list:
+            return None, "No model IDs in intermediate for all_from_modelcards"
+        table_paths, model_to_table_paths_ts = _resolve_table_paths_for_model_ids(model_ids_list, resources=parquet_resources)
+        models_with_tables_list = model_ids_list
+    else:
+        table_paths = list(retrieved_filenames)
+        c2t2c_model_ids = list(search_payload["model_ids"]) if isinstance(search_payload.get("model_ids"), (list, tuple)) else []
+        if c2t2c_model_ids:
+            models_with_tables_list = [str(x) for x in c2t2c_model_ids]
+        else:
+            basename_to_key = {os.path.basename(key): key for key in table_to_models}
+            model_ids_set: Set[str] = set()
+            for tp in table_paths:
+                model_list = table_to_models.get(tp) or table_to_models.get(basename_to_key.get(os.path.basename(tp)))
+                for m in (model_list or []):
+                    mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
+                    if mid:
+                        model_ids_set.add(str(mid))
+            models_with_tables_list = list(model_ids_set)
+        model_to_table_paths_ts = {}
+        basename_to_key = {os.path.basename(key): key for key in table_to_models}
+        for tp in table_paths:
+            key = tp if tp in table_to_models else basename_to_key.get(os.path.basename(tp))
+            model_list = table_to_models.get(key, []) if key else []
+            for m in (model_list or []):
+                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
+                if mid:
+                    model_to_table_paths_ts.setdefault(str(mid), []).append(tp)
+
+    if not table_paths:
+        return None, "No tables to integrate"
+
+    filename_to_tableid: Dict[str, Any] = {}
+    if table_id_to_filename:
+        for tid, fname in table_id_to_filename.items():
+            bn = os.path.basename(str(fname))
+            if bn:
+                filename_to_tableid[bn] = int(tid) if isinstance(tid, (int, float)) else tid
+
+    qt_raw = search_payload.get("query_tables")
+    query_tables = list(qt_raw) if isinstance(qt_raw, list) else []
+
+    return {
+        "table_paths": table_paths,
+        "model_to_table_paths_ts": model_to_table_paths_ts,
+        "query_tables": query_tables,
+        "filename_to_tableid": filename_to_tableid,
+        "models_with_tables_list": models_with_tables_list,
+        "parquet_resources": parquet_resources,
+    }, None
+
+
+def _build_retrieved_table_model_rows(
+    table_paths: List[str],
+    model_to_table_paths_ts: Dict[str, List[str]],
+) -> List[Dict[str, Any]]:
+    """Per integration input table: basename, path, model ids that reference that basename."""
+    rev_bn: Dict[str, List[str]] = {}
+    for mid, paths in (model_to_table_paths_ts or {}).items():
+        for p in paths or []:
+            bn = os.path.basename(str(p))
+            if not bn:
+                continue
+            rev_bn.setdefault(bn, [])
+            smid = str(mid)
+            if smid not in rev_bn[bn]:
+                rev_bn[bn].append(smid)
+    rt_rows: List[Dict[str, Any]] = []
+    for tp in table_paths:
+        tp_s = str(tp)
+        bn = os.path.basename(tp_s)
+        rt_rows.append({"table": bn, "table_path": tp_s, "models": list(rev_bn.get(bn, []))})
+    return rt_rows
+
+
+def preview_card2tab2card_trace(
+    search_results: Dict[str, Any],
+    search_type: str,
+    tables_source: str = "intermediate",
+    table_resources: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Trace for demo UI: query tables + retrieved table → models (+ per-model tables for all_from_modelcards).
+    Independent of ALITE/union merge; safe to call before / without running integrate_tables.
+    """
+    prep, err = _prepare_card2tab2card_inputs(search_results, search_type, tables_source, table_resources)
+    if err:
+        return {"status": "error", "error": err}
+    assert prep is not None
+    rt_rows = _build_retrieved_table_model_rows(prep["table_paths"], prep["model_to_table_paths_ts"])
+    mtp = {k: list(v) for k, v in prep["model_to_table_paths_ts"].items()}
+    return {
+        "status": "success",
+        "query_tables": prep["query_tables"],
+        "retrieved_table_model_rows": rt_rows,
+        "model_to_table_paths": mtp,
+        "table_paths": list(prep["table_paths"]),
+        "tables_source": tables_source,
+        "models_with_tables": list(prep["models_with_tables_list"]),
+        "stats": {
+            "total_unique_tables": len(prep["table_paths"]),
+            "models_with_tables": len(prep["models_with_tables_list"]),
+            "tables_source": tables_source,
+        },
+    }
+
+
 def integrate_tables(table_paths: List[str], integration_type: str = "union", k: int = 10, filename_to_tableid: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """
     Integrate multiple tables from modellake.db (by tableid) or from CSV paths.
@@ -330,130 +483,26 @@ def integrate_tables_from_card2tab2card(
     with open(search_results_json, 'r', encoding='utf-8') as f:
         search_results = json.load(f)
 
-    parquet_resources: Optional[List[str]] = (
-        table_resources
-        if isinstance(table_resources, list) and table_resources
-        else _table_resources_for_integration(search_results)
+    prep, prep_err = _prepare_card2tab2card_inputs(
+        search_results, search_type, tables_source, table_resources
     )
+    if prep_err or prep is None:
+        return {"success": False, "error": prep_err or "prepare failed", "integrated_table": None}
+
+    parquet_resources = prep["parquet_resources"]
     _scope = "ALL_COLUMNS" if parquet_resources is None else repr(parquet_resources)
     print(f"ℹ️  Parquet table-list columns scoped to resources={_scope} (hugging/github/arxiv/llm)")
-
-    # Only support the current backend schema:
-    # search_results["card2tab2card_results"][search_type]
-    card2tab2card_results = search_results.get("card2tab2card_results")
-    if not isinstance(card2tab2card_results, dict):
-        return {"success": False, "error": "search_results.json must contain card2tab2card_results", "integrated_table": None}
-
-    search_payload = card2tab2card_results.get(search_type)
-    if not isinstance(search_payload, dict):
-        available_types = list(card2tab2card_results.keys())
-        return {"success": False, "error": f"Search type '{search_type}' not found in card2tab2card_results. Available types: {', '.join(available_types)}", "integrated_table": None}
-
-    intermediate = search_payload.get("intermediate")
-    if not isinstance(intermediate, dict):
-        return {"success": False, "error": f"Search type '{search_type}' has no intermediate payload", "integrated_table": None}
-
-    # Current card2tab2card payload stores the final table list in
-    # `searched_tables` and duplicates it in `intermediate.retrieved_table_filenames`.
-    table_to_models = intermediate.get("table_to_models", {})
-    table_id_to_filename = intermediate.get("table_id_to_filename", {})
-
-    retrieved_filenames = search_payload.get("searched_tables", []) if isinstance(search_payload, dict) else []
-    if retrieved_filenames:
-        print(f"ℹ️  Using searched_tables: {len(retrieved_filenames)} tables")
-    else:
-        retrieved_filenames = intermediate.get("retrieved_table_filenames", [])
-        if retrieved_filenames:
-            print(f"ℹ️  Using intermediate.retrieved_table_filenames: {len(retrieved_filenames)} tables")
-    if not retrieved_filenames:
-        return {"success": False, "error": "No retrieved tables found in card2tab2card payload (expected searched_tables or intermediate.retrieved_table_filenames)", "integrated_table": None}
-    
-    models_with_tables_list = []
-    if tables_source == "all_from_modelcards":
-        # Get model_ids from table_to_models, then DuckDB batch query
-        model_ids = set()
-        table_to_models = intermediate.get("table_to_models", {})
-        for table_path, model_list in table_to_models.items():
-            for m in (model_list if isinstance(model_list, list) else []):
-                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
-                if mid:
-                    model_ids.add(mid)
-        # No model cap: use ALL models from table_to_models (was: model_ids[:50])
-        model_ids = list(model_ids)
-        if not model_ids:
-            return {"success": False, "error": "No model IDs in intermediate for all_from_modelcards", "integrated_table": None}
-        print(f"✅ tables_source=all_from_modelcards: DuckDB batch query for {len(model_ids)} models")
-        table_paths, model_to_table_paths_ts = _resolve_table_paths_for_model_ids(model_ids, resources=parquet_resources)
-        # No table top-k cap: use ALL tables
-        print(f"   Resolved {len(table_paths)} tables for integration (no table top-k cap; from {len(retrieved_filenames)} retrieved tables)")
-        models_with_tables_list = model_ids
-    else:
-        # intermediate: use retrieved tables (current behavior)
-        # No table top-k cap: use ALL retrieved tables (per-table k already applied in card2tab2card)
-        print(f"✅ tables_source=intermediate: {len(retrieved_filenames)} retrieved tables from search (no table top-k cap)")
-        table_paths = retrieved_filenames
-        table_to_models = intermediate.get("table_to_models", {})
-        # Align with card2tab2card model_ids (50) when available - same set as retrieval results
-        c2t2c_model_ids = list(search_payload["model_ids"]) if isinstance(search_payload.get("model_ids"), (list, tuple)) else []
-        if c2t2c_model_ids:
-            models_with_tables_list = c2t2c_model_ids
-            print(f"   Using card2tab2card model_ids ({len(c2t2c_model_ids)}) for alignment with retrieval results")
-        else:
-            basename_to_key = {os.path.basename(key): key for key in table_to_models}
-            model_ids_set = set()
-            for tp in table_paths:
-                model_list = table_to_models.get(tp) or table_to_models.get(basename_to_key.get(os.path.basename(tp)))
-                for m in (model_list or []):
-                    mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
-                    if mid:
-                        model_ids_set.add(mid)
-            models_with_tables_list = list(model_ids_set)
-    
-    if not table_paths:
-        return {"success": False, "error": "No tables to integrate", "integrated_table": None}
-    
-    # Build model_id -> table_paths for UI debug (intermediate path: reverse of table_to_models)
-    if tables_source != "all_from_modelcards":
-        model_to_table_paths_ts = {}
-        basename_to_key = {os.path.basename(key): key for key in table_to_models}
-        for tp in table_paths:
-            key = tp if tp in table_to_models else basename_to_key.get(os.path.basename(tp))
-            model_list = table_to_models.get(key, []) if key else []
-            for m in (model_list or []):
-                mid = m.get("model_id") or m.get("modelId") if isinstance(m, dict) else str(m)
-                if mid:
-                    model_to_table_paths_ts.setdefault(mid, []).append(tp)
-    # Build filename -> tableid
-    filename_to_tableid: Dict[str, int] = {}
-    if table_id_to_filename:
-        for tid, fname in table_id_to_filename.items():
-            bn = os.path.basename(str(fname))
-            if bn:
-                filename_to_tableid[bn] = int(tid) if isinstance(tid, (int, float)) else tid
+    table_paths = prep["table_paths"]
+    model_to_table_paths_ts = prep["model_to_table_paths_ts"]
+    filename_to_tableid = prep["filename_to_tableid"]
+    models_with_tables_list = prep["models_with_tables_list"]
     print(f"📊 Integration (Table Search): #tables={len(table_paths)}, #models={len(models_with_tables_list)}")
     result = integrate_tables(table_paths, integration_type, k, filename_to_tableid=filename_to_tableid or None)
     result["models_with_tables"] = models_with_tables_list
     result["model_to_table_paths"] = model_to_table_paths_ts
-    # Demo UI: seed query tables + per retrieved basename -> related model ids (from model_to_table_paths_ts)
-    qt_raw = search_payload.get("query_tables")
-    result["query_tables"] = list(qt_raw) if isinstance(qt_raw, list) else []
-    rev_bn: Dict[str, List[str]] = {}
-    for mid, paths in (model_to_table_paths_ts or {}).items():
-        for p in paths or []:
-            bn = os.path.basename(str(p))
-            if not bn:
-                continue
-            rev_bn.setdefault(bn, [])
-            smid = str(mid)
-            if smid not in rev_bn[bn]:
-                rev_bn[bn].append(smid)
+    result["query_tables"] = prep["query_tables"]
     loaded_for_ui = result.get("table_paths") or list(table_paths or [])
-    rt_rows: List[Dict[str, Any]] = []
-    for tp in loaded_for_ui:
-        tp_s = str(tp)
-        bn = os.path.basename(tp_s)
-        rt_rows.append({"table": bn, "table_path": tp_s, "models": list(rev_bn.get(bn, []))})
-    result["retrieved_table_model_rows"] = rt_rows
+    result["retrieved_table_model_rows"] = _build_retrieved_table_model_rows(loaded_for_ui, model_to_table_paths_ts)
     elapsed = time.time() - t0
     # Attach timing + source info to stats for debugging
     if not isinstance(result.get("stats"), dict):
