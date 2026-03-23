@@ -1,17 +1,17 @@
 """
-Backend API for ModelSearch Demo (CLI-based)
+Backend API for ModelSearch Demo.
 
-Runs search via subprocess commands from docs/build_index.md.
+Runs search in-process.
 All job outputs (search results, integration, evaluation, QA) go under JOBS_DIR from config (e.g. data_<tag>/jobs_<tag>/<job_id>).
 Minimal imports for fast startup.
 """
 
-import os, sys, json, random, string, threading, subprocess, time, math, re, shlex, html, shutil
+import os, sys, json, random, string, threading, time, math, re, html, shutil
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-from typing import Dict, List, Optional, Any, Tuple, Set
+from typing import Dict, List, Optional, Any, Tuple
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
@@ -265,21 +265,6 @@ class JobLogger:
                 with open(self._log_file_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
 
-    def log_cmd(self, step: str, cmd: List[str], out_path: Optional[str] = None, elapsed: Optional[float] = None, rc: Optional[int] = None):
-        """Log command execution details (CMD, OUT, ELAPSED) for pipeline run log."""
-        # shlex.join quotes argv pieces with spaces (subprocess still uses list; this is display-only).
-        try:
-            cmd_display = shlex.join(str(x) for x in cmd)
-        except Exception:
-            cmd_display = " ".join(str(x) for x in cmd)
-        self.log(f"[{step}] CMD: {cmd_display}")
-        if out_path:
-            self.log(f"[{step}] SAVED: {out_path}")
-        if elapsed is not None:
-            self.log(f"[{step}] ELAPSED: {elapsed:.2f}s")
-        if rc is not None:
-            self.log(f"[{step}] EXIT: {rc}")
-
     def get_logs(self) -> List[Dict]:
         with self.lock:
             return self.logs.copy()
@@ -291,13 +276,6 @@ class JobLogger:
     def set_results(self, results: Dict):
         with self.lock:
             self.results = results
-
-
-def _run_cmd(cmd: List[str], cwd: str, env: Optional[Dict] = None, timeout: Optional[int] = 300) -> tuple:
-    """Run command; return (returncode, stdout, stderr). No try/except - caller checks returncode."""
-    env = env or os.environ.copy()
-    r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-    return (r.returncode, r.stdout or "", r.stderr or "")
 
 
 def _read_json(path: str) -> Optional[Dict]:
@@ -335,31 +313,6 @@ def _ordered_model_ids_from_q2m_results(results_list: Any) -> List[str]:
         out.append(mid_s)
     return out
 
-
-@lru_cache(maxsize=16)
-def _cached_valid_model_ids_from_parquet(frozen_table_resources: Tuple[str, ...]) -> frozenset:
-    """
-    Model IDs with ≥1 table path in RELATIONSHIP_PARQUET for the given resource columns
-    (same definition as card2tab2card --resources / load_modelid_to_csvlist).
-    Cached per resource tuple for the backend process lifetime.
-    """
-    from src.utils import _load_modelid_to_csv_expand
-
-    res_list = list(frozen_table_resources)
-    df = _load_modelid_to_csv_expand(res_list if res_list else None)
-    if df.empty or "modelId" not in df.columns:
-        return frozenset()
-    s = df["modelId"].dropna().astype(str).str.strip()
-    return frozenset(x for x in s if x)
-
-
-def _valid_model_ids_for_table_resources(table_resources: List[str]) -> set:
-    """Align require_seed_has_tables with card2tab2card table source (not a broader txt built for all columns)."""
-    tr = [str(x).strip().lower() for x in table_resources if str(x).strip()]
-    key = tuple(sorted(tr))
-    if not key:
-        key = tuple(sorted(TABLE_RESOURCE_ALLOWLIST))
-    return set(_cached_valid_model_ids_from_parquet(key))
 
 def run_search_pipeline(
     job_id: str,
@@ -426,8 +379,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     logger.log(
         f"Run settings: top_k={top_k}, model_top_k={model_top_k}, per_table_search_k={table_search_k or 1}, "
         f"card2card={card2card_retrieval_mode}, "
-        f"USE_CARD2CARD_CLI={USE_CARD2CARD_CLI} "
-        f"(False => query mode: left panel from query2modelcard rank, no card2card subprocess), "
         f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}, "
         f"require_seed_has_tables={require_seed_has_tables}"
     )
@@ -448,16 +399,15 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         logger.log(f"Runtime device detection failed: {e}")
     logger.set_status("running")
 
-    # Normalize resource selection once and reuse in all subprocess commands.
+    # Normalize resource selection once and reuse in in-process calls.
     raw_resources = list(table_resource_allowlist or TABLE_RESOURCE_ALLOWLIST)
     table_resources = [r for r in raw_resources if r in ("hugging", "github", "arxiv")]
     if not table_resources:
         table_resources = list(TABLE_RESOURCE_ALLOWLIST)
     # Query2Card / card2card search: full corpus (EMB_NPZ + full sparse when hybrid).
     model_resources_full = ["hugging", "github", "arxiv"]
-    # Table-search seed: hugging-only index (EMB_NPZ_HUGGING) — matches table pipeline universe.
-    model_resources_hugging = ["hugging"]
-    logger.log(f"Resources: Query2Card/card2card={model_resources_full}, table CLI={table_resources}, q2m_w_table={model_resources_hugging}")
+    # Table-search seed uses hugging-only embeddings by current table_resources default.
+    logger.log(f"Resources: Query2Card/card2card={model_resources_full}, table CLI={table_resources}")
 
     def _table_emb_npz_for_resources(resources: List[str]) -> str:
         rset = set(str(r).strip().lower() for r in (resources or []) if str(r).strip())
@@ -468,58 +418,18 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         # Keep same behavior as query2tab2card._resource_paths fallback constraints.
         return EMB_NPZ_HUGGING
 
-    dense_runtime_table = None
-    dense_runtime_full = None
-    try:
-        from src.search.query2modelcard import get_query2modelcard_dense_runtime
-        full_emb_npz = _table_emb_npz_for_resources(model_resources_full)
-        logger.log(f"[Query2ModelCard-FULL] Preload dense runtime from npz: {full_emb_npz}")
-        t_preload_full = time.time()
-        dense_runtime_full = get_query2modelcard_dense_runtime(emb_npz_path=full_emb_npz)
-        logger.log(f"[Query2ModelCard-FULL] Dense runtime ready in {time.time() - t_preload_full:.2f}s")
+    from src.search.query2modelcard import get_query2modelcard_dense_runtime
+    full_emb_npz = _table_emb_npz_for_resources(model_resources_full)
+    logger.log(f"[Query2ModelCard-FULL] Preload dense runtime from npz: {full_emb_npz}")
+    t_preload_full = time.time()
+    dense_runtime_full = get_query2modelcard_dense_runtime(emb_npz_path=full_emb_npz)
+    logger.log(f"[Query2ModelCard-FULL] Dense runtime ready in {time.time() - t_preload_full:.2f}s")
 
-        table_emb_npz = _table_emb_npz_for_resources(table_resources)
-        logger.log(f"[Query2Tab2Card] Preload dense runtime from npz: {table_emb_npz}")
-        t_preload = time.time()
-        dense_runtime_table = get_query2modelcard_dense_runtime(emb_npz_path=table_emb_npz)
-        logger.log(f"[Query2Tab2Card] Dense runtime ready in {time.time() - t_preload:.2f}s")
-    except Exception as e:
-        logger.log(f"[Query2Tab2Card] Dense runtime preload failed: {e}")
-        logger.set_status("error")
-        logger.set_results(
-            {
-                "error": f"Dense runtime preload failed: {e}",
-                "model_id": None,
-                "card2card_results": [],
-                "card2tab2card_results": {},
-                "folder_path": job_dir,
-                "run_log_path": run_log_path,
-            }
-        )
-        return
-
-    def _with_resources(cmd: List[str], resources: List[str]) -> List[str]:
-        return cmd + ["--resources", *resources]
-
-    def _build_q2m_cmd(*, q: str, q_top_k: int, out_path: str, resources: List[str]) -> List[str]:
-        base = [
-            sys.executable, "-m", "src.search.query2modelcard",
-            "--query", q,
-            "--top_k", str(q_top_k),
-            "--retrieval_mode", card2card_retrieval_mode,
-            "--output_json", out_path,
-        ]
-        return _with_resources(base, resources)
-
-    def _build_card2card_cmd(*, mode: str, top_k_value: int, out_path: str) -> List[str]:
-        base = [
-            sys.executable, "-m", "src.search.card2card", "search",
-            "--model_ids_file", card2card_model_ids_file,
-            "--top_k", str(top_k_value),
-            "--retrieval_mode", mode,
-            "--output_json", out_path,
-        ]
-        return _with_resources(base, model_resources_full)
+    table_emb_npz = _table_emb_npz_for_resources(table_resources)
+    logger.log(f"[Query2Tab2Card] Preload dense runtime from npz: {table_emb_npz}")
+    t_preload = time.time()
+    dense_runtime_table = get_query2modelcard_dense_runtime(emb_npz_path=table_emb_npz)
+    logger.log(f"[Query2Tab2Card] Dense runtime ready in {time.time() - t_preload:.2f}s")
 
     # Table Search now delegates full flow to query2tab2card:
     # query -> query2modelcard -> card2tab2card -> query-rerank.
@@ -538,43 +448,31 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     legacy_q2m_path = os.path.join(job_dir, "query2modelcard.json")
 
     q2m_top_k_relaxed = min(200, 5 * top_k)
-    q2m_top_k_here = q2m_top_k_relaxed if not USE_CARD2CARD_CLI else 1
+    q2m_top_k_here = q2m_top_k_relaxed
     logger.log(
         f"query2modelcard FULL: top_k={q2m_top_k_here}, resources={model_resources_full} → {os.path.basename(q2m_full_path)}"
     )
     t0 = time.time()
-    rc = 0
-    err = ""
-    try:
-        from src.search.query2modelcard import search_query2modelcard
-        logger.log(
-            f"[query2modelcard_full] INPROC: search_query2modelcard("
-            f"query={query!r}, top_k={q2m_top_k_here}, retrieval_mode={card2card_retrieval_mode!r}, "
-            f"sparse_index_path={SPARSE_INDEX!r})"
-        )
-        _ = search_query2modelcard(
-            query=query,
-            top_k=q2m_top_k_here,
-            output_json=q2m_full_path,
-            retrieval_mode=card2card_retrieval_mode,
-            candidate_factor=10,
-            emb_npz_path=EMB_NPZ,
-            sparse_index_path=SPARSE_INDEX,
-            dense_runtime=dense_runtime_full,
-        )
-    except Exception:
-        import traceback
-        rc = 1
-        err = traceback.format_exc()
+    from src.search.query2modelcard import search_query2modelcard
+    logger.log(
+        f"[query2modelcard_full] INPROC: search_query2modelcard("
+        f"query={query!r}, top_k={q2m_top_k_here}, retrieval_mode={card2card_retrieval_mode!r}, "
+        f"sparse_index_path={SPARSE_INDEX!r})"
+    )
+    _ = search_query2modelcard(
+        query=query,
+        top_k=q2m_top_k_here,
+        output_json=q2m_full_path,
+        retrieval_mode=card2card_retrieval_mode,
+        candidate_factor=10,
+        emb_npz_path=EMB_NPZ,
+        sparse_index_path=SPARSE_INDEX,
+        dense_runtime=dense_runtime_full,
+    )
     elapsed = time.time() - t0
     logger.log(f"[query2modelcard_full] SAVED: {q2m_full_path}")
     logger.log(f"[query2modelcard_full] ELAPSED: {elapsed:.2f}s")
-    logger.log(f"[query2modelcard_full] EXIT: {rc}")
-    if rc != 0:
-        logger.log(f"query2modelcard (full) failed (exit {rc}): {err}")
-        logger.set_status("error")
-        logger.set_results({"error": f"query2modelcard (full) failed: {err}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
-        return
+    logger.log("[query2modelcard_full] EXIT: 0")
     data = _read_json(q2m_full_path)
     if not data or "results" not in data or not data["results"]:
         logger.log("query2modelcard (full) returned no results")
@@ -602,7 +500,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     )
 
     table_search_seed_model_id = query_seed_model_id
-    q2m_w_table_path: Optional[str] = None
     logger.log(
         "Step 1b removed: backend no longer selects table seed with query2modelcard_w_table; "
         "query2tab2card handles seed selection internally."
@@ -612,8 +509,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     table_search_seed_model_id = str(table_search_seed_model_id).strip()
     logger.log(f"Seeds: Query2Card (full)={query_seed_model_id!r}, Query2Tab2Card=(internal to query2tab2card)")
 
-    if not USE_CARD2CARD_CLI:
-        q2m_ordered_model_ids = _ordered_model_ids_from_q2m_results(results_list)
+    q2m_ordered_model_ids = _ordered_model_ids_from_q2m_results(results_list)
     # NOTE: This repo snapshot may not include legacy `scripts/check_model_in_index.py`.
     # We let downstream scripts produce empty results if the model id is missing.
 
@@ -623,13 +519,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # IMPORTANT: keep true per-query-table top-k for Tab2Tab (no hidden multiplier).
     k_table = table_search_k_input
 
-    # Card2Card: scaled `--top_k` for first (and only) dense/sparse/hybrid subprocess.
+    # Card2Card: scaled top_k for left panel lists from query2modelcard ranking.
     card2card_top_k = max(100, int(model_top_k) * 20)
-
-    # card2card (src/search/card2card.py) expects `--model_ids_file` + `--output_json`.
-    card2card_model_ids_file = os.path.join(job_dir, "card2card_model_ids.txt")
-    with open(card2card_model_ids_file, "w", encoding="utf-8") as f:
-        f.write(str(query_seed_model_id).strip() + "\n")
 
     def _normalize_card2tab2card_payload(payload: Any) -> Dict[str, Any]:
         """
@@ -730,24 +621,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         # Fallback
         return _canonicalize({"model_ids": [], "intermediate": {}, "mappings": {}})
 
-    # Step 2: Card2Tab2Card always via CLI. Card2Card subprocess is optional:
-    #   USE_CARD2CARD_CLI True  -> legacy `python -m src.search.card2card` (dense/sparse/hybrid).
-    #   USE_CARD2CARD_CLI False -> fill card2card_* from query2modelcard ranking (below).
-    run_card2card_subprocess = bool(USE_CARD2CARD_CLI)
-    logger.log(
-        "Step 2: "
-        + ("Card2Card (CLI) + " if run_card2card_subprocess else "Card2Card from query2modelcard rank + ")
-        + "Card2Tab2Card (parallel where applicable)..."
-    )
-
-    def run_card2card(mode: str) -> tuple:
-        out_path = os.path.join(job_dir, f"card2card_{mode}.json")
-        cmd = _build_card2card_cmd(mode=mode, top_k_value=card2card_top_k, out_path=out_path)
-        t0 = time.time()
-        rc, out, err = _run_cmd(cmd, REPO_ROOT)
-        elapsed = time.time() - t0
-        logger.log_cmd(f"Card2Card-{mode.upper()}", cmd, out_path, elapsed, rc)
-        return (mode, rc, out_path, out, err, elapsed)
+    logger.log("Step 2: Card2Card from query2modelcard rank + Card2Tab2Card (parallel where applicable)...")
 
     def run_card2tab2card(st: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
@@ -758,31 +632,23 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             f"model_top_k={int(model_top_k)}, q2m_table_candidate_k=9, resources={table_resources})"
         )
         t0 = time.time()
-        payload = None
-        err = ""
-        rc = 0
-        try:
-            from src.search.query2tab2card import search_query2tab2card
-            payload = search_query2tab2card(
-                query=(query or ""),
-                search_type=st,
-                output_json=out_path,
-                table_top_k=k_table,
-                table_resources=table_resources,
-                apply_query_rerank=True,
-                model_top_k=int(model_top_k),
-                q2m_table_candidate_k=9,
-                dense_runtime=dense_runtime_table,
-            )
-        except Exception:
-            import traceback
-            rc = 1
-            err = traceback.format_exc()
+        from src.search.query2tab2card import search_query2tab2card
+        payload = search_query2tab2card(
+            query=(query or ""),
+            search_type=st,
+            output_json=out_path,
+            table_top_k=k_table,
+            table_resources=table_resources,
+            apply_query_rerank=True,
+            model_top_k=int(model_top_k),
+            q2m_table_candidate_k=9,
+            dense_runtime=dense_runtime_table,
+        )
         elapsed = time.time() - t0
         logger.log(f"[Card2Tab2Card-{st}] SAVED: {out_path}")
         logger.log(f"[Card2Tab2Card-{st}] ELAPSED: {elapsed:.2f}s")
-        logger.log(f"[Card2Tab2Card-{st}] EXIT: {rc}")
-        return (st, rc, out_path, payload, err, elapsed)
+        logger.log(f"[Card2Tab2Card-{st}] EXIT: 0")
+        return (st, 0, out_path, payload, "", elapsed)
 
     # Add by_type if run on sub-lake (use_by_type currently only echoed in results; no extra CLI).
     card2tab2card_types = list(CARD2TAB2CARD_TYPES)
@@ -793,9 +659,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # "Cannot copy out of meta tensor; no data!".
     # Keep card2tab2card workers serialized for stability.
     with ThreadPoolExecutor(max_workers=1) as ex:
-        if run_card2card_subprocess:
-            for m in CARD2CARD_MODES:
-                futures[ex.submit(run_card2card, m)] = ("card2card", m)
         for st in card2tab2card_types:
             futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
 
@@ -806,31 +669,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     for fut in as_completed(futures):
         kind, name = futures[fut]
         res = fut.result()
-        if kind == "card2card":
-            mode, rc, out_path, out, err, elapsed = res
-            logger.log(f"[Card2Card-{mode.upper()}] Done in {elapsed:.2f}s")
-            if rc != 0:
-                logger.log(f"[Card2Card-{mode.upper()}] Error (exit {rc}): {err or out}")
-                card2card_all[mode] = {"error": err or out}
-            else:
-                data = _read_json(out_path)
-                if data is not None:
-                    # `src/search/card2card.py` CLI saves a dict like:
-                    #   { "<seed_model_id>": ["neighbor1", "neighbor2", ...] }
-                    # When we pass a file with a single model_id, we return that one neighbor list.
-                    if isinstance(data, dict):
-                        if "neighbors" in data:
-                            card2card_all[mode] = data.get("neighbors", [])
-                        elif "results" in data:
-                            card2card_all[mode] = data.get("results", [])
-                        else:
-                            vals = list(data.values())
-                            card2card_all[mode] = vals[0] if vals and isinstance(vals[0], list) else []
-                    else:
-                        card2card_all[mode] = []
-                else:
-                    card2card_all[mode] = []
-        else:
+        if kind == "card2tab2card":
             st, rc, out_path, payload_raw, err, elapsed = res
             logger.log(f"[Card2Tab2Card-{st}] Done in {elapsed:.2f}s")
             data = payload_raw if isinstance(payload_raw, dict) else _read_json(out_path)
@@ -858,20 +697,19 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
                 logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
-    if not run_card2card_subprocess:
-        seed_s = str(query_seed_model_id).strip()
-        if q2m_ordered_model_ids:
-            neighbor_list = [m for m in q2m_ordered_model_ids if m != seed_s][:card2card_top_k]
-            for mode in CARD2CARD_MODES:
-                card2card_all[mode] = list(neighbor_list)
-            logger.log(
-                f"[Card2Card] Skipped CLI (USE_CARD2CARD_CLI=False); "
-                f"{len(neighbor_list)} neighbor ids from query2modelcard order (mirrored to dense/sparse/hybrid)."
-            )
-        else:
-            for mode in CARD2CARD_MODES:
-                card2card_all[mode] = []
-            logger.log("[Card2Card] Skipped CLI but missing query2modelcard ordering list; left panel empty.")
+    seed_s = str(query_seed_model_id).strip()
+    if q2m_ordered_model_ids:
+        neighbor_list = [m for m in q2m_ordered_model_ids if m != seed_s][:card2card_top_k]
+        for mode in CARD2CARD_MODES:
+            card2card_all[mode] = list(neighbor_list)
+        logger.log(
+            f"[Card2Card] {len(neighbor_list)} neighbor ids from query2modelcard order "
+            f"(mirrored to dense/sparse/hybrid)."
+        )
+    else:
+        for mode in CARD2CARD_MODES:
+            card2card_all[mode] = []
+        logger.log("[Card2Card] Missing query2modelcard ordering list; left panel empty.")
 
     # --- Cap for UI: min(requested model_top_k, max Card2Tab2Card list length) ---
     right_max_models = 0
@@ -969,8 +807,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         "running_time_seconds": round(elapsed_total, 3),
         "query2modelcard_full_json": os.path.basename(q2m_full_path),
     }
-    if q2m_w_table_path:
-        results_data["query2modelcard_w_table_json"] = os.path.basename(q2m_w_table_path)
     if table_search_empty_reason:
         results_data["table_search_reason"] = table_search_empty_reason
 
@@ -1731,13 +1567,8 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=None, help="Port (default: env PORT or 5002)")
     args, _ = parser.parse_known_args()
 
-    print("Backend (CLI-based) starting...", flush=True)
+    print("Backend (in-process) starting...", flush=True)
     if USE_BY_TYPE:
         print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled", flush=True)
-    print(
-        f"  USE_CARD2CARD_CLI={USE_CARD2CARD_CLI} "
-        f"(set env USE_CARD2CARD_CLI=1 to restore subprocess card2card in query mode)",
-        flush=True,
-    )
     port = args.port if args.port is not None else int(os.environ.get("PORT", "5002"))
     app.run(host="0.0.0.0", port=port, debug=False)
