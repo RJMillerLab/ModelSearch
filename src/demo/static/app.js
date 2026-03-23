@@ -113,9 +113,11 @@
             const opts = options || {};
             const tablesSource = String(opts.tablesSource || 'intermediate');
             const modelToTablePaths = opts.modelToTablePaths || {};
-            const useNested = tablesSource === 'all_from_modelcards'
-                && modelToTablePaths && typeof modelToTablePaths === 'object'
-                && Object.keys(modelToTablePaths).length > 0;
+            const rankedModelIds = Array.isArray(opts.rankedModelIds) ? opts.rankedModelIds.map(String) : [];
+            const pipelineTrace = opts.pipelineTrace && typeof opts.pipelineTrace === 'object' ? opts.pipelineTrace : null;
+            const tab2tabTraceRows = Array.isArray(opts.tab2tabTraceRows) ? opts.tab2tabTraceRows : [];
+            const afterModelCapTraceRows = Array.isArray(opts.afterModelCapTraceRows) ? opts.afterModelCapTraceRows : [];
+
             const qts = Array.isArray(queryTables) ? queryTables : [];
             const qLine = qts.length
                 ? `<div style="margin-bottom:6px;line-height:1.4;"><strong>Query table(s):</strong> ${qts.map(q => {
@@ -124,40 +126,73 @@
                     return integrationTablePathLink(full || bn, bn || full);
                 }).filter(Boolean).join(', ')}</div>`
                 : '';
-            const rows = Array.isArray(retrievedRows) ? retrievedRows : [];
-            const rLines = rows.map((row, i) => {
-                const tPath = row.table_path || row.table || '';
-                const tLabel = row.table || integrationBasename(tPath);
-                const tableFrag = tPath
-                    ? integrationTablePathLink(tPath, tLabel)
-                    : (tLabel ? `<code>${escapeHtmlIntegration(tLabel)}</code>` : '<span style="color:#999;">—</span>');
-                const models = Array.isArray(row.models) ? row.models : [];
-                const label = rows.length > 1 ? `Retrieved table ${i + 1}:` : 'Retrieved table:';
-                if (useNested) {
-                    if (!models.length) {
-                        return `<div style="margin-top:6px;line-height:1.4;padding-left:4px;border-left:3px solid #b8dacc;"><strong>${label}</strong> ${tableFrag} <span style="color:#666;">→ related models:</span> <span style="color:#999;">—</span></div>`;
-                    }
-                    const modelBlocks = models.map(mid => {
-                        const s = String(mid).trim();
-                        if (!s) return '';
-                        const paths = modelToTablePaths[s] || [];
-                        const tbls = paths.length
-                            ? integrationTablePathLinksRow(paths, ', ')
-                            : '<span style="color:#999;">—</span>';
-                        const link = `<a href="https://huggingface.co/${s}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(s)}</a>`;
-                        return `<div style="margin:4px 0 2px 12px;line-height:1.35;">${link} <span style="color:#666;">→ related tables:</span> ${tbls}</div>`;
-                    }).join('');
-                    return `<div style="margin-top:6px;line-height:1.4;padding-left:4px;border-left:3px solid #b8dacc;"><strong>${label}</strong> ${tableFrag} <span style="color:#666;">→ related models</span>${modelBlocks}</div>`;
+
+            function modelIdLinks(ids) {
+                const arr = Array.isArray(ids) ? ids : [];
+                if (!arr.length) return '<span style="color:#999;">—</span>';
+                return arr.map(mid => {
+                    const s = String(mid).trim();
+                    if (!s) return '';
+                    return `<a href="https://huggingface.co/${s}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(s)}</a>`;
+                }).filter(Boolean).join(', ');
+            }
+
+            function renderTableToModelRows(rows) {
+                const arr = Array.isArray(rows) ? rows : [];
+                return arr.map((row, i) => {
+                    const tPath = row.table_path || row.table || '';
+                    const tLabel = row.table || integrationBasename(tPath);
+                    const tableFrag = tPath
+                        ? integrationTablePathLink(tPath, tLabel)
+                        : (tLabel ? `<code>${escapeHtmlIntegration(tLabel)}</code>` : '<span style="color:#999;">—</span>');
+                    const models = Array.isArray(row.models) ? row.models : [];
+                    const label = arr.length > 1 ? `Retrieved table ${i + 1}:` : 'Retrieved table:';
+                    const modelLinks = models.length ? modelIdLinks(models) : '<span style="color:#999;">—</span>';
+                    return `<div style="margin-top:4px;line-height:1.4;"><strong>${label}</strong> ${tableFrag} <span style="color:#666;">→ related models:</span> ${modelLinks}</div>`;
+                }).join('');
+            }
+
+            const useAllFromCardsPipeline = tablesSource === 'all_from_modelcards' && rankedModelIds.length > 0;
+
+            if (useAllFromCardsPipeline) {
+                let html = qLine;
+                if (tab2tabTraceRows.length && pipelineTrace && pipelineTrace.tab2tab) {
+                    const n = tab2tabTraceRows.length;
+                    html += `<div style="margin-top:8px;line-height:1.35;"><strong>1) Tab2Tab + reverse lookup (before model cap)</strong> <span style="color:#666;">${n} retrieved CSVs, parquet → model IDs</span></div>`;
+                    html += `<details open style="margin-top:4px;"><summary style="cursor:pointer;color:#155724;">Full list (${n} tables)</summary><div style="margin-top:6px;">${renderTableToModelRows(tab2tabTraceRows)}</div></details>`;
+                } else {
+                    html += `<div style="margin-top:8px;padding:6px;background:#fff3cd;border-radius:4px;font-size:11px;color:#856404;"><strong>Legacy job:</strong> no <code>pipeline_trace</code> in search_results.json. Re-run the search job to store the full Tab2Tab trail.</div>`;
                 }
-                const modelLinks = models.length
-                    ? models.map(mid => {
-                        const s = String(mid).trim();
-                        return `<a href="https://huggingface.co/${s}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(s)}</a>`;
-                    }).join(', ')
-                    : '<span style="color:#999;">—</span>';
-                return `<div style="margin-top:4px;line-height:1.4;"><strong>${label}</strong> ${tableFrag} → related models: ${modelLinks}</div>`;
-            }).join('');
-            return qLine + rLines;
+                const pre = pipelineTrace && Array.isArray(pipelineTrace.model_ids_before_dense_rerank) ? pipelineTrace.model_ids_before_dense_rerank : [];
+                if (pre.length) {
+                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>2) Candidate models (before dense rerank)</strong> <span style="color:#666;">n=${pre.length}</span></div><div style="margin-top:4px;line-height:1.35;">${modelIdLinks(pre)}</div>`;
+                }
+                const post = pipelineTrace && Array.isArray(pipelineTrace.model_ids_after_dense_rerank) ? pipelineTrace.model_ids_after_dense_rerank : rankedModelIds;
+                if (post.length) {
+                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>3) Shortlist (after dense rerank)</strong> <span style="color:#666;">n=${post.length}</span></div><div style="margin-top:4px;line-height:1.35;">${modelIdLinks(post)}</div>`;
+                }
+                const bridgeRows = afterModelCapTraceRows.length ? afterModelCapTraceRows : (Array.isArray(retrievedRows) ? retrievedRows : []);
+                if (bridgeRows.length) {
+                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>4) Retrieved tables → models (synced to shortlist; same as “searched tables” integration input)</strong></div>${renderTableToModelRows(bridgeRows)}`;
+                }
+                html += `<div style="margin-top:10px;line-height:1.35;"><strong>5) Parquet expansion per shortlist model (“all tables from modelcards” merge)</strong> <span style="color:#666;">same order as 3)</span></div>`;
+                html += rankedModelIds.map((mid, idx) => {
+                    const s = String(mid).trim();
+                    if (!s) return '';
+                    const paths = modelToTablePaths[s] || [];
+                    const tbls = paths.length ? integrationTablePathLinksRow(paths, ', ') : '<span style="color:#999;">—</span>';
+                    const link = `<a href="https://huggingface.co/${s}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(s)}</a>`;
+                    return `<div style="margin:6px 0 2px 4px;padding-left:8px;border-left:3px solid #2e7d32;line-height:1.35;"><strong>${idx + 1}.</strong> ${link} <span style="color:#666;">→ related tables:</span> ${tbls}</div>`;
+                }).join('');
+                return html;
+            }
+
+            const bridgeIntermediate = afterModelCapTraceRows.length ? afterModelCapTraceRows : (Array.isArray(retrievedRows) ? retrievedRows : []);
+            let extra = '';
+            if (pipelineTrace && tab2tabTraceRows.length && tablesSource === 'intermediate') {
+                extra = `<div style="margin-top:8px;line-height:1.35;"><strong>Tab2Tab full (pre cap)</strong> <span style="color:#666;">for context</span></div><details style="margin-top:4px;"><summary style="cursor:pointer;">Show (${tab2tabTraceRows.length} tables)</summary><div style="margin-top:6px;">${renderTableToModelRows(tab2tabTraceRows)}</div></details>`;
+            }
+            return qLine + renderTableToModelRows(bridgeIntermediate) + extra;
         }
         
         async function loadPresetQueries() {
@@ -1358,6 +1393,10 @@
                     const traceHtml = formatQuery2Tab2CardTraceHtml(run.query_tables || [], rtRows, {
                         tablesSource: tsRun,
                         modelToTablePaths: run.model_to_table_paths || {},
+                        rankedModelIds: modelIds,
+                        pipelineTrace: run.pipeline_trace,
+                        tab2tabTraceRows: run.tab2tab_trace_rows,
+                        afterModelCapTraceRows: run.after_model_cap_trace_rows,
                     });
                     const stats = run.stats || {};
                     const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
@@ -1672,6 +1711,10 @@
                         const traceHtml = formatQuery2Tab2CardTraceHtml(tableRes.query_tables || [], rtRows, {
                             tablesSource: tsTr,
                             modelToTablePaths: tableRes.model_to_table_paths || {},
+                            rankedModelIds: tableModelIds,
+                            pipelineTrace: tableRes.pipeline_trace,
+                            tab2tabTraceRows: tableRes.tab2tab_trace_rows,
+                            afterModelCapTraceRows: tableRes.after_model_cap_trace_rows,
                         });
                         const modelsCount = (tableRes.stats && tableRes.stats.models_with_tables != null) ? tableRes.stats.models_with_tables : tableModelIds.length;
                         const tablesCount = tplist.length;
@@ -1700,9 +1743,14 @@
                             rtRows = buildRetrievedTableModelRowsFallback(mtp, tplist);
                         }
                         const tsDbg = tableRes.tables_source || (tableRes.stats && tableRes.stats.tables_source) || tablesSource;
+                        const dbgMids = tableRes.models_with_tables || [];
                         const traceDbg = formatQuery2Tab2CardTraceHtml(tableRes.query_tables || [], rtRows, {
                             tablesSource: tsDbg,
                             modelToTablePaths: mtp,
+                            rankedModelIds: dbgMids,
+                            pipelineTrace: tableRes.pipeline_trace,
+                            tab2tabTraceRows: tableRes.tab2tab_trace_rows,
+                            afterModelCapTraceRows: tableRes.after_model_cap_trace_rows,
                         });
                         debugHtml = `<div style="margin-top: 10px; padding: 8px; border: 1px solid #f1b0b7; background: #fff6f7; border-radius: 4px;">
                             <div style="font-size: 11px; color:#b02a37;"><strong>Debug: query / retrieved tables → models</strong></div>
@@ -1837,6 +1885,10 @@
                         const traceHtml = formatQuery2Tab2CardTraceHtml(data.query_tables || [], rtRows, {
                             tablesSource: tsD,
                             modelToTablePaths: data.model_to_table_paths || {},
+                            rankedModelIds: modelIds,
+                            pipelineTrace: data.pipeline_trace,
+                            tab2tabTraceRows: data.tab2tab_trace_rows,
+                            afterModelCapTraceRows: data.after_model_cap_trace_rows,
                         });
                         extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><details style="margin:0;"><summary style="cursor:pointer;font-weight:600;">${INT_MODEL_IDS_C2T2C}</summary><div style="margin-top:6px;font-size:11px;">${traceHtml}</div></details></div>`;
                     }
