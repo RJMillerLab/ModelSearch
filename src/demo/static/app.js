@@ -627,8 +627,8 @@
             // One-click: always run all; primary display uses dense
             const card2cardRetrievalMode = 'dense';
             
-            // Validate input based on mode
-            if (mode === 'query' && !query) {
+            // Validate input for current search flow
+            if (!query) {
                 showError('Please enter a query');
                 return;
             }
