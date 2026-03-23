@@ -709,7 +709,12 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # Add by_type if run on sub-lake (use_by_type currently only echoed in results; no extra CLI).
     card2tab2card_types = list(CARD2TAB2CARD_TYPES)
     futures = {}
-    with ThreadPoolExecutor(max_workers=16) as ex:
+    # NOTE:
+    # query2tab2card now runs in-process. Running multiple search_type workers concurrently
+    # can race during SentenceTransformer/PyTorch model initialization on CUDA and throw:
+    # "Cannot copy out of meta tensor; no data!".
+    # Keep card2tab2card workers serialized for stability.
+    with ThreadPoolExecutor(max_workers=1) as ex:
         if run_card2card_subprocess:
             for m in CARD2CARD_MODES:
                 futures[ex.submit(run_card2card, m)] = ("card2card", m)
