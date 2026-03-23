@@ -434,6 +434,26 @@ def integrate_tables_from_card2tab2card(
     result = integrate_tables(table_paths, integration_type, k, filename_to_tableid=filename_to_tableid or None)
     result["models_with_tables"] = models_with_tables_list
     result["model_to_table_paths"] = model_to_table_paths_ts
+    # Demo UI: seed query tables + per retrieved basename -> related model ids (from model_to_table_paths_ts)
+    qt_raw = search_payload.get("query_tables")
+    result["query_tables"] = list(qt_raw) if isinstance(qt_raw, list) else []
+    rev_bn: Dict[str, List[str]] = {}
+    for mid, paths in (model_to_table_paths_ts or {}).items():
+        for p in paths or []:
+            bn = os.path.basename(str(p))
+            if not bn:
+                continue
+            rev_bn.setdefault(bn, [])
+            smid = str(mid)
+            if smid not in rev_bn[bn]:
+                rev_bn[bn].append(smid)
+    loaded_for_ui = result.get("table_paths") or list(table_paths or [])
+    rt_rows: List[Dict[str, Any]] = []
+    for tp in loaded_for_ui:
+        tp_s = str(tp)
+        bn = os.path.basename(tp_s)
+        rt_rows.append({"table": bn, "table_path": tp_s, "models": list(rev_bn.get(bn, []))})
+    result["retrieved_table_model_rows"] = rt_rows
     elapsed = time.time() - t0
     # Attach timing + source info to stats for debugging
     if not isinstance(result.get("stats"), dict):

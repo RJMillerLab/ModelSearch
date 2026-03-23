@@ -8,7 +8,7 @@ import os
 import json
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 import argparse
 import numpy as np
 import faiss
@@ -114,6 +114,51 @@ def search_query2modelcard(
             json.dump(result, f, ensure_ascii=False, indent=2)
         print(f"✅ Results saved to {output_json}")
     return results
+
+
+def dense_rerank_model_ids_by_query(
+    query: str,
+    model_ids: List[Any],
+    *,
+    emb_npz_path: str = EMB_NPZ,
+) -> List[str]:
+    """
+    Re-score and sort candidate model ids by cosine(query_emb, card_emb) using only rows present in emb_npz.
+    Loads the full npz file but only reads embedding rows for ids in ``model_ids`` (plus one query encode).
+    Ids missing from the npz are sorted last (stable).
+    """
+    if not model_ids:
+        return []
+    q = (query or "").strip()
+    if not q:
+        return [str(mid).strip() for mid in model_ids if str(mid).strip()]
+
+    data = np.load(emb_npz_path, allow_pickle=True)
+    ids = data["ids"].tolist()
+    embs = np.asarray(data["embeddings"], dtype=np.float32)
+    id_to_idx = {str(mid): i for i, mid in enumerate(ids)}
+
+    model = SentenceTransformer(ENCODE_MODEL, device=get_device())
+    model.eval()
+    query_emb = model.encode([q], convert_to_numpy=True, show_progress_bar=False).astype(np.float32)
+    faiss.normalize_L2(query_emb)
+
+    scored: List[Tuple[float, int, str]] = []
+    for j, mid in enumerate(model_ids):
+        sm = str(mid).strip()
+        if not sm:
+            continue
+        idx = id_to_idx.get(sm)
+        if idx is None:
+            scored.append((float("-inf"), j, sm))
+            continue
+        row = embs[idx : idx + 1].copy()
+        faiss.normalize_L2(row)
+        sim = float(np.dot(query_emb[0], row[0]))
+        scored.append((sim, j, sm))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [t[2] for t in scored]
 
 
 def main():

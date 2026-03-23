@@ -6,12 +6,12 @@ All job outputs (search results, integration, evaluation, QA) go under JOBS_DIR 
 Minimal imports for fast startup.
 """
 
-import os, sys, json, random, string, threading, subprocess, time, math, re, shlex, html
+import os, sys, json, random, string, threading, subprocess, time, math, re, shlex, html, shutil
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
@@ -368,7 +368,7 @@ def run_search_pipeline(
     model_id: Optional[str] = None,
     table_search_k: Optional[int] = None,
     card2card_retrieval_mode: str = "dense",
-    require_seed_has_tables: bool = False,
+    require_seed_has_tables: bool = True,
     use_by_type: bool = False,
     model_top_k: int = 5,
     table_resource_allowlist: Optional[List[str]] = None,
@@ -397,7 +397,7 @@ def run_search_pipeline(
         import traceback
         logger.log(traceback.format_exc())
 
-def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], card2card_retrieval_mode: str, require_seed_has_tables: bool = False, use_by_type: bool = False, *, model_top_k: int = 5, table_resource_allowlist: Optional[List[str]] = ['hugging']):
+def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], card2card_retrieval_mode: str, require_seed_has_tables: bool = True, use_by_type: bool = False, *, model_top_k: int = 5, table_resource_allowlist: Optional[List[str]] = ['hugging']):
     # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
@@ -406,11 +406,23 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     logger.log(f"Run log file: {os.path.abspath(run_log_path)}")
     logger.log("=" * 60)
     logger.log("Starting search pipeline (CLI)...")
-    logger.log("Mode: Query → ModelCard → Search" if query else "Mode: Model ID → Search")
-    if query:
-        logger.log(f"Query: {query}")
-    else:
-        logger.log(f"Model ID: {model_id}")
+    logger.log("Mode: Query → ModelCard → Search")
+    if not query or not str(query).strip():
+        logger.log("query is required (model-id-only pipeline removed)")
+        logger.set_status("error")
+        logger.set_results(
+            {
+                "error": "query required",
+                "model_id": None,
+                "card2card_results": [],
+                "card2tab2card_results": {},
+                "folder_path": job_dir,
+                "run_log_path": run_log_path,
+            }
+        )
+        return
+    query = str(query).strip()
+    logger.log(f"Query: {query}")
     logger.log(
         f"Run settings: top_k={top_k}, model_top_k={model_top_k}, per_table_search_k={table_search_k or 1}, "
         f"card2card={card2card_retrieval_mode}, "
@@ -423,18 +435,19 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     # Normalize resource selection once and reuse in all subprocess commands.
     raw_resources = list(table_resource_allowlist or TABLE_RESOURCE_ALLOWLIST)
-    model_resources = [r for r in raw_resources if r in ("hugging", "github", "arxiv")]
     table_resources = [r for r in raw_resources if r in ("hugging", "github", "arxiv")]
-    if not model_resources:
-        model_resources = list(TABLE_RESOURCE_ALLOWLIST)
     if not table_resources:
         table_resources = list(TABLE_RESOURCE_ALLOWLIST)
-    logger.log(f"Resources: model={model_resources}, table={table_resources}")
+    # Query2Card / card2card search: full corpus (EMB_NPZ + full sparse when hybrid).
+    model_resources_full = ["hugging", "github", "arxiv"]
+    # Table-search seed: hugging-only index (EMB_NPZ_HUGGING) — matches table pipeline universe.
+    model_resources_hugging = ["hugging"]
+    logger.log(f"Resources: Query2Card/card2card={model_resources_full}, table CLI={table_resources}, q2m_w_table={model_resources_hugging}")
 
     def _with_resources(cmd: List[str], resources: List[str]) -> List[str]:
         return cmd + ["--resources", *resources]
 
-    def _build_q2m_cmd(*, q: str, q_top_k: int, out_path: str) -> List[str]:
+    def _build_q2m_cmd(*, q: str, q_top_k: int, out_path: str, resources: List[str]) -> List[str]:
         base = [
             sys.executable, "-m", "src.search.query2modelcard",
             "--query", q,
@@ -442,7 +455,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             "--retrieval_mode", card2card_retrieval_mode,
             "--output_json", out_path,
         ]
-        return _with_resources(base, model_resources)
+        return _with_resources(base, resources)
 
     def _build_card2card_cmd(*, mode: str, top_k_value: int, out_path: str) -> List[str]:
         base = [
@@ -452,12 +465,12 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             "--retrieval_mode", mode,
             "--output_json", out_path,
         ]
-        return _with_resources(base, model_resources)
+        return _with_resources(base, model_resources_full)
 
-    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str) -> List[str]:
+    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str, mid: str) -> List[str]:
         base = [
             sys.executable, "-m", "src.search.card2tab2card",
-            "--model_id", model_id,
+            "--model_id", mid,
             "--search_type", st,
             "--table_top_k", str(table_k_value),
             "--model_top_k", str(model_top_k),
@@ -465,128 +478,130 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         ]
         return _with_resources(base, table_resources)
 
-    # Resolve model_id (query mode: from FAISS retrieval only; no default/hardcoded id)
-    seed_no_tables_skip_table_search = False  # when True: use first model for Card2Card only, skip Card2Tab2Card and set reason
-    valid_model_ids = None
+    # Query2Card: query2modelcard on **full** index (EMB_NPZ). Table seed: second q2m on **hugging** index (EMB_NPZ_HUGGING)
+    # when require_seed_has_tables, then first hit with parquet + local CSV in that list.
+    seed_no_tables_skip_table_search = False
+    valid_model_ids: Optional[Set[str]] = None
     if require_seed_has_tables:
         valid_model_ids = _valid_model_ids_for_table_resources(table_resources)
         logger.log(
-            f"Valid model IDs (parquet lists ≥1 path for table_resources={table_resources}) = {len(valid_model_ids)} "
-            "(seed picker also requires local CSV under TABLE_BASE_DIRS)"
+            f"Table-search seed: parquet allowlist size = {len(valid_model_ids)} "
+            "(scan hugging q2m list; require local CSV under TABLE_BASE_DIRS)"
         )
 
-    # When USE_CARD2CARD_CLI is False and mode is query, we fill card2card_* from this list (no card2card CLI).
     q2m_ordered_model_ids: Optional[List[str]] = None
 
-    if query:
-        logger.log("Step 1: Extracting model card from query (query2modelcard)...")
-        logger.log(f"query2modelcard input query: {query!r}")
-        q2m_out = os.path.join(job_dir, "query2modelcard.json")
+    logger.log("Step 1a: query2modelcard (full embeddings / full sparse for hybrid)...")
+    logger.log(f"query2modelcard input query: {query!r}")
+    q2m_full_path = os.path.join(job_dir, "query2modelcard_full.json")
+    legacy_q2m_path = os.path.join(job_dir, "query2modelcard.json")
 
-        if require_seed_has_tables:
-            assert valid_model_ids is not None
-            logger.log(
-                f"Narrow down: parquet allowlist size = {len(valid_model_ids)}; "
-                "picking first hit that also has resolvable local table files"
-            )
-            _res_key = tuple(sorted(table_resources))
+    q2m_top_k_relaxed = min(200, 5 * top_k)
+    q2m_top_k_here = q2m_top_k_relaxed if not USE_CARD2CARD_CLI else 1
+    logger.log(
+        f"query2modelcard FULL: top_k={q2m_top_k_here}, resources={model_resources_full} → {os.path.basename(q2m_full_path)}"
+    )
+    cmd_full = _build_q2m_cmd(q=query, q_top_k=q2m_top_k_here, out_path=q2m_full_path, resources=model_resources_full)
+    t0 = time.time()
+    rc, out, err = _run_cmd(cmd_full, REPO_ROOT)
+    elapsed = time.time() - t0
+    logger.log_cmd("query2modelcard_full", cmd_full, q2m_full_path, elapsed, rc)
+    if rc != 0:
+        logger.log(f"query2modelcard (full) failed (exit {rc}): {err or out}")
+        logger.set_status("error")
+        logger.set_results({"error": f"query2modelcard (full) failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        return
+    data = _read_json(q2m_full_path)
+    if not data or "results" not in data or not data["results"]:
+        logger.log("query2modelcard (full) returned no results")
+        logger.set_status("error")
+        logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        return
+    try:
+        shutil.copyfile(q2m_full_path, legacy_q2m_path)
+    except OSError as e:
+        logger.log(f"warn: could not copy to query2modelcard.json: {e}")
+    results_list = data["results"]
+    stored_query = data.get("query", "")
 
-            q2m_top_k = min(200, 5 * top_k)
-            logger.log(f"query2modelcard: top_k={q2m_top_k} (single call, then filter by parquet + local CSV)")
-            cmd = _build_q2m_cmd(q=query, q_top_k=q2m_top_k, out_path=q2m_out)
-            t0 = time.time()
-            rc, out, err = _run_cmd(cmd, REPO_ROOT)
-            elapsed = time.time() - t0
-            logger.log_cmd("query2modelcard", cmd, q2m_out, elapsed, rc)
-            if rc != 0:
-                logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
-                logger.set_status("error")
-                logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
-                return
-            data = _read_json(q2m_out)
-            if not data or "results" not in data or not data["results"]:
-                logger.log("query2modelcard returned no results")
-                logger.set_status("error")
-                logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
-                return
-            # get mid from query2modelcard results
-            results_list = data["results"]
-            chosen = None
-            for i, r in enumerate(results_list):
-                mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
-                if not mid:
-                    continue
-                mid_s = str(mid).strip()
-                if mid_s not in valid_model_ids:
-                    continue
-                if not model_id_has_resolvable_local_tables(mid_s, _res_key):
-                    logger.log(f"Narrow down: skip #{i+1} {mid_s!r} (in parquet allowlist but no local CSV under TABLE_BASE_DIRS)")
-                    continue
-                chosen = mid_s
-                logger.log(f"Narrow down: first result with local tables is #{i+1}: {chosen}")
-                break
-            # chosen set: first hit in retrieval list that is in parquet allowlist AND has ≥1 local CSV under TABLE_BASE_DIRS
-            if chosen is not None:
-                model_id = chosen
-                stored_query = data.get("query", "")
-                logger.log(f"Extracted model (with tables): {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
-            else:
-                # Retrieval top-1 may still be a fine Card2Card seed; it just failed our table-search seed rules for every hit in this top_k window.
-                first = results_list[0]
-                raw_mid = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
-                model_id = str(raw_mid).strip() if raw_mid else ""
-                stored_query = data.get("query", "")
+    first = results_list[0]
+    raw_top = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
+    query_seed_model_id = str(raw_top).strip() if raw_top else ""
+    if not query_seed_model_id:
+        logger.log("query2modelcard (full) returned empty top-1 model_id")
+        logger.set_status("error")
+        logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        return
+    logger.log(
+        f"Query2Card seed (full index, top-1): {query_seed_model_id!r} "
+        f"(query in JSON: {stored_query!r})"
+    )
+
+    table_search_seed_model_id = query_seed_model_id
+    results_list_w_table: List[Any] = []
+    q2m_w_table_path: Optional[str] = None
+
+    if require_seed_has_tables:
+        assert valid_model_ids is not None
+        q2m_w_table_path = os.path.join(job_dir, "query2modelcard_w_table.json")
+        logger.log(
+            f"Step 1b: query2modelcard (hugging subset) top_k={q2m_top_k_relaxed} → {os.path.basename(q2m_w_table_path)}"
+        )
+        cmd_w = _build_q2m_cmd(
+            q=query, q_top_k=q2m_top_k_relaxed, out_path=q2m_w_table_path, resources=model_resources_hugging
+        )
+        t0w = time.time()
+        rc_w, out_w, err_w = _run_cmd(cmd_w, REPO_ROOT)
+        elapsed_w = time.time() - t0w
+        logger.log_cmd("query2modelcard_w_table", cmd_w, q2m_w_table_path, elapsed_w, rc_w)
+        if rc_w != 0:
+            logger.log(f"query2modelcard (hugging) failed (exit {rc_w}): {err_w or out_w}; skip Card2Tab2Card")
+            seed_no_tables_skip_table_search = True
+        else:
+            data_w = _read_json(q2m_w_table_path)
+            if not data_w or "results" not in data_w or not data_w["results"]:
+                logger.log("query2modelcard (hugging) returned no results; skip Card2Tab2Card")
                 seed_no_tables_skip_table_search = True
-                logger.log(
-                    f"Table Search Seed Model: none of top-{len(results_list)} pass parquet allowlist + resolvable local CSV. "
-                    "Using retrieval top-1 for Card2Card only; Card2Tab2Card skipped."
-                )
-                logger.log(
-                    f"Extracted model (fallback top-1): {model_id!r} (query2modelcard JSON, query in file: {stored_query!r})"
-                )
-        else: # no condition on whether this modelcard must contain table (for table search)
-            # Wider retrieval when left panel reuses query2modelcard ranking (avoids single-hit list).
-            q2m_top_k_relaxed = min(200, 5 * top_k)
-            q2m_top_k_here = q2m_top_k_relaxed if not USE_CARD2CARD_CLI else 1
-            cmd = _build_q2m_cmd(q=query, q_top_k=q2m_top_k_here, out_path=q2m_out)
-            t0 = time.time()
-            rc, out, err = _run_cmd(cmd, REPO_ROOT)
-            elapsed = time.time() - t0
-            logger.log_cmd("query2modelcard", cmd, q2m_out, elapsed, rc)
-            if rc != 0:
-                logger.log(f"query2modelcard failed (exit {rc}): {err or out}")
-                logger.set_status("error")
-                logger.set_results({"error": f"query2modelcard failed: {err or out}", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
-                return
-            data = _read_json(q2m_out)
-            if not data or "results" not in data or not data["results"]:
-                logger.log("query2modelcard returned no results")
-                logger.set_status("error")
-                logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}})
-                return
-            results_list = data["results"]
-            stored_query = data.get("query", "")
+            else:
+                results_list_w_table = data_w["results"]
+                _res_key = tuple(sorted(table_resources))
+                chosen = None
+                for i, r in enumerate(results_list_w_table):
+                    mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
+                    if not mid:
+                        continue
+                    mid_s = str(mid).strip()
+                    if mid_s not in valid_model_ids:
+                        continue
+                    if not model_id_has_resolvable_local_tables(mid_s, _res_key):
+                        logger.log(
+                            f"Table-search seed: skip #{i+1} {mid_s!r} (parquet allowlist but no local CSV under TABLE_BASE_DIRS)"
+                        )
+                        continue
+                    chosen = mid_s
+                    logger.log(f"Table-search seed (hugging q2m × parquet × local CSV): #{i+1} → {chosen}")
+                    break
+                if chosen is not None:
+                    table_search_seed_model_id = chosen
+                else:
+                    seed_no_tables_skip_table_search = True
+                    logger.log(
+                        f"Table-search seed: none of top-{len(results_list_w_table)} hugging-q2m hits pass parquet + local CSV; "
+                        "Card2Tab2Card skipped."
+                    )
+    else:
+        logger.log("require_seed_has_tables=False: Card2Tab2Card seed = full-index top-1 (no hugging q2m)")
 
-        if not require_seed_has_tables:
-            first = results_list[0]
-            raw_mid = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
-            model_id = str(raw_mid).strip() if raw_mid else ""
-            if not model_id:
-                logger.log("query2modelcard returned empty model_id")
-                logger.set_status("error")
-                logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
-                return
-            logger.log(f"Extracted model: {model_id} (from query2modelcard JSON, query in file: {stored_query!r})")
-        if not model_id:
-            logger.log("model_id is required in modelid mode")
-            logger.set_status("error")
-            logger.set_results({"error": "Model ID is required (empty input)", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
-            return
-        logger.log(f"Using model_id: {model_id}")
-        if not USE_CARD2CARD_CLI:
-            q2m_ordered_model_ids = _ordered_model_ids_from_q2m_results(results_list)
-        # NOTE: This repo snapshot may not include legacy `scripts/check_model_in_index.py`.
-        # We let downstream scripts produce empty results if the model id is missing.
+    model_id = query_seed_model_id  # API / UI: primary seed from full q2m
+    table_search_seed_model_id = str(table_search_seed_model_id).strip()
+    logger.log(
+        f"Seeds: Query2Card (full)={query_seed_model_id!r}, Query2Tab2Card={table_search_seed_model_id!r}"
+    )
+
+    if not USE_CARD2CARD_CLI:
+        q2m_ordered_model_ids = _ordered_model_ids_from_q2m_results(results_list)
+    # NOTE: This repo snapshot may not include legacy `scripts/check_model_in_index.py`.
+    # We let downstream scripts produce empty results if the model id is missing.
 
     # Table Search: user `table_search_k` is the per-table top-k passed into tab2tab.
     # (card2tab2card does its own merging/dedup/capping downstream.)
@@ -600,7 +615,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # card2card (src/search/card2card.py) expects `--model_ids_file` + `--output_json`.
     card2card_model_ids_file = os.path.join(job_dir, "card2card_model_ids.txt")
     with open(card2card_model_ids_file, "w", encoding="utf-8") as f:
-        f.write(str(model_id).strip() + "\n")
+        f.write(str(query_seed_model_id).strip() + "\n")
 
     def _normalize_card2tab2card_payload(payload: Any) -> Dict[str, Any]:
         """
@@ -632,9 +647,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     # Step 2: Card2Tab2Card always via CLI. Card2Card subprocess is optional:
     #   USE_CARD2CARD_CLI True  -> legacy `python -m src.search.card2card` (dense/sparse/hybrid).
-    #   USE_CARD2CARD_CLI False + query mode -> fill card2card_* from query2modelcard ranking (below).
-    #   USE_CARD2CARD_CLI False + model_id mode -> still run card2card CLI (no query list).
-    run_card2card_subprocess = bool(USE_CARD2CARD_CLI) or not bool(query)
+    #   USE_CARD2CARD_CLI False -> fill card2card_* from query2modelcard ranking (below).
+    run_card2card_subprocess = bool(USE_CARD2CARD_CLI)
     logger.log(
         "Step 2: "
         + ("Card2Card (CLI) + " if run_card2card_subprocess else "Card2Card from query2modelcard rank + ")
@@ -654,7 +668,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
-        cmd = _build_card2tab2card_cmd(st=st, table_k_value=k_table, out_path=out_path)
+        cmd = _build_card2tab2card_cmd(st=st, table_k_value=k_table, out_path=out_path, mid=table_search_seed_model_id)
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -728,7 +742,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                     logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
                     if table_search_empty_reason is None:
                         table_search_empty_reason = (
-                            f"Seed model «{model_id}» has no tables in the dataset: it is not in "
+                            f"Table-search seed «{table_search_seed_model_id}» has no tables in the dataset: it is not in "
                             f"{RELATIONSHIP_PARQUET} or has no csv_basename. "
                             "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
                         )
@@ -745,7 +759,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
     if not run_card2card_subprocess:
-        seed_s = str(model_id).strip() if model_id else ""
+        seed_s = str(query_seed_model_id).strip()
         if q2m_ordered_model_ids:
             neighbor_list = [m for m in q2m_ordered_model_ids if m != seed_s][:card2card_top_k]
             for mode in CARD2CARD_MODES:
@@ -762,20 +776,9 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # When we skipped Table Search (require_seed_has_tables but none had tables), record reason only
     if seed_no_tables_skip_table_search and table_search_empty_reason is None:
         table_search_empty_reason = (
-            "❌ None of the top-20 models from the query have tables in the dataset. "
-            "❌ Table Search skipped. Select «Use top-1 result» for Table Search Seed Model to run with top-1 anyway."
+            "❌ No suitable table-search seed (hugging query2modelcard + parquet + local CSV). "
+            "❌ Query2Tab2Card skipped; Query2Card still uses full-index top-1."
         )
-
-    # --- Enforce valid_model_ids on Card2Card lists only (neighbors can be outside table-resource universe) ---
-    # Table Search: do not filter Card2Tab2Card payload for "self tables" here — that belongs in tab2tab only.
-    if require_seed_has_tables and valid_model_ids:
-        # 1) Filter Card2Card model lists
-        for mode in CARD2CARD_MODES:
-            val = card2card_all.get(mode)
-            if isinstance(val, list):
-                before = len(val)
-                card2card_all[mode] = [mid for mid in val if mid in valid_model_ids] # only return modelcard that has tables for fair comparison
-                logger.log(f"[Card2Card-{mode.upper()}] Filtered valid models: {before} -> {len(card2card_all[mode])}")
 
     # --- Cap for UI: min(requested model_top_k, max Card2Tab2Card list length) ---
     right_max_models = 0
@@ -791,11 +794,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         effective_model_top_k = 0
     logger.log(f"effective_model_top_k: input={model_top_k}, right_max_models={right_max_models} => cap={effective_model_top_k}")
 
-    # --- Dense reranker: seed model's Card2Card dense neighbor order (in-memory reorder + truncate) ---
-    # When Card2Tab2Card returns MORE model_ids than effective_model_top_k, we reorder candidates by
-    # this order (ties / missing ids go last), then truncate. No subprocess.
-    seed_dense_neighbor_order = card2card_all.get("dense") if isinstance(card2card_all.get("dense"), list) else []
-    dense_reranker_rank = {mid: i for i, mid in enumerate(seed_dense_neighbor_order)}
+    # --- Dense rerank (Card2Tab2Card cap): recompute query×candidate cosine on full EMB_NPZ for the candidate set only ---
+    from src.search.query2modelcard import dense_rerank_model_ids_by_query
 
     def _sync_payload_intermediate_to_model_ids(payload: Dict[str, Any], keep_model_ids: List[str]) -> None:
         """Align intermediate with truncated model_ids after dense rerank (not tab2tab self-table removal)."""
@@ -844,7 +844,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
         payload["intermediate"] = intermediate
 
-    # --- Dense reranker + cap: Card2Tab2Card side (in-memory only) ---
+    # --- Dense rerank + cap: Card2Tab2Card side (recompute query×candidate on full EMB_NPZ subset only) ---
     for st, payload in card2tab2card_all.items():
         if not isinstance(payload, dict):
             continue
@@ -852,17 +852,11 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         if not isinstance(mids, list):
             continue
         if len(mids) > effective_model_top_k and effective_model_top_k > 0:
-            tail = len(dense_reranker_rank) + 100000
-            dense_reranker_ordered = sorted(mids, key=lambda mid: dense_reranker_rank.get(mid, tail))
+            dense_reranker_ordered = dense_rerank_model_ids_by_query(query or "", mids, emb_npz_path=EMB_NPZ)
             payload["model_ids"] = dense_reranker_ordered[:effective_model_top_k]
-            _rank_src = (
-                "query2modelcard neighbor order"
-                if (not USE_CARD2CARD_CLI and query)
-                else "seed Card2Card dense neighbors"
-            )
             logger.log(
                 f"[Card2Tab2Card-{st}] DENSE_RERANKER: {len(mids)} candidates -> top {effective_model_top_k} "
-                f"(order from {_rank_src}; in-memory only)"
+                f"by query×candidate cosine (subset on full {os.path.basename(EMB_NPZ)})"
             )
         elif len(mids) > effective_model_top_k and effective_model_top_k == 0:
             payload["model_ids"] = []
@@ -892,6 +886,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         "job_id": job_id,
         "query": query,
         "model_id": model_id,
+        "table_search_seed_model_id": table_search_seed_model_id,
         "top_k": top_k,
         "model_top_k": model_top_k,
         "effective_model_top_k": effective_model_top_k,
@@ -908,7 +903,10 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         "folder_path": job_dir,
         "run_log_path": run_log_path,
         "running_time_seconds": round(elapsed_total, 3),
+        "query2modelcard_full_json": os.path.basename(q2m_full_path),
     }
+    if q2m_w_table_path:
+        results_data["query2modelcard_w_table_json"] = os.path.basename(q2m_w_table_path)
     if table_search_empty_reason:
         results_data["table_search_reason"] = table_search_empty_reason
 
@@ -993,34 +991,24 @@ def search():
 
         return jsonify(out)
 
-    # Default "new" search: run the full pipeline.
-    mode = data.get("mode", "query")
+    # Default "new" search: run the full pipeline (query-only; direct model-id entry removed).
     top_k = int(data.get("top_k", 20))
     table_search_k = data.get("table_search_k")
     model_top_k = int(data.get("model_top_k", 5))
     card2card_retrieval_mode = data.get("card2card_retrieval_mode", "dense")
-    require_seed_has_tables = bool(data.get("require_seed_has_tables", False))
+    require_seed_has_tables = bool(data.get("require_seed_has_tables", True))
     use_by_type = bool(data.get("use_by_type", False))
 
-    if mode == "query":
-        query = (data.get("query") or "").strip()
-        if not query:
-            return jsonify({"status": "error", "message": "query required"}), 400
-        model_id = None
-    elif mode == "modelid":
-        model_id = (data.get("model_id") or "").strip()
-        if not model_id:
-            return jsonify({"status": "error", "message": "model_id required"}), 400
-        query = None
-    else:
-        return jsonify({"status": "error", "message": "mode must be query or modelid"}), 400
+    query = (data.get("query") or "").strip()
+    if not query:
+        return jsonify({"status": "error", "message": "query required"}), 400
 
     job_id = _generate_job_id()
     jobs[job_id] = JobLogger(job_id)
 
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(job_id, query, top_k, model_id, table_search_k, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
+        args=(job_id, query, top_k, None, table_search_k, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
     )
     thread.daemon = True
     thread.start()

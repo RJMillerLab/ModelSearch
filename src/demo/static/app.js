@@ -8,10 +8,10 @@
         // Feature flags (declared early so all handlers see them; not related to fetch/network).
         const SHOW_CARD2TAB2CARD_MODEL_TABLES = false;
         const ENABLE_POST_INTEGRATION_ANALYSIS = false;
-        const INT_TITLE_C2C_HTML = '<span class="number-badge">1</span> Card2Card Results';
-        const INT_TITLE_C2T2C_HTML = '<span class="number-badge">2</span> Card2Tab2Card Results';
-        const INT_MODEL_IDS_C2C = 'Model IDs (1 Card2Card Results)';
-        const INT_MODEL_IDS_C2T2C = 'Model IDs (2 Card2Tab2Card Results)';
+        const INT_TITLE_C2C_HTML = '<span class="number-badge">1</span> Query2Card Results';
+        const INT_TITLE_C2T2C_HTML = '<span class="number-badge">2</span> Query2Tab2Card Results';
+        const INT_MODEL_IDS_C2C = 'Model IDs (1 Query2Card Results)';
+        const INT_MODEL_IDS_C2T2C = 'Model IDs (2 Query2Tab2Card Results)';
         const INTEGRATION_TABLE_VIEWPORT_STYLE = 'height: 480px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 6px; background: #fff;';
         const DISPLAY_MAX_ROWS = 50;
         const DISPLAY_MAX_COLS = 20;
@@ -65,17 +65,77 @@
             return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;"><code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${escapeHtmlIntegration(p)}</code></a>`;
         }
         
-        function integrationRelatedTablesBlock(modelId, paths) {
-            const id = String(modelId || '');
-            const arr = Array.isArray(paths) ? paths.filter(Boolean) : [];
-            if (!id) return '';
-            if (!arr.length) {
-                return `<div style="margin-top: 4px;"><span style="font-weight:600;">${escapeHtmlIntegration(id)}</span>: 0 tables</div>`;
-            }
-            const slice = arr.slice(0, 6);
-            const shown = slice.map(p => integrationTablePathLink(p)).join(', ');
-            const more = arr.length > 6 ? ` (+${arr.length - 6} more)` : '';
-            return `<div style="margin-top: 4px;"><span style="font-weight:600;">${escapeHtmlIntegration(id)}</span>: ${arr.length} tables — ${shown}${more}</div>`;
+        function integrationBasename(p) {
+            const s = String(p == null ? '' : p).trim();
+            if (!s) return '';
+            const norm = s.replace(/\\/g, '/');
+            const i = norm.lastIndexOf('/');
+            return i >= 0 ? norm.slice(i + 1) : norm;
+        }
+        
+        function buildRetrievedTableModelRowsFallback(modelToTables, tablePathsList) {
+            const rev = {};
+            Object.entries(modelToTables || {}).forEach(([mid, paths]) => {
+                (paths || []).forEach(p => {
+                    const b = integrationBasename(p);
+                    if (!b) return;
+                    if (!rev[b]) rev[b] = [];
+                    const sm = String(mid);
+                    if (!rev[b].includes(sm)) rev[b].push(sm);
+                });
+            });
+            return (tablePathsList || []).map(tp => {
+                const tpS = String(tp);
+                return {
+                    table: integrationBasename(tpS),
+                    table_path: tpS,
+                    models: rev[integrationBasename(tpS)] || []
+                };
+            });
+        }
+        
+        function formatQuery2CardModelTableLinesHtml(modelIds, modelToTables) {
+            const ids = Array.isArray(modelIds) ? modelIds : [];
+            if (!ids.length) return '';
+            return ids.map(m => {
+                const mid = String(m).trim();
+                if (!mid) return '';
+                const paths = (modelToTables && modelToTables[mid]) ? modelToTables[mid] : [];
+                const link = `<a href="https://huggingface.co/${mid}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(mid)}</a>`;
+                const tbl = paths.length
+                    ? integrationTablePathLinksRow(paths, ', ')
+                    : '<span style="color:#999;">—</span>';
+                return `<div style="margin-top:4px;line-height:1.4;">Model id: ${link} → Related table: ${tbl}</div>`;
+            }).join('');
+        }
+        
+        function formatQuery2Tab2CardTraceHtml(queryTables, retrievedRows) {
+            const qts = Array.isArray(queryTables) ? queryTables : [];
+            const qLine = qts.length
+                ? `<div style="margin-bottom:6px;line-height:1.4;"><strong>Query table(s):</strong> ${qts.map(q => {
+                    const full = String(q).trim();
+                    const bn = integrationBasename(full);
+                    return integrationTablePathLink(full || bn, bn || full);
+                }).filter(Boolean).join(', ')}</div>`
+                : '';
+            const rows = Array.isArray(retrievedRows) ? retrievedRows : [];
+            const rLines = rows.map((row, i) => {
+                const tPath = row.table_path || row.table || '';
+                const tLabel = row.table || integrationBasename(tPath);
+                const tableFrag = tPath
+                    ? integrationTablePathLink(tPath, tLabel)
+                    : (tLabel ? `<code>${escapeHtmlIntegration(tLabel)}</code>` : '<span style="color:#999;">—</span>');
+                const models = Array.isArray(row.models) ? row.models : [];
+                const modelLinks = models.length
+                    ? models.map(mid => {
+                        const s = String(mid).trim();
+                        return `<a href="https://huggingface.co/${s}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;">${escapeHtmlIntegration(s)}</a>`;
+                    }).join(', ')
+                    : '<span style="color:#999;">—</span>';
+                const label = rows.length > 1 ? `Retrieved table ${i + 1}:` : 'Retrieved table:';
+                return `<div style="margin-top:4px;line-height:1.4;"><strong>${label}</strong> ${tableFrag} → related models: ${modelLinks}</div>`;
+            }).join('');
+            return qLine + rLines;
         }
         
         async function loadPresetQueries() {
@@ -118,8 +178,8 @@
             }
             toggleLoadPrevious();
             
-            // Initialize diagram based on default selected mode (query is default)
-            toggleMode();
+            const diagramImg = document.getElementById('search-diagram');
+            if (diagramImg) diagramImg.src = '/static/fig/modelsearch_wquery.png';
             
             loadPresetQueries();
         });
@@ -504,9 +564,7 @@
             
             // Continue with new search logic
             
-            const mode = (document.getElementById('search_mode_select') || {}).value || 'query';
             const query = document.getElementById('query').value.trim();
-            const modelId = document.getElementById('model_id').value.trim();
             const topK = parseInt((document.getElementById('top_k') || {}).value, 10) || 100;  // Left aligns to right; high default
             const tableSearchK = parseInt(document.getElementById('table_search_k').value, 10) || 1;
             const modelTopK = parseInt((document.getElementById('model_top_k') || {}).value, 10) || 5;
@@ -520,11 +578,6 @@
                 showError('Please enter a query');
                 return;
             }
-            if (mode === 'modelid' && !modelId) {
-                showError('Please enter a model ID');
-                return;
-            }
-            
             // Reset UI
             document.getElementById('searchBtn').disabled = true;
             document.getElementById('progressSection').classList.add('active');
@@ -538,21 +591,14 @@
                 // Start search
                 const requestBody = {
                     search_mode: 'new',
-                    mode: mode,
                     top_k: topK,
                     tab2tab_mode: 'search',
                     table_search_k: tableSearchK,
                     model_top_k: modelTopK,
                     card2card_retrieval_mode: card2cardRetrievalMode,
+                    query: query,
+                    require_seed_has_tables: true,
                 };
-                
-                if (mode === 'query') {
-                    requestBody.query = query;
-                    const requireSeedEl = document.getElementById('require_seed_has_tables');
-                    requestBody.require_seed_has_tables = !!(requireSeedEl && requireSeedEl.value === '1');
-                } else {
-                    requestBody.model_id = modelId;
-                }
                 
                 const response = await fetch('{{BACKEND_URL}}/api/search', {
                     method: 'POST',
@@ -599,24 +645,6 @@
                 console.error('SSE error:', error);
                 eventSource.close();
             };
-        }
-        
-        function toggleMode() {
-            const modeEl = document.getElementById('search_mode_select');
-            const mode = modeEl ? modeEl.value : 'query';
-            const queryInput = document.getElementById('query-input');
-            const modelIdInput = document.getElementById('modelid-input');
-            const diagramImg = document.getElementById('search-diagram');
-            
-            if (mode === 'query') {
-                queryInput.classList.add('active');
-                modelIdInput.classList.remove('active');
-                if (diagramImg) diagramImg.src = '/static/fig/modelsearch_wquery.png';
-            } else {
-                queryInput.classList.remove('active');
-                modelIdInput.classList.add('active');
-                if (diagramImg) diagramImg.src = '/static/fig/modelsearch.png';
-            }
         }
         
         function addLog(logData) {
@@ -684,9 +712,14 @@
                 .replace(/"/g, '&quot;');
             // Seed model + Query tables: same row, two columns (aligned with the two result cards below)
             const seedModelId = results.model_id || null;
+            const tableSearchSeedId = results.table_search_seed_model_id || null;
             const headerStyle = 'font-size: 12px; color: #666;';
             const seedModelCell = results.error ? '' : (seedModelId
-                ? `<span style="${headerStyle}"><strong>Seed model (from query):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a></span>`
+                ? `<div style="${headerStyle}"><div><strong>Query2Card seed (top-1):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a></div>${
+                    tableSearchSeedId && tableSearchSeedId !== seedModelId
+                        ? `<div style="margin-top:4px;font-size:11px;color:#555;"><strong>Query2Tab2Card seed (first with tables):</strong> <a href="https://huggingface.co/${tableSearchSeedId}" target="_blank">${tableSearchSeedId}</a></div>`
+                        : ''
+                  }</div>`
                 : `<span style="font-size: 12px; color: #856404;">⚠️ Model ID missing</span>`);
             // Query table path(s) from seed model card — used to run table search; result items below are model cards hit by that search
             let queryTables = [];
@@ -772,7 +805,7 @@
             // All table search types that actually have card2tab2card results for this job
             const availableTableSearchTypes = Object.keys(card2tab2cardResults).filter(t => !!card2tab2cardResults[t]);
             
-            // Get Card2Card results for all modes
+            // Get Query2Card (model search) results for all modes
             const card2cardAllModes = results.card2card_all_modes || {};
             const retrievalModes = [
                 { key: 'dense', label: 'Dense', desc: 'Semantic similarity using embeddings' },
@@ -787,7 +820,7 @@
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">
-                            <span class="number-badge">1</span> Card2Card Results
+                            <span class="number-badge">1</span> Query2Card Results
                         </h3>
                         ${retrievalModes.map((modeInfo, idx) => {
                             const modeKey = modeInfo.key;
@@ -835,7 +868,7 @@
                         }).join('')}
                     </div>
                     <div class="result-card" style="min-width: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                        <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;"><span class="number-badge">2</span> Card2Tab2Card Results</h3>
+                        <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;"><span class="number-badge">2</span> Query2Tab2Card Results</h3>
                         ${(() => {
                             // Filter: show keyword, unionable, and joinable types
                             const allowedTypes = ['keyword', 'unionable', 'single_column', 'multi_column'];
@@ -937,15 +970,15 @@
             const comparisonHtml = results.comparison ? `
                 <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #856404;">Comparison</h4>
                 <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                    Overlap analysis between Card2Card and Card2Tab2Card search results
+                    Overlap analysis between Query2Card and Query2Tab2Card search results
                 </p>
                 <div style="overflow-x: auto; margin-bottom: 20px;">
                     <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
                         <thead>
                             <tr style="background: #007bff; color: white;">
                                 <th style="padding: 8px; text-align: left; border: 1px solid #0056b3;">Search Type</th>
-                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Card2Card Count</th>
-                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Card2Tab2Card Count</th>
+                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Query2Card Count</th>
+                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Query2Tab2Card Count</th>
                                 <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Overlap Count</th>
                                 <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Overlap Ratio</th>
                             </tr>
@@ -965,7 +998,7 @@
                 </div>
             ` : '';
             
-            // Table Integration: 1 Card2Card vs 2 Card2Tab2Card — separate params and dropdown switching
+            // Table Integration: 1 Query2Card vs 2 Query2Tab2Card — separate params and dropdown switching
             const integrationCardStyle = 'padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 8px; border: 1px solid #dee2e6; font-size: 13px; color: #212529; min-width: 0;';
             const integrationTitleStyle = 'margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;';
             const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
@@ -975,7 +1008,7 @@
             let integrationPanelHtml = `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
-                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches. <strong>Integrated</strong> runs the current combination; <strong>Run all (Integration)</strong> precomputes all Card2Tab2Card search types in parallel.</p>
+                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="alite">ALITE</option>
@@ -986,8 +1019,8 @@
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
                         <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
-                        <button id="integrationRunAllTableBtn" onclick="runAllTableIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 10px; font-size: 12px; font-weight: 500; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;" title="Run all integration methods, model-search modes, and table-search types (tables_source fixed to Intermediate). Results are saved under this job; use the dropdowns to inspect.">
-                            Run all (Integration)
+                        <button id="integrationRunAllTableBtn" onclick="runAllTableIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 10px; font-size: 12px; font-weight: 500; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;" title="Precompute integrations for all modes and table-search types; results saved on this job.">
+                            Integrate all modes
                         </button>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
@@ -1005,8 +1038,8 @@
                         <div style="padding: 10px; background: #d4edda; border-radius: 6px; border-left: 4px solid #28a745;">
                             <h4 style="${intH4Flex} color: #155724;">${INT_TITLE_C2T2C_HTML}</h4>
                             <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
-                                <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">tables source:</label><select id="integration_tables_source" class="form-control" onchange="syncTableSearchDisplay()" style="width: 175px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" title="Intermediate: from search. All from Modelcards: parquet (DuckDB).">
-                                    <option value="intermediate" selected>Intermediate tables</option>
+                                <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">tables source:</label><select id="integration_tables_source" class="form-control" onchange="syncTableSearchDisplay()" style="width: 175px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;" title="Searched tables: from this job's table search. All from Modelcards: parquet (DuckDB).">
+                                    <option value="intermediate" selected>Searched tables</option>
                                     <option value="all_from_modelcards">All tables from Modelcards</option>
                                 </select></div>
                                 <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">search type:</label><select id="integration_search_type" class="form-control" onchange="syncTableSearchDisplay()" style="width: 110px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
@@ -1045,7 +1078,7 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                         <div>
                             <h3 style="margin: 0 0 4px 0; color: #856404; font-size: 15px;">📊 Evaluation on Integrated Tables</h3>
-                            <p style="font-size: 12px; color: #666; margin: 0;">Evaluate diversity between 2 Card2Tab2Card Results and 1 Card2Card Results integrations using LLM.</p>
+                            <p style="font-size: 12px; color: #666; margin: 0;">Evaluate diversity between 2 Query2Tab2Card Results and 1 Query2Card Results integrations using LLM.</p>
                         </div>
                         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                             <button id="evalQaBothBtn" onclick="runEvaluationAndQABoth('${results.job_id || currentJobId}')" 
@@ -1075,18 +1108,18 @@
                         <div id="qa_after_click" style="display: none; margin-top: 20px;">
                             <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Integrated tables</h4>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 6px;">
-                                <div><strong style="font-size: 13px; color: #0c5460;">2 Card2Tab2Card Results</strong></div>
-                                <div><strong style="font-size: 13px; color: #0c5460;">1 Card2Card Results</strong></div>
+                                <div><strong style="font-size: 13px; color: #0c5460;">2 Query2Tab2Card Results</strong></div>
+                                <div><strong style="font-size: 13px; color: #0c5460;">1 Query2Card Results</strong></div>
                             </div>
                             <div id="qaIntegratedPaths" style="font-size: 11px; color: #555; margin-bottom: 12px;"></div>
                             <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #0c5460;">Answers compare</h4>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                                 <div>
-                                    <strong style="font-size: 13px; color: #0c5460;">2 Card2Tab2Card Results</strong>
+                                    <strong style="font-size: 13px; color: #0c5460;">2 Query2Tab2Card Results</strong>
                                     <div id="qaResultsTableSearch" style="margin-top: 8px;"></div>
                                 </div>
                                 <div>
-                                    <strong style="font-size: 13px; color: #0c5460;">1 Card2Card Results</strong>
+                                    <strong style="font-size: 13px; color: #0c5460;">1 Query2Card Results</strong>
                                     <div id="qaResultsModelSearch" style="margin-top: 8px;"></div>
                                 </div>
                             </div>
@@ -1127,8 +1160,8 @@
             const modelHtml = modelPath ? integrationSavedPathLink(modelPath) : '<span style="color:#999;">N/A</span>';
             target.innerHTML = `
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                    <div>2 Card2Tab2Card Results CSV: ${tableHtml}</div>
-                    <div>1 Card2Card Results CSV: ${modelHtml}</div>
+                    <div>2 Query2Tab2Card Results CSV: ${tableHtml}</div>
+                    <div>1 Query2Card Results CSV: ${modelHtml}</div>
                 </div>
             `;
         }
@@ -1164,8 +1197,8 @@
                 const modelIds = run.models_with_tables || [];
                 const tablePathsList = run.table_paths || [];
                 if (modelIds.length > 0) {
-                    const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    const tablePathsLinks = tablePathsList.length > 0 ? integrationTablePathLinksRow(tablePathsList, ', ') : '';
+                    const modelToTables = run.model_to_table_paths || {};
+                    const linesHtml = formatQuery2CardModelTableLinesHtml(modelIds, modelToTables);
                     const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
                     const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : tablePathsList.length;
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
@@ -1175,13 +1208,12 @@
                                 <span style="color:#004085;">(${modelsCount} models, ${tablesCount} tables)</span>
                             </summary>
                             <div style="margin-top: 6px; font-size: 11px;">
-                                <div><strong>Models:</strong> ${links}</div>
-                                ${tablePathsLinks ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-size: 11px;">${tablePathsLinks}</span></div>` : ''}
+                                ${linesHtml}
                             </div>
                         </details>
                     </div>`;
                 } else {
-                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Card2Card Results): — (none or not available)</div>';
+                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Query2Card Results): — (none or not available)</div>';
                 }
                 leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
             } else {
@@ -1242,7 +1274,7 @@
                     const iB = modelT.columns.indexOf(col);
                     const pctA = iA >= 0 ? nonNullPct(tableT, iA) : '-';
                     const pctB = iB >= 0 ? nonNullPct(modelT, iB) : '-';
-                    missingHtml += `<li><code>${col}</code>: 2 Card2Tab2Card ${pctA}%, 1 Card2Card ${pctB}%</li>`;
+                    missingHtml += `<li><code>${col}</code>: 2 Query2Tab2Card ${pctA}%, 1 Query2Card ${pctB}%</li>`;
                 });
                 if (overlap.length > 5) missingHtml += `<li>… and ${overlap.length - 5} more</li>`;
                 missingHtml += '</ul>';
@@ -1253,21 +1285,21 @@
                         <strong>Schema-level (column overlap)</strong>
                         <ul style="margin: 6px 0 0 0; padding-left: 18px;">
                             <li>In both: <strong>${colsCommon}</strong></li>
-                            <li>Only in 2 Card2Tab2Card Results: <strong>${colsOnlyInTable}</strong>${onlyTable.length ? ' (' + onlyTable.slice(0, 3).join(', ') + (onlyTable.length > 3 ? '…' : '') + ')' : ''}</li>
-                            <li>Only in 1 Card2Card Results: <strong>${colsOnlyInModel}</strong>${onlyModel.length ? ' (' + onlyModel.slice(0, 3).join(', ') + (onlyModel.length > 3 ? '…' : '') + ')' : ''}</li>
+                            <li>Only in 2 Query2Tab2Card Results: <strong>${colsOnlyInTable}</strong>${onlyTable.length ? ' (' + onlyTable.slice(0, 3).join(', ') + (onlyTable.length > 3 ? '…' : '') + ')' : ''}</li>
+                            <li>Only in 1 Query2Card Results: <strong>${colsOnlyInModel}</strong>${onlyModel.length ? ' (' + onlyModel.slice(0, 3).join(', ') + (onlyModel.length > 3 ? '…' : '') + ')' : ''}</li>
                         </ul>
                     </div>
                     <div style="padding: 8px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">
                         <strong>Deterministic metrics (no LLM)</strong>
                         <ul style="margin: 6px 0 0 0; padding-left: 18px;">
                             <li>Column Jaccard: <strong>${jaccardCols}</strong> (|A∩B|/|A∪B|)</li>
-                            <li>Containment (2 Card2Tab2Card→1 Card2Card): <strong>${containmentTableInModel}</strong> (|A∩B|/|A|)</li>
-                            <li>Containment (1 Card2Card→2 Card2Tab2Card): <strong>${containmentModelInTable}</strong> (|A∩B|/|B|)</li>
+                            <li>Containment (2 Query2Tab2Card→1 Query2Card): <strong>${containmentTableInModel}</strong> (|A∩B|/|A|)</li>
+                            <li>Containment (1 Query2Card→2 Query2Tab2Card): <strong>${containmentModelInTable}</strong> (|A∩B|/|B|)</li>
                         </ul>
                     </div>
                 </div>
                 <div style="margin-top: 8px; padding: 8px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6; font-size: 12px;">
-                    <strong>Row counts</strong>: 2 Card2Tab2Card Results <strong>${totalRowsA}</strong> rows, ${tableT.columns.length} cols; 1 Card2Card Results <strong>${totalRowsB}</strong> rows, ${modelT.columns.length} cols.
+                    <strong>Row counts</strong>: 2 Query2Tab2Card Results <strong>${totalRowsA}</strong> rows, ${tableT.columns.length} cols; 1 Query2Card Results <strong>${totalRowsB}</strong> rows, ${modelT.columns.length} cols.
                 </div>
                 ${missingHtml}
                 <p style="margin: 8px 0 0 0; font-size: 10px; color: #6c757d;">Schema + data-consistency metrics only (overlap, Jaccard, containment, coverage). Deterministic; no LLM.</p>
@@ -1296,8 +1328,12 @@
                 const modelIds = run.models_with_tables || [];
                 const tablePathsList = run.table_paths || [];
                 if (modelIds.length > 0) {
-                    const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                    const tablePathsLinks = tablePathsList.length > 0 ? integrationTablePathLinksRow(tablePathsList, ', ') : '';
+                    const modelToTables = run.model_to_table_paths || {};
+                    let rtRows = run.retrieved_table_model_rows;
+                    if (!Array.isArray(rtRows) || !rtRows.length) {
+                        rtRows = buildRetrievedTableModelRowsFallback(modelToTables, tablePathsList);
+                    }
+                    const traceHtml = formatQuery2Tab2CardTraceHtml(run.query_tables || [], rtRows);
                     const stats = run.stats || {};
                     const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
                     const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : tablePathsList.length;
@@ -1308,13 +1344,12 @@
                                 <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
                             </summary>
                             <div style="margin-top: 6px; font-size: 11px;">
-                                <div><strong>Models:</strong> ${links}</div>
-                                ${tablePathsLinks ? `<div style="margin-top: 4px;"><strong>Table paths:</strong> <span style="font-size: 11px;">${tablePathsLinks}</span></div>` : ''}
+                                ${traceHtml}
                             </div>
                         </details>
                     </div>`;
                 } else {
-                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Card2Tab2Card Results): — (none or not available)</div>';
+                    extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Query2Tab2Card Results): — (none or not available)</div>';
                 }
                 rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
             } else {
@@ -1536,8 +1571,8 @@
             btn.disabled = true;
             btn.textContent = '⏳ Integrating...';
             container.style.display = 'block';
-            leftDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for 1 Card2Card Results integration...</div>';
-            rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for 2 Card2Tab2Card Results integration...</div>';
+            leftDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for 1 Query2Card Results integration...</div>';
+            rightDiv.innerHTML = '<div style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">⏳ Waiting for 2 Query2Tab2Card Results integration...</div>';
             
             try {
                 const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
@@ -1560,10 +1595,7 @@
                     let extra = '';
                     if (modelIds.length > 0) {
                         const modelToTables = modelRes.model_to_table_paths || {};
-                        const relatedTablesHtml = modelIds
-                            .map(m => integrationRelatedTablesBlock(m, modelToTables[m] || []))
-                            .join('');
-                        const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        const linesHtml = formatQuery2CardModelTableLinesHtml(modelIds, modelToTables);
                         const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
                         const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : (table && table.data ? table.data.length : 0);
                         extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
@@ -1573,16 +1605,12 @@
                                     <span style="color:#004085;">(${modelsCount} models, ${tablesCount} rows)</span>
                                 </summary>
                                 <div style="margin-top: 6px; font-size: 11px;">
-                                    <div><strong>Models:</strong> ${links}</div>
-                                    <div style="margin-top: 6px;">
-                                        <strong>Related tables:</strong>
-                                        ${relatedTablesHtml}
-                                    </div>
+                                    ${linesHtml}
                                 </div>
                             </details>
                         </div>`;
                     } else {
-                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Card2Card Results): — (none or not available)</div>';
+                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Query2Card Results): — (none or not available)</div>';
                     }
                     leftDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: modelRes.saved_path || '', downloadId: 'model-search' });
                 } else {
@@ -1590,13 +1618,10 @@
                     if (modelRes.model_to_table_paths) {
                         const mtp = modelRes.model_to_table_paths || {};
                         const mids = (Array.isArray(modelRes.model_ids) && modelRes.model_ids.length) ? modelRes.model_ids : Object.keys(mtp);
-                        const relatedTablesHtml = mids
-                            .slice(0, 12)
-                            .map(m => integrationRelatedTablesBlock(m, mtp[m] || []))
-                            .join('');
+                        const linesDbg = formatQuery2CardModelTableLinesHtml(mids.slice(0, 12), mtp);
                         debugHtml = `<div style="margin-top: 10px; padding: 8px; border: 1px solid #f1b0b7; background: #fff6f7; border-radius: 4px;">
-                            <div style="font-size: 11px; color:#b02a37;"><strong>Debug: resolved related tables</strong> (first 12 models)</div>
-                            <div style="margin-top: 6px; font-size: 11px;">${relatedTablesHtml}</div>
+                            <div style="font-size: 11px; color:#b02a37;"><strong>Debug: model → related table</strong> (first 12 models)</div>
+                            <div style="margin-top: 6px; font-size: 11px;">${linesDbg}</div>
                         </div>`;
                     }
                     leftDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">
@@ -1613,12 +1638,14 @@
                     const tableModelIds = tableRes.models_with_tables || [];
                     if (tableModelIds.length > 0) {
                         const modelToTables = tableRes.model_to_table_paths || {};
-                        const relatedTablesHtml = tableModelIds
-                            .map(m => integrationRelatedTablesBlock(m, modelToTables[m] || []))
-                            .join('');
-                        const links = tableModelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
+                        const tplist = tableRes.table_paths || [];
+                        let rtRows = tableRes.retrieved_table_model_rows;
+                        if (!Array.isArray(rtRows) || !rtRows.length) {
+                            rtRows = buildRetrievedTableModelRowsFallback(modelToTables, tplist);
+                        }
+                        const traceHtml = formatQuery2Tab2CardTraceHtml(tableRes.query_tables || [], rtRows);
                         const modelsCount = (tableRes.stats && tableRes.stats.models_with_tables != null) ? tableRes.stats.models_with_tables : tableModelIds.length;
-                        const tablesCount = (tableRes.table_paths || []).length;
+                        const tablesCount = tplist.length;
                         tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
                             <details style="margin: 0;">
                                 <summary style="cursor: pointer; list-style: none; outline: none;">
@@ -1626,30 +1653,27 @@
                                     <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
                                 </summary>
                                 <div style="margin-top: 6px; font-size: 11px;">
-                                    <div><strong>Models:</strong> ${links}</div>
-                                    <div style="margin-top: 6px;">
-                                        <strong>Related tables:</strong>
-                                        ${relatedTablesHtml}
-                                    </div>
+                                    ${traceHtml}
                                 </div>
                             </details>
                         </div>`;
                     } else {
-                        tableExtra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Card2Tab2Card Results): — (none or not available)</div>';
+                        tableExtra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Query2Tab2Card Results): — (none or not available)</div>';
                     }
                     rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: tableExtra, savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
                 } else {
                     let debugHtml = '';
                     if (tableRes.model_to_table_paths) {
                         const mtp = tableRes.model_to_table_paths || {};
-                        const mids = (Array.isArray(tableRes.model_ids) && tableRes.model_ids.length) ? tableRes.model_ids : Object.keys(mtp);
-                        const relatedTablesHtml = mids
-                            .slice(0, 12)
-                            .map(m => integrationRelatedTablesBlock(m, mtp[m] || []))
-                            .join('');
+                        const tplist = tableRes.table_paths || [];
+                        let rtRows = tableRes.retrieved_table_model_rows;
+                        if (!Array.isArray(rtRows) || !rtRows.length) {
+                            rtRows = buildRetrievedTableModelRowsFallback(mtp, tplist);
+                        }
+                        const traceDbg = formatQuery2Tab2CardTraceHtml(tableRes.query_tables || [], rtRows);
                         debugHtml = `<div style="margin-top: 10px; padding: 8px; border: 1px solid #f1b0b7; background: #fff6f7; border-radius: 4px;">
-                            <div style="font-size: 11px; color:#b02a37;"><strong>Debug: resolved related tables</strong> (first 12 models)</div>
-                            <div style="margin-top: 6px; font-size: 11px;">${relatedTablesHtml}</div>
+                            <div style="font-size: 11px; color:#b02a37;"><strong>Debug: query / retrieved tables → models</strong></div>
+                            <div style="margin-top: 6px; font-size: 11px;">${traceDbg}</div>
                         </div>`;
                     }
                     rightDiv.innerHTML = `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">
@@ -1769,8 +1793,14 @@
                     const modelIds = data.models_with_tables || [];
                     let extra = '';
                     if (modelIds.length > 0) {
-                        const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><strong>${INT_MODEL_IDS_C2T2C}:</strong> ${links} (${modelIds.length} models)</div>`;
+                        const mtp = data.model_to_table_paths || {};
+                        const tplist = data.table_paths || [];
+                        let rtRows = data.retrieved_table_model_rows;
+                        if (!Array.isArray(rtRows) || !rtRows.length) {
+                            rtRows = buildRetrievedTableModelRowsFallback(mtp, tplist);
+                        }
+                        const traceHtml = formatQuery2Tab2CardTraceHtml(data.query_tables || [], rtRows);
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><details style="margin:0;"><summary style="cursor:pointer;font-weight:600;">${INT_MODEL_IDS_C2T2C}</summary><div style="margin-top:6px;font-size:11px;">${traceHtml}</div></details></div>`;
                     }
                     resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'table-search-single' });
                     initTablePanZoom(resultsDiv);
@@ -1804,10 +1834,11 @@
                     const modelIds = data.models_with_tables || [];
                     let extra = '';
                     if (modelIds.length > 0) {
-                        const links = modelIds.map(m => `<a href="https://huggingface.co/${m}" target="_blank">${m}</a>`).join(', ');
-                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><strong>${INT_MODEL_IDS_C2C}:</strong> ${links} (${modelIds.length} models)</div>`;
+                        const mtp = data.model_to_table_paths || {};
+                        const linesHtml = formatQuery2CardModelTableLinesHtml(modelIds, mtp);
+                        extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;"><details style="margin:0;"><summary style="cursor:pointer;font-weight:600;">${INT_MODEL_IDS_C2C}</summary><div style="margin-top:6px;font-size:11px;">${linesHtml}</div></details></div>`;
                     } else {
-                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Card2Card Results): — (none or not available)</div>';
+                        extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Query2Card Results): — (none or not available)</div>';
                     }
                     resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'model-search-single' });
                     initTablePanZoom(resultsDiv);
@@ -1879,13 +1910,13 @@
                     <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                             <div style="padding: 15px; background: ${winner === 'model_search' ? '#d4edda' : '#e7f3ff'}; border-radius: 4px; border: 2px solid ${winner === 'model_search' ? '#28a745' : '#007bff'};">
-                                <div style="font-size: 14px; color: #666;">1 Card2Card Results</div>
+                                <div style="font-size: 14px; color: #666;">1 Query2Card Results</div>
                                 <div style="font-size: 28px; font-weight: bold; color: ${winner === 'model_search' ? '#28a745' : '#004085'};">${modelSearchScore}/100</div>
                                 ${winner === 'model_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
                                 ${avgModelSearch != null ? `<div style="font-size: 10px; color: #666; margin-top: 4px;">Avg of sub-scores: ${avgModelSearch}/100</div>` : ''}
                             </div>
                             <div style="padding: 15px; background: ${winner === 'table_search' ? '#d4edda' : '#fff3cd'}; border-radius: 4px; border: 2px solid ${winner === 'table_search' ? '#28a745' : '#ffc107'};">
-                                <div style="font-size: 14px; color: #666;">2 Card2Tab2Card Results</div>
+                                <div style="font-size: 14px; color: #666;">2 Query2Tab2Card Results</div>
                                 <div style="font-size: 28px; font-weight: bold; color: ${winner === 'table_search' ? '#28a745' : '#856404'};">${tableSearchScore}/100</div>
                                 ${winner === 'table_search' ? '<div style="font-size: 11px; color: #28a745;">🏆 Winner</div>' : ''}
                                 ${avgTableSearch != null ? `<div style="font-size: 10px; color: #666; margin-top: 4px;">Avg of sub-scores: ${avgTableSearch}/100</div>` : ''}
@@ -1901,8 +1932,8 @@
                                 <div style="padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #ffc107;">
                                     <div style="font-weight: 600; font-size: 12px;">${escTpl(ss.name)}</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-top: 4px;">
-                                        <span>1 Card2Card: <strong>${ss.model_search != null ? ss.model_search : '–'}/100</strong></span>
-                                        <span>2 Card2Tab2Card: <strong>${ss.table_search != null ? ss.table_search : '–'}/100</strong></span>
+                                        <span>1 Query2Card: <strong>${ss.model_search != null ? ss.model_search : '–'}/100</strong></span>
+                                        <span>2 Query2Tab2Card: <strong>${ss.table_search != null ? ss.table_search : '–'}/100</strong></span>
                                     </div>
                                     ${ss.evidence ? '<div style="font-size: 11px; color: #666; margin-top: 6px;">Evidence: ' + escTpl(ss.evidence) + '</div>' : ''}
                                 </div>
@@ -1912,12 +1943,12 @@
                     ` : ''}
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
                         <div style="padding: 15px; background: #e7f3ff; border-radius: 4px; border-left: 4px solid #007bff;">
-                            <h5 style="margin-top: 0; color: #004085; font-size: 13px;">1 Card2Card Results</h5>
+                            <h5 style="margin-top: 0; color: #004085; font-size: 13px;">1 Query2Card Results</h5>
                             ${modelSearchAnalysis.strengths && modelSearchAnalysis.strengths.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + modelSearchAnalysis.strengths.map(s => '<li>' + escTpl(s) + '</li>').join('') + '</ul></div>' : ''}
                             ${modelSearchAnalysis.weaknesses && modelSearchAnalysis.weaknesses.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + modelSearchAnalysis.weaknesses.map(w => '<li>' + escTpl(w) + '</li>').join('') + '</ul></div>' : ''}
                         </div>
                         <div style="padding: 15px; background: #fff3cd; border-radius: 4px; border-left: 4px solid #ffc107;">
-                            <h5 style="margin-top: 0; color: #856404; font-size: 13px;">2 Card2Tab2Card Results</h5>
+                            <h5 style="margin-top: 0; color: #856404; font-size: 13px;">2 Query2Tab2Card Results</h5>
                             ${tableSearchAnalysis.strengths && tableSearchAnalysis.strengths.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #28a745;">Strengths:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + tableSearchAnalysis.strengths.map(s => '<li>' + escTpl(s) + '</li>').join('') + '</ul></div>' : ''}
                             ${tableSearchAnalysis.weaknesses && tableSearchAnalysis.weaknesses.length > 0 ? '<div style="margin-top: 8px;"><strong style="font-size: 12px; color: #dc3545;">Weaknesses:</strong><ul style="font-size: 11px; margin: 4px 0 0 0; padding-left: 20px;">' + tableSearchAnalysis.weaknesses.map(w => '<li>' + escTpl(w) + '</li>').join('') + '</ul></div>' : ''}
                         </div>

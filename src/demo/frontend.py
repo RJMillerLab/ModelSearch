@@ -1,7 +1,7 @@
 """
 Frontend for ModelSearch Demo
 
-Simple web interface to compare Card2Card vs Card2Tab2Card search pipelines.
+Simple web interface to compare Query2Card vs Query2Tab2Card search pipelines.
 """
 
 import os
@@ -364,7 +364,7 @@ RAW_HTML_TEMPLATE = """
     <div class="container">
         <h1 style="margin: 0 0 12px 0; font-size: 22px; font-weight: 600; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px;">
             <span>🔍 ModelSearch Demo</span>
-            <span style="font-size: 13px; font-weight: normal; color: #555;">Compare <span class="number-badge">1</span> Card2Card vs <span class="number-badge">2</span> Card2Tab2Card</span>
+            <span style="font-size: 13px; font-weight: normal; color: #555;">Compare <span class="number-badge">1</span> Query2Card vs <span class="number-badge">2</span> Query2Tab2Card</span>
         </h1>
         
         <div class="dashboard-layout">
@@ -393,14 +393,6 @@ RAW_HTML_TEMPLATE = """
                 <img id="search-diagram" src="/static/fig/modelsearch.png" alt="ModelSearch Overview" style="height: 160px;" />
             </div>
             
-            <div class="form-row" style="margin-top: 8px;">
-                <label for="search_mode_select">Search Mode:</label>
-                <select id="search_mode_select" class="form-control" onchange="toggleMode()">
-                    <option value="query" selected>Query → ModelCard → Search</option>
-                    <option value="modelid">ModelID → Search (direct)</option>
-                </select>
-            </div>
-            
             <div class="mode-input active" id="query-input">
                 <div class="form-row">
                     <label for="query">Query (preset / fill in):</label>
@@ -409,34 +401,6 @@ RAW_HTML_TEMPLATE = """
                     </select>
                     <input type="text" id="query" class="form-control" placeholder="Type or pick preset" value="Are there table foundation models that can handle small tables (≤100 rows/columns) with many missing values and produce column embeddings?">
                 </div>
-                <div class="form-row" id="require-seed-has-tables-row" style="margin-top: 8px;">
-                    <label for="require_seed_has_tables">Table Search Seed Model (Model with Tables / Model without Tables):</label>
-                    <select id="require_seed_has_tables" class="form-control" style="width: 200px; flex: none;" title="Only applies in Query mode: pick which seed model to use for Table Search.">
-                        <option value="0">Use top-1 result</option>
-                        <option value="1" selected>Pick first model with tables (from top-20)</option>
-                    </select>
-                    <span style="font-size: 11px; color: #666; margin-left: 8px;">Only in Query mode. If "Pick first model with tables" and none of top-20 have tables → Table Search skipped.</span>
-                </div>
-            </div>
-            
-            <div class="mode-input" id="modelid-input">
-                <div class="form-row">
-                    <label for="model_id">Model ID (direct):</label>
-                    <input type="text" id="model_id" class="form-control" value="Salesforce/codet5-base" placeholder="HuggingFace model ID">
-                </div>
-            </div>
-            
-            <div class="form-row one-click-info" style="margin-bottom: 8px;">
-                <details class="run-options-details" style="background: #f0f7ff; border: 2px solid #007bff; border-radius: 6px; overflow: hidden;">
-                    <summary style="cursor: pointer; padding: 10px 12px; font-size: 13px; font-weight: 600; color: #004085; display: flex; align-items: center; gap: 8px; user-select: none;">
-                        <span style="font-size: 16px;">ⓘ</span> Run options &amp; what gets logged
-                    </summary>
-                    <div style="padding: 10px 12px; font-size: 12px; color: #555; border-top: 1px solid #b8d4e8;">
-                        <p style="margin: 0 0 6px 0;"><strong>One-click:</strong> Card2Card (Dense/Sparse/Hybrid), Card2Tab2Card (single_column, keyword, unionable).</p>
-                        <p style="margin: 0 0 6px 0;"><strong>Log:</strong> Run settings (top_k, per_table_search_k, card2card mode, require_seed_has_tables) appear at start. Time ⏱️ per step.</p>
-                        <p style="margin: 0;">When loading saved results, compare runs by their settings (e.g. K and retrieval mode).</p>
-                    </div>
-                </details>
             </div>
             
             <div class="form-row" style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
@@ -449,20 +413,18 @@ RAW_HTML_TEMPLATE = """
                     </div>
                 </div>
                 <div style="flex: 1; min-width: 200px;">
-                    <label for="table_search_k">Per-table search k:</label>
+                    <label for="table_search_k">Per-table top k for table search:</label>
                     <div style="display: flex; gap: 8px; align-items: center;">
                         <input type="range" id="table_search_k_slider" min="1" max="5" value="3" step="1" style="flex: 1; max-width: 200px;" oninput="updateTableSearchKValue(this.value)">
                         <input type="number" id="table_search_k" class="form-control" value="3" min="1" max="5" oninput="updateTableSearchKSlider(this.value)" style="width: 80px;">
                     </div>
-                    <span style="font-size: 11px; color: #666;">Top k for each individual table search (1–5). Results merged, filtered, capped at 20 tables; models capped at 50.</span>
                 </div>
                 <div style="flex: 1; min-width: 200px;">
-                    <label for="model_top_k">Model top-k (dense reranker cap):</label>
+                    <label for="model_top_k">Model top-k:</label>
                     <div style="display: flex; gap: 8px; align-items: center;">
                         <input type="range" id="model_top_k_slider" min="1" max="20" value="5" step="1" style="flex: 1; max-width: 200px;" oninput="updateModelTopKValue(this.value)">
                         <input type="number" id="model_top_k" class="form-control" value="5" min="1" max="20" oninput="updateModelTopKSlider(this.value)" style="width: 80px;">
                     </div>
-                    <span style="font-size: 11px; color: #666;">Default 5. If Card2Tab2Card has more candidates, backend uses dense reranker (seed Card2Card order), then cap.</span>
                 </div>
                 <div>
                     <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>
