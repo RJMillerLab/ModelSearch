@@ -17,7 +17,7 @@ from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
-from src.utils import resolve_table_path
+from src.utils import resolve_table_path, get_device
 #from src.utils import filter_results_by_classify_results
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -431,6 +431,21 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}, "
         f"require_seed_has_tables={require_seed_has_tables}"
     )
+    # Print runtime device once per pipeline run for easier debugging/profiling.
+    try:
+        dev = get_device()
+        if dev == "cuda":
+            try:
+                import torch
+                gpu_count = int(torch.cuda.device_count())
+                gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
+                logger.log(f"Runtime device: {dev} (gpu_count={gpu_count}, gpu0={gpu_name})")
+            except Exception as e:
+                logger.log(f"Runtime device: {dev} (gpu details unavailable: {e})")
+        else:
+            logger.log(f"Runtime device: {dev}")
+    except Exception as e:
+        logger.log(f"Runtime device detection failed: {e}")
     logger.set_status("running")
 
     # Normalize resource selection once and reuse in all subprocess commands.
