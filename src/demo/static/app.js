@@ -27,6 +27,40 @@
             }
             return m;
         }
+
+        /**
+         * Read fetch body as text and parse JSON. If the server returned an HTML page (404/login/wrong host),
+         * return ok:false instead of throwing (avoids "Unexpected token '<'").
+         */
+        async function parseFetchResponseJson(response) {
+            const text = await response.text();
+            const t = text.trim();
+            if (!t) {
+                return { ok: false, data: null, httpStatus: response.status, message: `Empty response (HTTP ${response.status})` };
+            }
+            const head = t.slice(0, 32).trim().toLowerCase();
+            if (head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<!')) {
+                return {
+                    ok: false,
+                    data: null,
+                    httpStatus: response.status,
+                    message:
+                        `Server returned HTML (HTTP ${response.status}), not JSON — often a 404 or wrong base URL. ` +
+                        `Restart the API process so it includes POST /api/table-search-trace, or set BACKEND_URL to the Flask app (e.g. http://127.0.0.1:5002).`,
+                };
+            }
+            try {
+                return { ok: true, data: JSON.parse(text), httpStatus: response.status, message: null };
+            } catch (e) {
+                const hint = t.length <= 160 ? t : t.slice(0, 160) + '…';
+                return {
+                    ok: false,
+                    data: null,
+                    httpStatus: response.status,
+                    message: `Invalid JSON (${e && e.message ? e.message : e}): ${hint}`,
+                };
+            }
+        }
         
         function escapeHtmlIntegration(s) {
             return String(s == null ? '' : s)
@@ -220,14 +254,24 @@
                     });
                     el.innerHTML = `<div style="font-weight:600;margin-bottom:4px;color:#155724;font-size:12px;">Table search trace (from retrieval — searched tables)</div>${html || '<span style="color:#999;font-size:11px;">No data for this search type.</span>'}`;
                 } else {
-                    const r = await fetch('{{BACKEND_URL}}/api/table-search-trace', {
+                    const apiBase = String('{{BACKEND_URL}}' || '').trim().replace(/\/+$/, '');
+                    const traceUrl = apiBase ? `${apiBase}/api/table-search-trace` : '/api/table-search-trace';
+                    const r = await fetch(traceUrl, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                        },
                         body: JSON.stringify({ job_id: jobId, search_type: searchType, tables_source: tablesSource }),
                     });
-                    const j = await r.json();
-                    if (j.status !== 'success') {
-                        el.innerHTML = `<div style="color:#b02a37;font-size:11px;">${escapeHtmlIntegration(j.error || j.message || 'Trace failed')}</div>`;
+                    const parsed = await parseFetchResponseJson(r);
+                    if (!parsed.ok) {
+                        el.innerHTML = `<div style="color:#b02a37;font-size:11px;">${escapeHtmlIntegration(parsed.message)}</div>`;
+                        return;
+                    }
+                    const j = parsed.data;
+                    if (!j || j.status !== 'success') {
+                        el.innerHTML = `<div style="color:#b02a37;font-size:11px;">${escapeHtmlIntegration((j && (j.error || j.message)) || 'Trace failed')}</div>`;
                         return;
                     }
                     const html = formatQuery2Tab2CardTraceHtml(j.query_tables || [], j.retrieved_table_model_rows || [], {
