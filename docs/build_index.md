@@ -207,7 +207,7 @@ Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
 
 ---
 
-# Log timings (from logs/*.log, latest run)
+# Log timings (from `logs/*.log` — **refresh on your machine**)
 
 **Inference time:** Use the line `[timing] inference (min)` in logs. Load time (sparse index, npz, FAISS) is not counted. With **Pyserini** sparse, inference is get query text + BM25 top-k search (fast); older rank_bm25 sparse scored all docs (~630s).
 

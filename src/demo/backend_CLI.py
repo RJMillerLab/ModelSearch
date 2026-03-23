@@ -467,6 +467,18 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         ]
         return _with_resources(base, model_resources_full)
 
+    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str, q: str, mtk: int) -> List[str]:
+        base = [
+            sys.executable, "-m", "src.search.query2tab2card",
+            "--query", q,
+            "--search_type", st,
+            "--table_top_k", str(table_k_value),
+            "--model_top_k", str(int(mtk)),
+            "--q2m_table_candidate_k", "9",
+            "--output_json", out_path,
+        ]
+        return _with_resources(base, table_resources)
+
     # Table Search now delegates full flow to query2tab2card:
     # query -> query2modelcard -> card2tab2card -> query-rerank.
     # `require_seed_has_tables` is kept for API compatibility but no longer gates execution here.
@@ -674,37 +686,16 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     def run_card2tab2card(st: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
-        # In-process call avoids Python subprocess startup/import overhead.
-        logger.log(
-            f"[Card2Tab2Card-{st}] INPROC: search_query2tab2card("
-            f"query={query!r}, search_type={st!r}, table_top_k={k_table}, "
-            f"model_top_k={int(model_top_k)}, q2m_table_candidate_k=9, resources={table_resources})"
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
+        cmd = _build_card2tab2card_cmd(
+            st=st, table_k_value=k_table, out_path=out_path, q=(query or ""), mtk=int(model_top_k)
         )
         t0 = time.time()
-        payload = None
-        err = ""
-        rc = 0
-        try:
-            from src.search.query2tab2card import search_query2tab2card
-            payload = search_query2tab2card(
-                query=(query or ""),
-                search_type=st,
-                output_json=out_path,
-                table_top_k=k_table,
-                table_resources=table_resources,
-                apply_query_rerank=True,
-                model_top_k=int(model_top_k),
-                q2m_table_candidate_k=9,
-            )
-        except Exception:
-            import traceback
-            rc = 1
-            err = traceback.format_exc()
+        rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
-        logger.log(f"[Card2Tab2Card-{st}] SAVED: {out_path}")
-        logger.log(f"[Card2Tab2Card-{st}] ELAPSED: {elapsed:.2f}s")
-        logger.log(f"[Card2Tab2Card-{st}] EXIT: {rc}")
-        return (st, rc, out_path, payload, err, elapsed)
+        logger.log_cmd(f"Card2Tab2Card-{st}", cmd, out_path, elapsed, rc)
+        return (st, rc, out_path, out, err, elapsed)
 
     # Add by_type if run on sub-lake (use_by_type currently only echoed in results; no extra CLI).
     card2tab2card_types = list(CARD2TAB2CARD_TYPES)
@@ -748,10 +739,18 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 else:
                     card2card_all[mode] = []
         else:
-            st, rc, out_path, payload_raw, err, elapsed = res
+            st, rc, out_path, out, err, elapsed = res
             logger.log(f"[Card2Tab2Card-{st}] Done in {elapsed:.2f}s")
-            data = payload_raw if isinstance(payload_raw, dict) else _read_json(out_path)
+            # Pipe subprocess stdout into pipeline log (card2tab2card prints go to stdout, not logger)
+            combined = (out or "") + (err or "")
+            if combined.strip():
+                for line in combined.strip().split("\n"):
+                    if line.strip():
+                        logger.log(f"  | {line.strip()}")
+            # Always try to read JSON from disk: CLI may write results then exit(1) e.g. due to get_device() in another process env
+            data = _read_json(out_path)
             if data is not None:
+                # CLI should write card2tab2card payload; normalize historical variants.
                 payload = _normalize_card2tab2card_payload(data)
                 card2tab2card_all[st] = payload
                 mid = payload.get("model_ids", [])
@@ -759,7 +758,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 qty = len(payload.get("query_tables", []))
                 logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
                 if rc != 0:
-                    logger.log(f"[Card2Tab2Card-{st}] Used JSON despite exit code {rc}")
+                    logger.log(f"[Card2Tab2Card-{st}] Used on-disk JSON despite exit code {rc} (CLI may have failed after writing)")
                 if len(lst) == 0 and qty == 0:
                     logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
                     if table_search_empty_reason is None:
@@ -768,9 +767,14 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                             f"{RELATIONSHIP_PARQUET} or has no csv_basename. "
                             "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
                         )
+                    cli_out = (err or out or "").strip()
+                    if cli_out and ("No tables" in cli_out or "Warning" in cli_out):
+                        for line in cli_out.split("\n")[-3:]:
+                            if line.strip():
+                                logger.log(f"[Card2Tab2Card-{st}] CLI: {line.strip()}")
             else:
                 if rc != 0:
-                    logger.log(f"[Card2Tab2Card-{st}] Error (exit {rc}): {err}")
+                    logger.log(f"[Card2Tab2Card-{st}] Error (exit {rc}): {err or out}")
                 # No valid JSON on disk: save empty so frontend can handle it
                 card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
                 logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
