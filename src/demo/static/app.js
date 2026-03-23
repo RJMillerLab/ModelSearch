@@ -713,11 +713,10 @@
             // Seed model + Query tables: same row, two columns (aligned with the two result cards below)
             const seedModelId = results.model_id || null;
             const tableSearchSeedId = results.table_search_seed_model_id || null;
-            const headerStyle = 'font-size: 12px; color: #666;';
             const seedModelCell = results.error ? '' : (seedModelId
-                ? `<div style="${headerStyle}"><div><strong>Query2Card seed (top-1):</strong> <a href="https://huggingface.co/${seedModelId}" target="_blank">${seedModelId}</a></div>${
+                ? `<div class="retrieval-seed-col"><div class="retrieval-seed-line"><strong>Query2Card seed (top-1):</strong> <a class="retrieval-seed-link" href="https://huggingface.co/${seedModelId}" target="_blank" rel="noopener noreferrer">${seedModelId}</a></div>${
                     tableSearchSeedId && tableSearchSeedId !== seedModelId
-                        ? `<div style="margin-top:4px;font-size:11px;color:#555;"><strong>Query2Tab2Card seed (first with tables):</strong> <a href="https://huggingface.co/${tableSearchSeedId}" target="_blank">${tableSearchSeedId}</a></div>`
+                        ? `<div class="retrieval-seed-line"><strong>Query2Tab2Card seed (first with tables):</strong> <a class="retrieval-seed-link" href="https://huggingface.co/${tableSearchSeedId}" target="_blank" rel="noopener noreferrer">${tableSearchSeedId}</a></div>`
                         : ''
                   }</div>`
                 : `<span style="font-size: 12px; color: #856404;">⚠️ Model ID missing</span>`);
@@ -749,17 +748,17 @@
             queryTables = queryTables.filter(p => classifyTableSource(p) !== 'llm');
             const basename = (p) => String(p).split('/').pop();
             const tablesNoteCell = results.error
-                ? '<span style="' + headerStyle + '">—</span>'
-                : `<span style="${headerStyle}"><strong>Query table(s):</strong> <span style="font-size: 10px; font-family: monospace;">${
+                ? '<span style="font-size: 12px; color: #666;">—</span>'
+                : `<div class="retrieval-tables-col"><strong>Query table(s):</strong><div class="retrieval-table-links">${
                     queryTables.length
                         ? queryTables.map((p) => {
                             const bn = basename(p);
                             const href = '{{BACKEND_URL}}/api/table-page?path=' + encodeURIComponent(p);
-                            return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;margin-right:6px;">${escapeHtml(bn)}</a>`;
-                          }).join('')
+                            return `<a href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(bn)}</a>`;
+                          }).join(' ')
                         : '—'
-                  }</span></span>`;
-            const headerRowHtml = `<div class="results-grid" style="margin-bottom: 6px; align-items: center;">
+                  }</div></div>`;
+            const headerRowHtml = `<div class="results-grid retrieval-header-strip" style="margin-bottom: 6px;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
             </div>`;
