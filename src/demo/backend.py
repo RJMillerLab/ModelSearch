@@ -467,12 +467,14 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         ]
         return _with_resources(base, model_resources_full)
 
-    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str, q: str) -> List[str]:
+    def _build_card2tab2card_cmd(*, st: str, table_k_value: int, out_path: str, q: str, mtk: int) -> List[str]:
         base = [
             sys.executable, "-m", "src.search.query2tab2card",
             "--query", q,
             "--search_type", st,
             "--table_top_k", str(table_k_value),
+            "--model_top_k", str(int(mtk)),
+            "--q2m_table_candidate_k", "9",
             "--output_json", out_path,
         ]
         return _with_resources(base, table_resources)
@@ -603,6 +605,12 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             m_rt_to_models = mappings.get("retrieved_table_to_related_models", {})
             if not isinstance(m_rt_to_models, dict):
                 m_rt_to_models = {}
+            m_mid_to_tables = mappings.get("model_id_to_related_tables", {})
+            if not isinstance(m_mid_to_tables, dict):
+                m_mid_to_tables = {}
+            m_tab2tab_rt_to_models = mappings.get("tab2tab_retrieved_table_to_related_models", {})
+            if not isinstance(m_tab2tab_rt_to_models, dict):
+                m_tab2tab_rt_to_models = {}
 
             inter = d.get("intermediate")
             if not isinstance(inter, dict):
@@ -631,6 +639,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 "card_to_related_tables": m_card_to_related,
                 "query_table_to_retrieved_tables": m_qt_to_rt,
                 "retrieved_table_to_related_models": m_rt_to_models if m_rt_to_models else inter_table_to_models,
+                "model_id_to_related_tables": m_mid_to_tables,
+                "tab2tab_retrieved_table_to_related_models": m_tab2tab_rt_to_models,
             }
             out["intermediate"] = inter
             if not isinstance(out.get("pipeline_trace"), dict):
@@ -678,7 +688,9 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure print() goes to stdout immediately for pipeline log piping
-        cmd = _build_card2tab2card_cmd(st=st, table_k_value=k_table, out_path=out_path, q=(query or ""))
+        cmd = _build_card2tab2card_cmd(
+            st=st, table_k_value=k_table, out_path=out_path, q=(query or ""), mtk=int(model_top_k)
+        )
         t0 = time.time()
         rc, out, err = _run_cmd(cmd, REPO_ROOT, env=env, timeout=CARD2TAB2CARD_TIMEOUT)
         elapsed = time.time() - t0
@@ -1185,7 +1197,7 @@ def table_search_preview():
     if not isinstance(sr, dict):
         return _api_error(f"search_results.json not found for job {job_id}", 404)
     try:
-        from integration.pipeline_preview import prepare_query2tab2card_preview
+        from src.integration.pipeline_preview import prepare_query2tab2card_preview
 
         preview, prep_err = prepare_query2tab2card_preview(
             search_results=sr,
@@ -1218,6 +1230,51 @@ def table_search_preview():
     except Exception as e:
         return _api_error(f"preview failed: {e}", 500)
 
+
+@app.route("/api/model-search-preview", methods=["POST"])
+def model_search_preview():
+    """Prepare query2card relationship preview without running integration."""
+    data = request.get_json() or {}
+    job_id, err = _require_job_id(data)
+    if err is not None:
+        return err
+    card2card_mode = str(data.get("card2card_retrieval_mode") or "dense").strip().lower()
+    tr_override = data.get("table_resources")
+    tr_list = tr_override if isinstance(tr_override, list) else None
+
+    sr = _read_json_job(job_id, "search_results.json")
+    if not isinstance(sr, dict):
+        return _api_error(f"search_results.json not found for job {job_id}", 404)
+
+    modes = sr.get("card2card_all_modes") if isinstance(sr.get("card2card_all_modes"), dict) else {}
+    mids_raw = modes.get(card2card_mode, [])
+    model_ids = [str(x).strip() for x in (mids_raw if isinstance(mids_raw, list) else []) if str(x).strip()]
+    if not model_ids:
+        return jsonify(
+            {
+                "status": "no_result",
+                "message": f"No model ids for retrieval mode {card2card_mode!r}",
+                "card2card_retrieval_mode": card2card_mode,
+            }
+        )
+
+    from src.integration.pipeline_preview import _resolve_table_paths_for_model_ids, _table_resources_for_integration
+
+    resources = tr_list if isinstance(tr_list, list) and tr_list else _table_resources_for_integration(sr)
+    table_paths, model_to_table_paths = _resolve_table_paths_for_model_ids(model_ids, resources=resources)
+    return jsonify(
+        {
+            "status": "success",
+            "card2card_retrieval_mode": card2card_mode,
+            "models_with_tables": model_ids,
+            "table_paths": table_paths,
+            "model_to_table_paths": model_to_table_paths,
+            "stats": {
+                "models_with_tables": len(model_ids),
+                "total_unique_tables": len(table_paths),
+            },
+        }
+    )
 
 @app.route("/api/saved-searches", methods=["GET"])
 def list_saved_searches():
@@ -1272,53 +1329,48 @@ def integrate():
     tables_source = data.get("tables_source", "intermediate")
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
-    try:
-        sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from integration.table_integration import integrate_tables_from_card2tab2card
-        result = integrate_tables_from_card2tab2card(
-            search_results_json=results_file,
-            search_type=search_type,
-            integration_type=integration_type,
-            k=k,
-            tables_source=tables_source,
-            table_resources=tr_list,
-        )
-        run_key = _table_search_key(integration_type, search_type, tables_source)
+    from src.integration.table_integration import integrate_tables_from_card2tab2card
+    result = integrate_tables_from_card2tab2card(
+        search_results_json=results_file,
+        search_type=search_type,
+        integration_type=integration_type,
+        k=k,
+        tables_source=tables_source,
+        table_resources=tr_list,
+    )
+    run_key = _table_search_key(integration_type, search_type, tables_source)
 
-        if not result.get("success", False):
-            save_payload = {"status": "no_result", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
-            json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(save_payload, f, ensure_ascii=False, indent=0)
-            return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
-
-        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
-        # The integration layer already applies the deterministic column order; we just persist it.
-        integrated_df = result.get("integrated_table")
-        saved_path = None
-        if integrated_df is not None:
-            raw_data = integrated_df.values.tolist()
-            result["integrated_table"] = {"columns": list(integrated_df.columns), "data": _sanitize_for_json(raw_data)}
-            csv_name = f"integrated_table_search_{run_key}.csv"
-            save_path = os.path.join(job_dir, csv_name)
-            integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-            saved_path = _integration_saved_path_for_api(job_id, csv_name)
-        if saved_path:
-            result["saved_path"] = saved_path
-        # Ensure models_with_tables is always present for Table Search (model IDs used in this integration; may differ from full retrieval list)
-        if "models_with_tables" not in result:
-            result["models_with_tables"] = []
-        save_payload = {"status": "success", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, **result}
+    if not result.get("success", False):
+        save_payload = {"status": "no_result", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
         json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(save_payload, f, ensure_ascii=False, indent=0)
-        with open(os.path.join(job_dir, "integration_table_search.json"), "w", encoding="utf-8") as f:
-            json.dump(save_payload, f, ensure_ascii=False, indent=0)
-        return jsonify({"status": "success", **result})
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return _api_error(str(e), 500)
+        return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
+
+    # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
+    # The integration layer already applies the deterministic column order; we just persist it.
+    integrated_df = result.get("integrated_table")
+    saved_path = None
+    if integrated_df is not None:
+        raw_data = integrated_df.values.tolist()
+        result["integrated_table"] = {"columns": list(integrated_df.columns), "data": _sanitize_for_json(raw_data)}
+        csv_name = f"integrated_table_search_{run_key}.csv"
+        save_path = os.path.join(job_dir, csv_name)
+        integrated_df.to_csv(save_path, index=False, encoding="utf-8")
+        saved_path = _integration_saved_path_for_api(job_id, csv_name)
+    if saved_path:
+        result["saved_path"] = saved_path
+    # Ensure models_with_tables is always present for Table Search (model IDs used in this integration; may differ from full retrieval list)
+    if "models_with_tables" not in result:
+        result["models_with_tables"] = []
+    save_payload = {"status": "success", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, **result}
+    json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(save_payload, f, ensure_ascii=False, indent=0)
+    with open(os.path.join(job_dir, "integration_table_search.json"), "w", encoding="utf-8") as f:
+        json.dump(save_payload, f, ensure_ascii=False, indent=0)
+    return jsonify({"status": "success", **result})
+
 
 
 @app.route("/api/integrate-model-search", methods=["POST"])
@@ -1338,52 +1390,45 @@ def integrate_model_search():
     card2card_retrieval_mode = data.get("card2card_retrieval_mode") or None
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
-    try:
-        sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from integration.table_integration import integrate_tables_from_card2card
-        
-        result = integrate_tables_from_card2card(
-            search_results_json=results_file,
-            integration_type=integration_type,
-            k=k,
-            max_models=max_models,
-            card2card_retrieval_mode=card2card_retrieval_mode,
-            table_resources=tr_list,
-        )
-        run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
+    from src.integration.table_integration import integrate_tables_from_card2card
+    
+    result = integrate_tables_from_card2card(
+        search_results_json=results_file,
+        integration_type=integration_type,
+        k=k,
+        max_models=max_models,
+        card2card_retrieval_mode=card2card_retrieval_mode,
+        table_resources=tr_list,
+    )
+    run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
 
-        if not result.get("success", False):
-            save_payload = {"status": "no_result", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
-            json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(save_payload, f, ensure_ascii=False, indent=0)
-            return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
-
-        # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
-        # The integration layer already applies the deterministic column order; we just persist it.
-        integrated_df = result.get("integrated_table")
-        saved_path = None
-        if integrated_df is not None:
-            raw_data = integrated_df.values.tolist()
-            result["integrated_table"] = {"columns": list(integrated_df.columns), "data": _sanitize_for_json(raw_data)}
-            csv_name = f"integrated_model_search_{run_key}.csv"
-            save_path = os.path.join(job_dir, csv_name)
-            integrated_df.to_csv(save_path, index=False, encoding="utf-8")
-            saved_path = _integration_saved_path_for_api(job_id, csv_name)
-        if saved_path:
-            result["saved_path"] = saved_path
-        save_payload = {"status": "success", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, **result}
+    if not result.get("success", False):
+        save_payload = {"status": "no_result", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
         json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(save_payload, f, ensure_ascii=False, indent=0)
-        with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
-            json.dump(save_payload, f, ensure_ascii=False, indent=0)
-        return jsonify({"status": "success", **result})
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return _api_error(str(e), 500)
+        return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
 
+    # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
+    # The integration layer already applies the deterministic column order; we just persist it.
+    integrated_df = result.get("integrated_table")
+    saved_path = None
+    if integrated_df is not None:
+        raw_data = integrated_df.values.tolist()
+        result["integrated_table"] = {"columns": list(integrated_df.columns), "data": _sanitize_for_json(raw_data)}
+        csv_name = f"integrated_model_search_{run_key}.csv"
+        save_path = os.path.join(job_dir, csv_name)
+        integrated_df.to_csv(save_path, index=False, encoding="utf-8")
+        saved_path = _integration_saved_path_for_api(job_id, csv_name)
+    if saved_path:
+        result["saved_path"] = saved_path
+    save_payload = {"status": "success", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, **result}
+    json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(save_payload, f, ensure_ascii=False, indent=0)
+    with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
+        json.dump(save_payload, f, ensure_ascii=False, indent=0)
+    return jsonify({"status": "success", **result})
 
 def _load_integrated_table_from_json(job_dir: str, json_name: str) -> Optional[pd.DataFrame]:
     """Load integrated table from integration JSON (has integrated_table with columns + data)."""

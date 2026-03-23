@@ -132,6 +132,7 @@ python -m src.search.query2tab2card --resources hugging --query "bert base uncas
 python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type unionable --table_top_k 3 --output_json results/query2tab2card_unionable_hugging.json > logs/query2tab2card_unionable_hugging.log 2>&1
 
 # Optional controls for query2tab2card:
+#   --model_top_k 5 --q2m_table_candidate_k 9
 #   --q2m_top_k 20 --seed_rank_index 0 --disable_query_rerank
 ```
 

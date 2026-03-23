@@ -180,6 +180,10 @@ def prepare_query2tab2card_preview(
         after_cap.get("table_to_models", table_to_models) if isinstance(after_cap.get("table_to_models"), dict) else table_to_models,
     )
 
+    model_ids_top_k = q_rerank_trace.get("model_ids_top_k")
+    if not isinstance(model_ids_top_k, list):
+        model_ids_top_k = payload.get("model_ids") if isinstance(payload.get("model_ids"), list) else []
+
     pipeline_trace_normalized = {
         "tab2tab": tab2tab_block if isinstance(tab2tab_block, dict) else {},
         "model_ids_before_dense_rerank": (
@@ -192,6 +196,7 @@ def prepare_query2tab2card_preview(
             if isinstance(q_rerank_trace.get("model_ids_after_dense_rerank"), list)
             else c2t2c_trace.get("model_ids_after_dense_rerank", [])
         ),
+        "model_ids_top_k": model_ids_top_k,
         "dense_rerank_applied": bool(
             q_rerank_trace.get("applied", c2t2c_trace.get("dense_rerank_applied", False))
         ),

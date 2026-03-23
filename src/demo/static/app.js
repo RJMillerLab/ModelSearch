@@ -1233,7 +1233,7 @@
             try { syncTableSearchDisplay(); } catch (e) { console.error('syncTableSearchDisplay error:', e); }
         }
         
-        function syncModelSearchDisplay() {
+        async function syncModelSearchDisplay() {
             const leftDiv = document.getElementById('integrationModelSearchResults');
             const container = document.getElementById('integrationResultsContainer');
             if (!leftDiv || !container) return;
@@ -1271,6 +1271,53 @@
                 }
                 leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
             } else {
+                // Try backend preview API first (no integration needed).
+                try {
+                    const jobId = (currentJobId || ((window.__latestSearchResults || {}).job_id) || '').toString().trim();
+                    if (jobId) {
+                        const resp = await fetch('{{BACKEND_URL}}/api/model-search-preview', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ job_id: jobId, card2card_retrieval_mode: card2cardMode })
+                        });
+                        const preview = await resp.json();
+                        if (preview && preview.status === 'success') {
+                            const previewRun = {
+                                key,
+                                integration_type: integrationType,
+                                card2card_retrieval_mode: card2cardMode,
+                                ...preview
+                            };
+                            let runsMutable = window.__modelSearchRuns || [];
+                            const idx = runsMutable.findIndex(r => (r.key || getModelSearchKey(r.integration_type, r.card2card_retrieval_mode)) === key);
+                            if (idx >= 0) runsMutable[idx] = { ...runsMutable[idx], ...previewRun };
+                            else runsMutable.push(previewRun);
+                            window.__modelSearchRuns = runsMutable;
+
+                            const modelIds = preview.models_with_tables || [];
+                            const modelToTables = preview.model_to_table_paths || {};
+                            const linesHtml = formatQuery2CardModelTableLinesHtml(modelIds, modelToTables);
+                            const stats = preview.stats || {};
+                            const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
+                            const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : (preview.table_paths || []).length;
+                            leftDiv.innerHTML = `<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px;">
+                                <div style="font-size: 13px; color: #6c757d; margin-bottom: 8px;">Preloaded retrieval relationship info. Click <strong>Integrated</strong> to run table integration.</div>
+                                <details open style="margin: 0; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">
+                                    <summary style="cursor: pointer; list-style: none; outline: none;">
+                                        <span style="font-weight: 600;">${INT_MODEL_IDS_C2C}</span>
+                                        <span style="color:#004085;">(${modelsCount} models, ${tablesCount} tables)</span>
+                                    </summary>
+                                    <div style="margin-top: 6px; font-size: 11px;">${linesHtml}</div>
+                                </details>
+                            </div>`;
+                            initTablePanZoom(leftDiv);
+                            refreshIntegrationShortAnalysis();
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    // fallback below
+                }
                 leftDiv.innerHTML = run && run.status !== 'success' ? `<div style="padding: 10px; border-radius: 4px; border: 1px solid #dc3545; color: #dc3545; font-size: 12px;">❌ ${run.message || run.error || 'Integration failed'}</div>` : noResultMsg;
             }
             initTablePanZoom(leftDiv);
