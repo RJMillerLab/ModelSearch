@@ -282,6 +282,12 @@ def _prepare_card2tab2card_inputs(
       - tab2tab: full Tab2Tab list + table_to_models **before** dense rerank / model-cap sync
       - model_ids_before_dense_rerank, model_ids_after_dense_rerank
       - after_model_cap: searched_tables + table_to_models **after** sync (matches top-level payload)
+
+    JSON pipeline summary (card2tab2card_results[search_type]):
+      1) query_tables — seed CSV paths from the query model card.
+      2) Tab2Tab writes searched_tables + table_to_models (parquet reverse lookup).
+      3) Backend dense-reranks model_ids, then sync drops non-shortlist models/tables.
+      4) tables_source=all_from_modelcards: parquet expansion via reranked model_ids order.
     """
     parquet_resources: Optional[List[str]] = (
         table_resources
@@ -321,6 +327,7 @@ def _prepare_card2tab2card_inputs(
         return None, "No retrieved tables (searched_tables or intermediate.retrieved_table_filenames)"
 
     if tables_source == "all_from_modelcards":
+        # Parquet union for dense-reranked model_ids only (not every model in table_to_models).
         c2t2c_ordered = list(search_payload["model_ids"]) if isinstance(search_payload.get("model_ids"), (list, tuple)) else []
         model_ids_list = [str(x) for x in c2t2c_ordered if x is not None]
         if not model_ids_list:
@@ -391,6 +398,8 @@ def _prepare_card2tab2card_inputs(
     else:
         tab2tab_trace_rows = []
 
+    intermediate_table_model_rows = _build_intermediate_table_model_rows(retrieved_filenames, table_to_models)
+
     return {
         "table_paths": table_paths,
         "model_to_table_paths_ts": model_to_table_paths_ts,
@@ -401,7 +410,31 @@ def _prepare_card2tab2card_inputs(
         "pipeline_trace": pipeline_trace,
         "tab2tab_trace_rows": tab2tab_trace_rows,
         "after_model_cap_trace_rows": after_model_cap_trace_rows,
+        "intermediate_table_model_rows": intermediate_table_model_rows,
     }, None
+
+
+def _build_intermediate_table_model_rows(
+    retrieved_filenames: List[str],
+    table_to_models: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Per tab2tab-retrieved table: models still present after backend model top-k sync (from search JSON)."""
+    if not isinstance(table_to_models, dict):
+        table_to_models = {}
+    basename_to_key = {os.path.basename(str(k)): k for k in table_to_models.keys()}
+    rows: List[Dict[str, Any]] = []
+    for tp in retrieved_filenames or []:
+        tp_s = str(tp)
+        bn = os.path.basename(tp_s)
+        key = tp_s if tp_s in table_to_models else basename_to_key.get(bn)
+        model_list = table_to_models.get(key, []) if key else []
+        mids: List[str] = []
+        for m in (model_list if isinstance(model_list, list) else []):
+            mid = _mid_from_intermediate_entry(m)
+            if mid and mid not in mids:
+                mids.append(mid)
+        rows.append({"table": bn, "table_path": tp_s, "models": mids})
+    return rows
 
 
 def _build_retrieved_table_model_rows(
@@ -546,6 +579,7 @@ def integrate_tables_from_card2tab2card(
     result["pipeline_trace"] = prep.get("pipeline_trace")
     result["tab2tab_trace_rows"] = prep.get("tab2tab_trace_rows") or []
     result["after_model_cap_trace_rows"] = prep.get("after_model_cap_trace_rows") or []
+    result["intermediate_table_model_rows"] = prep.get("intermediate_table_model_rows") or []
     elapsed = time.time() - t0
     # Attach timing + source info to stats for debugging
     if not isinstance(result.get("stats"), dict):
