@@ -13,15 +13,11 @@ import argparse
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from src.config import *
 from src.search.card2tab2card import search_card2tab2card
-from src.search.query2modelcard import (
-    dense_rerank_model_ids_by_query,
-    get_query2modelcard_dense_runtime,
-    search_query2modelcard,
-)
+from src.search.query2modelcard import dense_rerank_model_ids_by_query, search_query2modelcard
 from src.utils import load_modelid_to_csvlist
 
 
@@ -87,7 +83,6 @@ def search_query2tab2card(
     apply_query_rerank: bool = True,
     model_top_k: int = 5,
     q2m_table_candidate_k: int = 9,
-    dense_runtime: Dict[str, Any],
 ) -> Dict[str, object]:
     t_pipeline_start = time.time()
     q = str(query).strip()
@@ -103,7 +98,6 @@ def search_query2tab2card(
         output_json=None,
         retrieval_mode="dense",
         emb_npz_path=emb_npz_path,
-        dense_runtime=dense_runtime,
     )
     t_q2m_elapsed = time.time() - t_q2m_start
     print(f"[q2t2c-timing] query2modelcard: {t_q2m_elapsed:.2f}s", flush=True)
@@ -171,12 +165,7 @@ def search_query2tab2card(
     rerank_applied = False
     ranked = list(candidate_pool)
     if apply_query_rerank and candidate_pool:
-        ranked = dense_rerank_model_ids_by_query(
-            q,
-            candidate_pool,
-            emb_npz_path=emb_npz_path,
-            dense_runtime=dense_runtime,
-        )
+        ranked = dense_rerank_model_ids_by_query(q, candidate_pool, emb_npz_path=emb_npz_path)
         rerank_applied = True
 
     mtk = int(model_top_k)
@@ -272,9 +261,6 @@ def main() -> None:
     args = parser.parse_args()
 
     t0 = time.time()
-    cli_resources = [str(r).strip().lower() for r in (args.resources or ["hugging"]) if str(r).strip()]
-    _db_path_cli, emb_npz_path_cli = _resource_paths(cli_resources)
-    dense_runtime_cli = get_query2modelcard_dense_runtime(emb_npz_path=emb_npz_path_cli)
     payload = search_query2tab2card(
         query=args.query,
         search_type=args.search_type,
@@ -286,7 +272,6 @@ def main() -> None:
         apply_query_rerank=not bool(args.disable_query_rerank),
         model_top_k=args.model_top_k,
         q2m_table_candidate_k=args.q2m_table_candidate_k,
-        dense_runtime=dense_runtime_cli,
     )
     mids = payload.get("model_ids", []) if isinstance(payload, dict) else []
     print(f"Found {len(mids)} model ids for query: {args.query!r}")

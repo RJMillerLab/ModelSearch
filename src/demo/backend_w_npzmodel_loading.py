@@ -459,38 +459,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     model_resources_hugging = ["hugging"]
     logger.log(f"Resources: Query2Card/card2card={model_resources_full}, table CLI={table_resources}, q2m_w_table={model_resources_hugging}")
 
-    def _table_emb_npz_for_resources(resources: List[str]) -> str:
-        rset = set(str(r).strip().lower() for r in (resources or []) if str(r).strip())
-        if rset == {"hugging"}:
-            return EMB_NPZ_HUGGING
-        if rset == {"hugging", "github", "arxiv"}:
-            return EMB_NPZ
-        # Keep same behavior as query2tab2card._resource_paths fallback constraints.
-        return EMB_NPZ_HUGGING
-
-    dense_runtime_table = None
-    try:
-        from src.search.query2modelcard import get_query2modelcard_dense_runtime
-        table_emb_npz = _table_emb_npz_for_resources(table_resources)
-        logger.log(f"[Query2Tab2Card] Preload dense runtime from npz: {table_emb_npz}")
-        t_preload = time.time()
-        dense_runtime_table = get_query2modelcard_dense_runtime(emb_npz_path=table_emb_npz)
-        logger.log(f"[Query2Tab2Card] Dense runtime ready in {time.time() - t_preload:.2f}s")
-    except Exception as e:
-        logger.log(f"[Query2Tab2Card] Dense runtime preload failed: {e}")
-        logger.set_status("error")
-        logger.set_results(
-            {
-                "error": f"Dense runtime preload failed: {e}",
-                "model_id": None,
-                "card2card_results": [],
-                "card2tab2card_results": {},
-                "folder_path": job_dir,
-                "run_log_path": run_log_path,
-            }
-        )
-        return
-
     def _with_resources(cmd: List[str], resources: List[str]) -> List[str]:
         return cmd + ["--resources", *resources]
 
@@ -742,7 +710,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 apply_query_rerank=True,
                 model_top_k=int(model_top_k),
                 q2m_table_candidate_k=9,
-                dense_runtime=dense_runtime_table,
             )
         except Exception:
             import traceback
