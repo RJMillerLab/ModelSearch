@@ -156,26 +156,23 @@
 
             if (useAllFromCardsPipeline) {
                 let html = qLine;
-                if (tab2tabTraceRows.length && pipelineTrace && pipelineTrace.tab2tab) {
-                    const n = tab2tabTraceRows.length;
-                    html += `<div style="margin-top:8px;line-height:1.35;"><strong>1) Tab2Tab + reverse lookup (before model cap)</strong> <span style="color:#666;">${n} retrieved CSVs, parquet → model IDs</span></div>`;
-                    html += `<details open style="margin-top:4px;"><summary style="cursor:pointer;color:#155724;">Full list (${n} tables)</summary><div style="margin-top:6px;">${renderTableToModelRows(tab2tabTraceRows)}</div></details>`;
+                const searchedRows = tab2tabTraceRows.length
+                    ? tab2tabTraceRows
+                    : (afterModelCapTraceRows.length ? afterModelCapTraceRows : (Array.isArray(retrievedRows) ? retrievedRows : []));
+                if (searchedRows.length) {
+                    const n = searchedRows.length;
+                    html += `<div style="margin-top:8px;line-height:1.35;"><strong>1) Searched tables (Tab2Tab top-k per query table)</strong> <span style="color:#666;">n=${n}</span></div>`;
+                    html += `<details open style="margin-top:4px;"><summary style="cursor:pointer;color:#155724;">Full list (${n} tables)</summary><div style="margin-top:6px;">${renderTableToModelRows(searchedRows)}</div></details>`;
                 } else {
-                    html += `<div style="margin-top:8px;padding:6px;background:#fff3cd;border-radius:4px;font-size:11px;color:#856404;"><strong>Legacy job:</strong> no <code>pipeline_trace</code> in search_results.json. Re-run the search job to store the full Tab2Tab trail.</div>`;
+                    html += `<div style="margin-top:8px;padding:6px;background:#fff3cd;border-radius:4px;font-size:11px;color:#856404;"><strong>Legacy job:</strong> no searched-table trace in search_results.json.</div>`;
                 }
-                const pre = pipelineTrace && Array.isArray(pipelineTrace.model_ids_before_dense_rerank) ? pipelineTrace.model_ids_before_dense_rerank : [];
-                if (pre.length) {
-                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>2) Candidate models (before dense rerank)</strong> <span style="color:#666;">n=${pre.length}</span></div><div style="margin-top:4px;line-height:1.35;">${modelIdLinks(pre)}</div>`;
-                }
-                const post = pipelineTrace && Array.isArray(pipelineTrace.model_ids_after_dense_rerank) ? pipelineTrace.model_ids_after_dense_rerank : rankedModelIds;
+                const post = pipelineTrace && Array.isArray(pipelineTrace.model_ids_after_dense_rerank)
+                    ? pipelineTrace.model_ids_after_dense_rerank
+                    : rankedModelIds;
                 if (post.length) {
-                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>3) Shortlist (after dense rerank)</strong> <span style="color:#666;">n=${post.length}</span></div><div style="margin-top:4px;line-height:1.35;">${modelIdLinks(post)}</div>`;
+                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>2) Reranked top-k models</strong> <span style="color:#666;">n=${post.length}</span></div><div style="margin-top:4px;line-height:1.35;">${modelIdLinks(post)}</div>`;
                 }
-                const bridgeRows = afterModelCapTraceRows.length ? afterModelCapTraceRows : (Array.isArray(retrievedRows) ? retrievedRows : []);
-                if (bridgeRows.length) {
-                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>4) Retrieved tables → models (synced to shortlist; same as “searched tables” integration input)</strong></div>${renderTableToModelRows(bridgeRows)}`;
-                }
-                html += `<div style="margin-top:10px;line-height:1.35;"><strong>5) Parquet expansion per shortlist model (“all tables from modelcards” merge)</strong> <span style="color:#666;">same order as 3)</span></div>`;
+                html += `<div style="margin-top:10px;line-height:1.35;"><strong>3) All tables from modelcards (per reranked model)</strong></div>`;
                 html += rankedModelIds.map((mid, idx) => {
                     const s = String(mid).trim();
                     if (!s) return '';

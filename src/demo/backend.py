@@ -473,7 +473,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             "--model_id", mid,
             "--search_type", st,
             "--table_top_k", str(table_k_value),
-            "--model_top_k", str(model_top_k),
+            "--model_top_k", str(c2t2c_model_top_k_cli),
+            "--query", (query or ""),
             "--output_json", out_path,
         ]
         return _with_resources(base, table_resources)
@@ -606,8 +607,11 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # Table Search: user `table_search_k` is the per-table top-k passed into tab2tab.
     # (card2tab2card does its own merging/dedup/capping downstream.)
     table_search_k_input = max(1, int(table_search_k))
-    k_table = table_search_k_input * 20
-    #k_table = table_search_k_input
+    # IMPORTANT: keep true per-query-table top-k for Tab2Tab (no hidden multiplier).
+    k_table = table_search_k_input
+
+    # Card2Tab2Card CLI should keep enough model candidates before backend dense-rerank.
+    c2t2c_model_top_k_cli = max(100, int(model_top_k) * 20)
 
     # Card2Card: scaled `--top_k` for first (and only) dense/sparse/hybrid subprocess.
     card2card_top_k = max(100, int(model_top_k) * 20)
@@ -794,9 +798,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         effective_model_top_k = 0
     logger.log(f"effective_model_top_k: input={model_top_k}, right_max_models={right_max_models} => cap={effective_model_top_k}")
 
-    # --- Dense rerank (Card2Tab2Card cap): recompute query×candidate cosine on full EMB_NPZ for the candidate set only ---
-    from src.search.query2modelcard import dense_rerank_model_ids_by_query
-
+    # Card2Tab2Card dense rerank now happens inside src.search.card2tab2card CLI.
+    # Here we only ensure pipeline_trace exists for legacy payloads.
     def _norm_table_to_models_json(t2m: Any) -> Dict[str, List[str]]:
         out: Dict[str, List[str]] = {}
         if not isinstance(t2m, dict):
@@ -808,123 +811,35 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 out[str(k)] = []
         return out
 
-    def _snapshot_card2tab2card_pipeline_trace(payload: Dict[str, Any]) -> None:
-        """
-        Before dense rerank + model-cap sync mutates searched_tables / table_to_models,
-        copy the full Tab2Tab + reverse-lookup state into pipeline_trace for UI reconstruction.
-        """
-        if not isinstance(payload, dict):
-            return
-        inter = payload.get("intermediate")
+    for _st, _payload in card2tab2card_all.items():
+        if not isinstance(_payload, dict):
+            continue
+        inter = _payload.get("intermediate")
         if not isinstance(inter, dict):
             inter = {}
-        st_list = payload.get("searched_tables")
-        if not isinstance(st_list, list):
-            st_list = []
-        if not st_list:
-            st_list = list(inter.get("retrieved_table_filenames") or [])
-        rt_fn = inter.get("retrieved_table_filenames")
-        if not isinstance(rt_fn, list):
-            rt_fn = list(st_list)
-        t2m = inter.get("table_to_models")
-        if not isinstance(t2m, dict):
-            t2m = {}
-        mids = payload.get("model_ids")
-        pre_mids = [str(m) for m in (mids if isinstance(mids, list) else []) if m is not None]
-        payload["pipeline_trace"] = {
-            "tab2tab": {
-                "searched_tables": [str(x) for x in st_list],
-                "retrieved_table_filenames": [str(x) for x in rt_fn],
-                "table_to_models": _norm_table_to_models_json(t2m),
-            },
-            "model_ids_before_dense_rerank": list(pre_mids),
-        }
-
-    for _st, _payload in card2tab2card_all.items():
-        if isinstance(_payload, dict):
-            _snapshot_card2tab2card_pipeline_trace(_payload)
-
-    def _sync_payload_intermediate_to_model_ids(payload: Dict[str, Any], keep_model_ids: List[str]) -> None:
-        """Align intermediate with truncated model_ids after dense rerank (not tab2tab self-table removal)."""
-        intermediate = payload.get("intermediate")
-        if not isinstance(intermediate, dict):
-            return
-        keep_set = set(str(m) for m in keep_model_ids if m is not None)
-        if not keep_set:
-            # Keep payload structure but drop tables.
-            if isinstance(payload.get("searched_tables"), list):
-                payload["searched_tables"] = []
-            if isinstance(intermediate.get("retrieved_table_filenames"), list):
-                intermediate["retrieved_table_filenames"] = []
-            if isinstance(intermediate.get("table_to_models"), dict):
-                intermediate["table_to_models"] = {}
-            if isinstance(intermediate.get("table_id_to_filename"), dict):
-                intermediate["table_id_to_filename"] = {}
-            return
-
-        table_to_models = intermediate.get("table_to_models")
-        if not isinstance(table_to_models, dict):
-            return
-
-        new_table_to_models: Dict[str, List[str]] = {}
-        for tname, model_list in table_to_models.items():
-            if not isinstance(model_list, list):
-                continue
-            kept = [m for m in model_list if str(m) in keep_set]
-            if kept:
-                new_table_to_models[tname] = kept
-
-        kept_tables = set(new_table_to_models.keys())
-        intermediate["table_to_models"] = new_table_to_models
-
-        if isinstance(payload.get("searched_tables"), list):
-            payload["searched_tables"] = [t for t in payload["searched_tables"] if t in kept_tables]
-
-        if isinstance(intermediate.get("retrieved_table_filenames"), list):
-            intermediate["retrieved_table_filenames"] = [
-                t for t in intermediate["retrieved_table_filenames"] if t in kept_tables
-            ]
-
-        tid_map = intermediate.get("table_id_to_filename")
-        if isinstance(tid_map, dict):
-            intermediate["table_id_to_filename"] = {str(tid): fname for tid, fname in tid_map.items() if fname in kept_tables}
-
-        payload["intermediate"] = intermediate
-
-    # --- Dense rerank + cap: Card2Tab2Card side (recompute query×candidate on full EMB_NPZ subset only) ---
-    for st, payload in card2tab2card_all.items():
-        if not isinstance(payload, dict):
-            continue
-        mids = payload.get("model_ids", [])
-        if not isinstance(mids, list):
-            continue
-        if len(mids) > effective_model_top_k and effective_model_top_k > 0:
-            dense_reranker_ordered = dense_rerank_model_ids_by_query(query or "", mids, emb_npz_path=EMB_NPZ)
-            payload["model_ids"] = dense_reranker_ordered[:effective_model_top_k]
-            logger.log(
-                f"[Card2Tab2Card-{st}] DENSE_RERANKER: {len(mids)} candidates -> top {effective_model_top_k} "
-                f"by query×candidate cosine (subset on full {os.path.basename(EMB_NPZ)})"
-            )
-        elif len(mids) > effective_model_top_k and effective_model_top_k == 0:
-            payload["model_ids"] = []
-
-        # Keep intermediate tables consistent with the truncated model_ids.
-        final_mids = payload.get("model_ids", [])
-        if isinstance(final_mids, list):
-            _sync_payload_intermediate_to_model_ids(payload, final_mids)
-
-        pt = payload.get("pipeline_trace")
-        if isinstance(pt, dict):
-            fm = payload.get("model_ids")
-            pt["model_ids_after_dense_rerank"] = [str(x) for x in (fm if isinstance(fm, list) else []) if x is not None]
-            inter_after = payload.get("intermediate")
-            st_after = payload.get("searched_tables")
-            if isinstance(inter_after, dict):
-                t2_after = inter_after.get("table_to_models")
-                pt["after_model_cap"] = {
-                    "searched_tables": [str(x) for x in (st_after if isinstance(st_after, list) else [])],
-                    "table_to_models": _norm_table_to_models_json(t2_after) if isinstance(t2_after, dict) else {},
-                }
+            _payload["intermediate"] = inter
+        pt = _payload.get("pipeline_trace")
+        if not isinstance(pt, dict):
+            st_list = _payload.get("searched_tables")
+            if not isinstance(st_list, list):
+                st_list = list(inter.get("retrieved_table_filenames") or [])
+            t2m = inter.get("table_to_models") if isinstance(inter.get("table_to_models"), dict) else {}
+            mids = _payload.get("model_ids")
+            mids_list = [str(x) for x in (mids if isinstance(mids, list) else []) if x is not None]
+            _payload["pipeline_trace"] = {
+                "tab2tab": {
+                    "searched_tables": [str(x) for x in st_list],
+                    "retrieved_table_filenames": [str(x) for x in st_list],
+                    "table_to_models": _norm_table_to_models_json(t2m),
+                },
+                "model_ids_before_dense_rerank": list(mids_list),
+                "model_ids_after_dense_rerank": list(mids_list),
+                "after_model_cap": {
+                    "searched_tables": [str(x) for x in st_list],
+                    "table_to_models": _norm_table_to_models_json(t2m),
+                },
+                "dense_rerank_applied": False,
+            }
 
     # Cap left side (Card2Card)
     for mode in CARD2CARD_MODES:
