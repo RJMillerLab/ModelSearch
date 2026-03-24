@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.config import DIALITE_INTERNAL_REPO, REPO_ROOT
 from src.integration.table_integration import (
-    integrate_tables,   
+    integrate_tables,
     integrate_tables_from_card2tab2card,
-    integrate_tables_from_card2card,
+    integrate_tables_from_query2modelcard,
 )
 from src.utils import resolve_table_path
 
@@ -44,16 +44,16 @@ def _assert_card2tab2card_schema(search_results: Dict, search_type: str) -> Dict
     return payload
 
 
-def _assert_card2card_schema(search_results: Dict, card2card_mode: Optional[str]) -> List:
+def _assert_query2modelcard_schema(search_results: Dict, retrieval_mode: Optional[str]) -> List:
     assert isinstance(search_results, dict), "search_results must be a dict"
-    if card2card_mode:
-        all_modes = search_results.get("card2card_all_modes")
-        assert isinstance(all_modes, dict), "missing card2card_all_modes"
-        mode_data = all_modes.get(card2card_mode)
-        assert isinstance(mode_data, list), f"card2card_all_modes[{card2card_mode}] must be a list"
+    if retrieval_mode:
+        all_modes = search_results.get("query2modelcard_all_modes")
+        assert isinstance(all_modes, dict), "missing query2modelcard_all_modes"
+        mode_data = all_modes.get(retrieval_mode)
+        assert isinstance(mode_data, list), f"query2modelcard_all_modes[{retrieval_mode}] must be a list"
         return mode_data
-    results = search_results.get("card2card_results")
-    assert isinstance(results, list), "missing card2card_results list"
+    results = search_results.get("query2modelcard_results")
+    assert isinstance(results, list), "missing query2modelcard_results list"
     return results
 
 
@@ -200,9 +200,9 @@ def test_all_search_results_integration_modes():
 
 
 def test_model_search_integration_from_job_json():
-    """Test Card2Card (model search) integration from the same job search_results.json."""
+    """Test model-search integration (query2modelcard neighbor list) from job search_results.json."""
     print("\n" + "=" * 60)
-    print("Test 3: Real Job Model-Search Integration (Card2Card)")
+    print("Test 3: Real Job Model-Search Integration (query2modelcard neighbors)")
     print("=" * 60)
 
     job_info = _find_real_job_tables(min_tables=2)
@@ -212,17 +212,18 @@ def test_model_search_integration_from_job_json():
 
     search_results_path = Path(job_info["search_results_path"])
     search_results = _load_json(search_results_path)
+    rmode = str(search_results.get("query2modelcard_retrieval_mode") or "dense").strip().lower()
 
-    # Enforce schema: this must be a backend job JSON with card2card_all_modes.
-    _assert_card2card_schema(search_results, card2card_mode="dense")
+    # Enforce schema: backend job JSON with query2modelcard_all_modes populated for the run's retrieval mode.
+    _assert_query2modelcard_schema(search_results, retrieval_mode=rmode)
 
     # Only need a quick sanity run for model-search integration.
-    result = integrate_tables_from_card2card(
+    result = integrate_tables_from_query2modelcard(
         str(search_results_path),
         integration_type="union",
         k=10,
         max_models=10,
-        card2card_retrieval_mode="dense",
+        query2modelcard_retrieval_mode=rmode,
     )
     assert result.get("success") is True, result.get("error")
     assert result.get("integrated_table") is not None
@@ -238,7 +239,7 @@ if __name__ == "__main__":
     # Test 2: integration from search results for every mode
     test_all_search_results_integration_modes()
 
-    # Test 3: model-search (card2card) integration from job JSON
+    # Test 3: model-search (query2modelcard neighbors) integration from job JSON
     test_model_search_integration_from_job_json()
 
     print("\n" + "=" * 60)

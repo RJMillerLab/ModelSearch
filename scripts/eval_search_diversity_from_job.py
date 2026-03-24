@@ -8,8 +8,8 @@ It reads:
     data/jobs/<job_id>/search_results.json
 
 and extracts two ranked model lists, for example:
-    - System A: Card2Card dense results      (card2card:dense)
-    - System B: Card2Tab2Card keyword mode   (card2tab2card:keyword)
+    - System A: query2modelcard dense neighbors (query2modelcard:dense)
+    - System B: Card2Tab2Card keyword mode    (card2tab2card:keyword)
 
 Then it uses RecTools' IntraListDiversity metric to compare their diversity.
 
@@ -17,7 +17,7 @@ Usage examples (from repo root):
 
     python scripts/eval_search_diversity_from_job.py \\
         --job-id 2025-01-01_12-00-00_abcd \\
-        --system-a card2card:dense \\
+        --system-a query2modelcard:dense \\
         --system-b card2tab2card:keyword \\
         --k 20
 
@@ -26,7 +26,7 @@ distances; otherwise random toy features are generated:
 
     python scripts/eval_search_diversity_from_job.py \\
         --job-id 2025-01-01_12-00-00_abcd \\
-        --system-a card2card:dense \\
+        --system-a query2modelcard:dense \\
         --system-b card2tab2card:keyword \\
         --item-features-json path/to/model_features.json
 
@@ -80,16 +80,16 @@ def _normalize_model_id_list(raw) -> List[str]:
     return out
 
 
-def extract_card2card_models(search_results: Dict, mode: str = "dense") -> List[str]:
-    """Extract ranked model_ids from card2card results."""
+def extract_query2modelcard_models(search_results: Dict, mode: str = "dense") -> List[str]:
+    """Extract ranked model_ids from query2modelcard neighbor lists."""
     mode = (mode or "dense").strip().lower()
-    all_modes = search_results.get("card2card_all_modes") or {}
+    all_modes = search_results.get("query2modelcard_all_modes") or {}
     raw = all_modes.get(mode)
     if isinstance(raw, dict) and "error" in raw:
         raw = []
     models = _normalize_model_id_list(raw) if raw is not None else []
     if not models:
-        primary = search_results.get("card2card_results")
+        primary = search_results.get("query2modelcard_results")
         models = _normalize_model_id_list(primary)
     return models
 
@@ -117,9 +117,9 @@ def load_results_from_search_results_json(
     Convert search_results.json into two ranked model lists.
 
     system_*_source syntax:
-        "card2card:dense"
-        "card2card:sparse"
-        "card2card:hybrid"
+        "query2modelcard:dense"
+        "query2modelcard:sparse"
+        "query2modelcard:hybrid"
         "card2tab2card:keyword"
         "card2tab2card:single_column"
         "card2tab2card:unionable"
@@ -130,21 +130,21 @@ def load_results_from_search_results_json(
     def _parse(src: str) -> Tuple[str, str]:
         parts = (src or "").split(":", 1)
         if len(parts) != 2:
-            raise ValueError(f"Invalid source '{src}'. Expected kind:arg, e.g. card2card:dense")
+            raise ValueError(f"Invalid source '{src}'. Expected kind:arg, e.g. query2modelcard:dense")
         return parts[0].strip().lower(), parts[1].strip()
 
     kind_a, arg_a = _parse(system_a_source)
     kind_b, arg_b = _parse(system_b_source)
 
-    if kind_a == "card2card":
-        a = extract_card2card_models(data, mode=arg_a)
+    if kind_a == "query2modelcard":
+        a = extract_query2modelcard_models(data, mode=arg_a)
     elif kind_a == "card2tab2card":
         a = extract_card2tab2card_models(data, search_type=arg_a)
     else:
         raise ValueError(f"Unknown system_a kind '{kind_a}'")
 
-    if kind_b == "card2card":
-        b = extract_card2card_models(data, mode=arg_b)
+    if kind_b == "query2modelcard":
+        b = extract_query2modelcard_models(data, mode=arg_b)
     elif kind_b == "card2tab2card":
         b = extract_card2tab2card_models(data, search_type=arg_b)
     else:
@@ -246,12 +246,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument(
         "--system-a",
         required=True,
-        help="Source spec for system A, e.g. card2card:dense or card2tab2card:keyword",
+        help="Source spec for system A, e.g. query2modelcard:dense or card2tab2card:keyword",
     )
     parser.add_argument(
         "--system-b",
         required=True,
-        help="Source spec for system B, e.g. card2card:hybrid or card2tab2card:single_column",
+        help="Source spec for system B, e.g. query2modelcard:hybrid or card2tab2card:single_column",
     )
     parser.add_argument(
         "--item-features-json",

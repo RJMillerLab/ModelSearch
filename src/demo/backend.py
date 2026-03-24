@@ -14,21 +14,18 @@ from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
-#from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, CARD2CARD_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
+#from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, QUERY2MODELCARD_RETRIEVAL_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
 from src.utils import resolve_table_path, get_device
 #from src.utils import filter_results_by_classify_results
 
 def _append_pipeline_log(job_dir: str, message: str) -> None:
     """Append one line to job_dir/pipeline_run.log (e.g. integration timing after /api/search)."""
-    try:
-        path = os.path.join(job_dir, "pipeline_run.log")
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        jid = os.path.basename(os.path.abspath(job_dir))
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"[{ts}] [{jid}] {message}\n")
-    except OSError:
-        pass
+    path = os.path.join(job_dir, "pipeline_run.log")
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    jid = os.path.basename(os.path.abspath(job_dir))
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"[{ts}] [{jid}] {message}\n")
 
 
 def _sanitize_for_json(obj: Any) -> Any:
@@ -50,9 +47,9 @@ def _generate_job_id() -> str:
     return f"{ts}_{suffix}"
 
 
-def _model_search_key(integration_type: str, card2card_mode: str) -> str:
-    """Slug for Model Search only: e.g. alite_dense. Params: integration_type, card2card_mode."""
-    parts = [integration_type or "union", card2card_mode or "dense"]
+def _model_search_key(integration_type: str, query2modelcard_retrieval_mode: str) -> str:
+    """Slug for Model Search only: e.g. alite_dense (integration_type + query2modelcard retrieval_mode)."""
+    parts = [integration_type or "union", query2modelcard_retrieval_mode or "dense"]
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
 
 
@@ -117,19 +114,13 @@ def _allowed_csv_roots() -> List[str]:
     for d in list(TABLE_BASE_DIRS) + [JOBS_DIR]:
         if not d:
             continue
-        try:
-            if os.path.isdir(d):
-                roots.append(os.path.realpath(d))
-        except OSError:
-            continue
+        if os.path.isdir(d):
+            roots.append(os.path.realpath(d))
     return roots
 
 
 def _path_is_under_roots(candidate: str, roots: List[str]) -> bool:
-    try:
-        cr = os.path.realpath(candidate)
-    except OSError:
-        return False
+    cr = os.path.realpath(candidate)
     for r in roots:
         if cr == r or cr.startswith(r + os.sep):
             return True
@@ -147,13 +138,10 @@ def _real_file_candidates(raw_path: str) -> List[str]:
     out: List[str] = []
 
     def push(p: str) -> None:
-        try:
-            rp = os.path.realpath(p)
-            if os.path.isfile(rp) and rp not in seen:
-                seen.add(rp)
-                out.append(rp)
-        except OSError:
-            return
+        rp = os.path.realpath(p)
+        if os.path.isfile(rp) and rp not in seen:
+            seen.add(rp)
+            out.append(rp)
 
     if os.path.isabs(s):
         push(s)
@@ -189,11 +177,8 @@ def _resolve_table_file_for_preview(raw_path: str) -> Optional[str]:
 
 
 def _html_table_cell(v: Any) -> str:
-    try:
-        if pd.isna(v):
-            return ""
-    except Exception:
-        pass
+    if pd.isna(v):
+        return ""
     if v is None:
         return ""
     return html.escape(str(v))
@@ -290,7 +275,7 @@ class JobLogger:
 
 
 def _read_json(path: str) -> Optional[Dict]:
-    """Read JSON file if it exists; else return None. No try/except - caller handles."""
+    """Read JSON file if it exists; else return None."""
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
@@ -300,6 +285,23 @@ def _read_json(path: str) -> Optional[Dict]:
 def _read_json_job(job_id: str, filename:str) -> Optional[Dict]:
     """Read JSON file from job directory."""
     return _read_json(os.path.join(JOBS_DIR, job_id, filename))
+
+
+def _resolve_eval_qa_query(data: Dict[str, Any], sr: Optional[Dict]) -> Optional[str]:
+    """Non-empty query: JSON body `query` if set, else `search_results.json` field `query`."""
+    raw = data.get("query")
+    if raw is not None:
+        s = str(raw).strip()
+        if s:
+            return s
+    if not isinstance(sr, dict):
+        return None
+    raw = sr.get("query")
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s if s else None
+
 
 def _write_json_job(job_id: str, filename: str, data: Dict):
     """Write JSON data to job directory."""
@@ -331,7 +333,7 @@ def run_search_pipeline(
     top_k: int = 20,
     model_id: Optional[str] = None,
     table_search_k: Optional[int] = None,
-    card2card_retrieval_mode: str = "dense",
+    query2modelcard_retrieval_mode: str = "dense",
     require_seed_has_tables: bool = True,
     use_by_type: bool = False,
     model_top_k: int = 5,
@@ -348,20 +350,14 @@ def run_search_pipeline(
 
     def _set_pipeline_error(msg: str, mid=None):
         logger.set_status("error")
-        d = {"error": msg, "model_id": mid, "card2card_results": [], "card2tab2card_results": {}}
+        d = {"error": msg, "model_id": mid, "query2modelcard_results": [], "card2tab2card_results": {}}
         d["folder_path"] = job_dir
         d["run_log_path"] = os.path.join(job_dir, "pipeline_run.log")
         logger.set_results(d)
 
-    try:
-        _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k=model_top_k, table_resource_allowlist=table_resource_allowlist)
-    except Exception as e:
-        logger.log(f"Pipeline crashed: {e}")
-        _set_pipeline_error(f"Pipeline error: {e}", model_id)
-        import traceback
-        logger.log(traceback.format_exc())
+    _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, query2modelcard_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k=model_top_k, table_resource_allowlist=table_resource_allowlist)
 
-def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], card2card_retrieval_mode: str, require_seed_has_tables: bool = True, use_by_type: bool = False, *, model_top_k: int = 5, table_resource_allowlist: Optional[List[str]] = ['hugging']):
+def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], query2modelcard_retrieval_mode: str, require_seed_has_tables: bool = True, use_by_type: bool = False, *, model_top_k: int = 5, table_resource_allowlist: Optional[List[str]] = ['hugging']):
     # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
@@ -378,7 +374,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
             {
                 "error": "query required",
                 "model_id": None,
-                "card2card_results": [],
+                "query2modelcard_results": [],
                 "card2tab2card_results": {},
                 "folder_path": job_dir,
                 "run_log_path": run_log_path,
@@ -389,20 +385,17 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     logger.log(f"Query: {query}")
     logger.log(
         f"Run settings: top_k={top_k}, model_top_k={model_top_k}, per_table_search_k={table_search_k or 1}, "
-        f"card2card={card2card_retrieval_mode}, "
+        f"query2modelcard_retrieval={query2modelcard_retrieval_mode}, "
         f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}, "
         f"require_seed_has_tables={require_seed_has_tables}"
     )
     # Print runtime device once per pipeline run for easier debugging/profiling.
     dev = get_device()
     if dev == "cuda":
-        try:
-            import torch
-            gpu_count = int(torch.cuda.device_count())
-            gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
-            logger.log(f"Runtime device: {dev} (gpu_count={gpu_count}, gpu0={gpu_name})")
-        except Exception as e:
-            logger.log(f"Runtime device: {dev} (gpu details unavailable: {e})")
+        import torch
+        gpu_count = int(torch.cuda.device_count())
+        gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
+        logger.log(f"Runtime device: {dev} (gpu_count={gpu_count}, gpu0={gpu_name})")
     else:
         logger.log(f"Runtime device: {dev}")
     logger.set_status("running")
@@ -412,10 +405,10 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     table_resources = [r for r in raw_resources if r in ("hugging", "github", "arxiv")]
     if not table_resources:
         table_resources = list(TABLE_RESOURCE_ALLOWLIST)
-    # Query2Card / card2card search: full corpus (EMB_NPZ + full sparse when hybrid).
+    # Query2ModelCard full-corpus step (EMB_NPZ + sparse when retrieval_mode is sparse/hybrid).
     model_resources_full = ["hugging", "github", "arxiv"]
     # Table-search seed uses hugging-only embeddings by current table_resources default.
-    logger.log(f"Resources: Query2Card/card2card={model_resources_full}, table CLI={table_resources}")
+    logger.log(f"Resources: Query2ModelCard (full index)={model_resources_full}, table CLI={table_resources}")
 
     def _table_emb_npz_for_resources(resources: List[str]) -> str:
         rset = set(str(r).strip().lower() for r in (resources or []) if str(r).strip())
@@ -464,14 +457,14 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     from src.search.query2modelcard import search_query2modelcard
     logger.log(
         f"[query2modelcard_full] INPROC: search_query2modelcard("
-        f"query={query!r}, top_k={q2m_top_k_here}, retrieval_mode={card2card_retrieval_mode!r}, "
+        f"query={query!r}, top_k={q2m_top_k_here}, retrieval_mode={query2modelcard_retrieval_mode!r}, "
         f"sparse_index_path={SPARSE_INDEX!r})"
     )
     _ = search_query2modelcard(
         query=query,
         top_k=q2m_top_k_here,
         output_json=q2m_full_path,
-        retrieval_mode=card2card_retrieval_mode,
+        retrieval_mode=query2modelcard_retrieval_mode,
         candidate_factor=10,
         emb_npz_path=EMB_NPZ,
         sparse_index_path=SPARSE_INDEX,
@@ -485,12 +478,9 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     if not data or "results" not in data or not data["results"]:
         logger.log("query2modelcard (full) returned no results")
         logger.set_status("error")
-        logger.set_results({"error": "No model from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        logger.set_results({"error": "No model from query", "model_id": None, "query2modelcard_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
         return
-    try:
-        shutil.copyfile(q2m_full_path, legacy_q2m_path)
-    except OSError as e:
-        logger.log(f"warn: could not copy to query2modelcard.json: {e}")
+    shutil.copyfile(q2m_full_path, legacy_q2m_path)
     results_list = data["results"]
     stored_query = data.get("query", "")
 
@@ -500,7 +490,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     if not query_seed_model_id:
         logger.log("query2modelcard (full) returned empty top-1 model_id")
         logger.set_status("error")
-        logger.set_results({"error": "Empty model_id from query", "model_id": None, "card2card_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        logger.set_results({"error": "Empty model_id from query", "model_id": None, "query2modelcard_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
         return
     logger.log(
         f"Query2Card seed (full index, top-1): {query_seed_model_id!r} "
@@ -527,8 +517,8 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     # IMPORTANT: keep true per-query-table top-k for Tab2Tab (no hidden multiplier).
     k_table = table_search_k_input
 
-    # Card2Card: scaled top_k for left panel lists from query2modelcard ranking.
-    card2card_top_k = max(100, int(model_top_k) * 20)
+    # Query2ModelCard neighbors (model-search column): cap list length for JSON/UI.
+    q2m_neighbor_top_k = max(100, int(model_top_k) * 20)
 
     def _normalize_card2tab2card_payload(payload: Any) -> Dict[str, Any]:
         """
@@ -629,7 +619,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         # Fallback
         return _canonicalize({"model_ids": [], "intermediate": {}, "mappings": {}})
 
-    logger.log("Step 2: Card2Card from query2modelcard rank + Card2Tab2Card (parallel where applicable)...")
+    logger.log("Step 2: Query2ModelCard neighbor list + Card2Tab2Card (serialized workers)...")
 
     def run_card2tab2card(st: str) -> tuple:
         out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
@@ -642,7 +632,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         t0 = time.time()
         from src.search.query2tab2card import search_query2tab2card
         payload = search_query2tab2card(
-            query=(query or ""),
+            query=query,
             search_type=st,
             output_json=out_path,
             table_top_k=k_table,
@@ -670,7 +660,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         for st in card2tab2card_types:
             futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
 
-    card2card_all = {}
     card2tab2card_all = {}
     table_search_empty_reason: Optional[str] = None
 
@@ -706,18 +695,25 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
 
     seed_s = str(query_seed_model_id).strip()
-    if q2m_ordered_model_ids:
-        neighbor_list = [m for m in q2m_ordered_model_ids if m != seed_s][:card2card_top_k]
-        for mode in CARD2CARD_MODES:
-            card2card_all[mode] = list(neighbor_list)
+    # search_results.json: query2modelcard_results / query2modelcard_all_modes from one full-corpus query2modelcard pass.
+    q2m_neighbors_by_mode: Dict[str, List[str]] = {m: [] for m in QUERY2MODELCARD_RETRIEVAL_MODES}
+    mode_primary = str(query2modelcard_retrieval_mode).strip().lower()
+    if mode_primary not in QUERY2MODELCARD_RETRIEVAL_MODES:
         logger.log(
-            f"[Card2Card] {len(neighbor_list)} neighbor ids from query2modelcard order "
-            f"(mirrored to dense/sparse/hybrid)."
+            f"[Query2ModelCard] Unknown retrieval_mode {query2modelcard_retrieval_mode!r}; "
+            f"valid={QUERY2MODELCARD_RETRIEVAL_MODES}. Using 'dense' for neighbor list bucket."
+        )
+        mode_primary = "dense"
+
+    if q2m_ordered_model_ids:
+        neighbor_list = [m for m in q2m_ordered_model_ids if m != seed_s][:q2m_neighbor_top_k]
+        q2m_neighbors_by_mode[mode_primary] = list(neighbor_list)
+        logger.log(
+            f"[Query2ModelCard] {len(neighbor_list)} neighbor ids for retrieval_mode={mode_primary!r} "
+            f"(other entries in query2modelcard_all_modes stay empty — not run in this pipeline)."
         )
     else:
-        for mode in CARD2CARD_MODES:
-            card2card_all[mode] = []
-        logger.log("[Card2Card] Missing query2modelcard ordering list; left panel empty.")
+        logger.log("[Query2ModelCard] Missing query2modelcard ordering list; model-search neighbor lists empty.")
 
     # --- Cap for UI: min(requested model_top_k, max Card2Tab2Card list length) ---
     right_max_models = 0
@@ -776,23 +772,23 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
                 "dense_rerank_applied": False,
             }
 
-    # Cap left side (Card2Card)
-    for mode in CARD2CARD_MODES:
-        val = card2card_all.get(mode)
+    # Cap model-search neighbor lists (query2modelcard_all_modes).
+    for mode in QUERY2MODELCARD_RETRIEVAL_MODES:
+        val = q2m_neighbors_by_mode.get(mode)
         if isinstance(val, list) and len(val) > effective_model_top_k:
-            card2card_all[mode] = val[:effective_model_top_k]
-            logger.log(f"[Card2Card-{mode.upper()}] Truncated to effective_model_top_k={effective_model_top_k}")
+            q2m_neighbors_by_mode[mode] = val[:effective_model_top_k]
+            logger.log(
+                f"[Query2ModelCard-{mode.upper()}] Truncated to effective_model_top_k={effective_model_top_k}"
+            )
 
-    # Primary Card2Card list is strictly the configured retrieval_mode ("dense" by default).
-    primary = card2card_all.get("dense")
+    primary = q2m_neighbors_by_mode.get(mode_primary) or []
     if not isinstance(primary, list):
-        logger.log("[Card2Card] Primary retrieval mode 'dense' missing or errored; returning empty primary list.")
         primary = []
 
     elapsed_total = time.time() - start_time
     logger.log(
         f"Step 3: Done. Total time: {elapsed_total:.2f}s "
-        "(search pipeline only: preload + query2modelcard + Card2Tab2Card×3 + Card2Card list prep; "
+        "(search pipeline only: preload + query2modelcard + Card2Tab2Card×3 + neighbor list prep; "
         "NOT /api/integrate or /api/integrate-model-search — those are separate requests.)"
     )
 
@@ -807,11 +803,11 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         "right_max_models": right_max_models,
         "table_search_k": table_search_k_input,
         "table_resources": table_resources,
-        "card2card_retrieval_mode": card2card_retrieval_mode,
+        "query2modelcard_retrieval_mode": query2modelcard_retrieval_mode,
         "use_by_type": use_by_type,
         "require_seed_has_tables": require_seed_has_tables,
-        "card2card_results": primary,
-        "card2card_all_modes": card2card_all,
+        "query2modelcard_results": primary,
+        "query2modelcard_all_modes": q2m_neighbors_by_mode,
         "card2tab2card_results": card2tab2card_all,
         "timestamp": datetime.fromtimestamp(start_time).isoformat(),
         "folder_path": job_dir,
@@ -907,7 +903,7 @@ def search():
     top_k = int(data.get("top_k", 20))
     table_search_k = data.get("table_search_k")
     model_top_k = int(data.get("model_top_k", 5))
-    card2card_retrieval_mode = data.get("card2card_retrieval_mode", "dense")
+    query2modelcard_retrieval_mode = data.get("query2modelcard_retrieval_mode", "dense")
     require_seed_has_tables = bool(data.get("require_seed_has_tables", True))
     use_by_type = bool(data.get("use_by_type", False))
 
@@ -920,7 +916,7 @@ def search():
 
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(job_id, query, top_k, None, table_search_k, card2card_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
+        args=(job_id, query, top_k, None, table_search_k, query2modelcard_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
     )
     thread.daemon = True
     thread.start()
@@ -967,7 +963,7 @@ def _load_job_extras(job_id: str) -> dict:
                 run = json.load(f)
             m, t = run.get("model_result"), run.get("table_result")
             if m and m.get("status") == "success":
-                mk = _model_search_key(run.get("integration_type"), run.get("card2card_retrieval_mode"))
+                mk = _model_search_key(run.get("integration_type"), run.get("query2modelcard_retrieval_mode"))
                 if not any(r["key"] == mk for r in model_runs):
                     model_runs.append({"key": mk, **m})
             if t and t.get("status") == "success":
@@ -978,7 +974,7 @@ def _load_job_extras(job_id: str) -> dict:
         out["model_search_runs"] = model_runs
     elif out.get("integration_model_search") and out["integration_model_search"].get("status") == "success":
         m = out["integration_model_search"]
-        out["model_search_runs"] = [{"key": _model_search_key(m.get("integration_type"), m.get("card2card_retrieval_mode")), **m}]
+        out["model_search_runs"] = [{"key": _model_search_key(m.get("integration_type"), m.get("query2modelcard_retrieval_mode")), **m}]
     if table_runs:
         out["table_search_runs"] = table_runs
     elif out.get("integration_table_search") and out["integration_table_search"].get("status") == "success":
@@ -1043,10 +1039,7 @@ def get_table_preview():
     resolved = _resolve_table_file_for_preview(path_q)
     if not resolved:
         return jsonify({"status": "error", "message": "Table file not found or access denied"}), 404
-    try:
-        df = pd.read_csv(resolved, nrows=MAX_TABLE_PREVIEW_JSON_ROWS)
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"Failed to read CSV: {e}"}), 500
+    df = pd.read_csv(resolved, nrows=MAX_TABLE_PREVIEW_JSON_ROWS)
     ncols = int(df.shape[1])
     if ncols > MAX_TABLE_PREVIEW_JSON_COLS:
         df = df.iloc[:, :MAX_TABLE_PREVIEW_JSON_COLS]
@@ -1123,39 +1116,35 @@ def table_search_preview():
     sr = _read_json_job(job_id, "search_results.json")
     if not isinstance(sr, dict):
         return _api_error(f"search_results.json not found for job {job_id}", 404)
-    try:
-        from src.integration.pipeline_preview import prepare_query2tab2card_preview
-
-        preview, prep_err = prepare_query2tab2card_preview(
-            search_results=sr,
-            search_type=search_type,
-            tables_source=tables_source,
-            table_resources=tr_list,
-        )
-        if prep_err:
-            return jsonify({"status": "no_result", "message": prep_err, "search_type": search_type, "tables_source": tables_source})
-        return jsonify(
-            {
-                "status": "success",
-                "search_type": search_type,
+    from src.integration.pipeline_preview import prepare_query2tab2card_preview
+    preview, prep_err = prepare_query2tab2card_preview(
+        search_results=sr,
+        search_type=search_type,
+        tables_source=tables_source,
+        table_resources=tr_list,
+    )
+    if prep_err:
+        return jsonify({"status": "no_result", "message": prep_err, "search_type": search_type, "tables_source": tables_source})
+    return jsonify(
+        {
+            "status": "success",
+            "search_type": search_type,
+            "tables_source": tables_source,
+            "query_tables": preview.get("query_tables", []),
+            "table_paths": preview.get("table_paths", []),
+            "model_to_table_paths": preview.get("model_to_table_paths_ts", {}),
+            "models_with_tables": preview.get("models_with_tables_list", []),
+            "pipeline_trace": preview.get("pipeline_trace", {}),
+            "tab2tab_trace_rows": preview.get("tab2tab_trace_rows", []),
+            "after_model_cap_trace_rows": preview.get("after_model_cap_trace_rows", []),
+            "retrieved_table_model_rows": preview.get("after_model_cap_trace_rows", []),
+            "stats": {
+                "total_unique_tables": len(preview.get("table_paths", [])),
+                "models_with_tables": len(preview.get("models_with_tables_list", [])),
                 "tables_source": tables_source,
-                "query_tables": preview.get("query_tables", []),
-                "table_paths": preview.get("table_paths", []),
-                "model_to_table_paths": preview.get("model_to_table_paths_ts", {}),
-                "models_with_tables": preview.get("models_with_tables_list", []),
-                "pipeline_trace": preview.get("pipeline_trace", {}),
-                "tab2tab_trace_rows": preview.get("tab2tab_trace_rows", []),
-                "after_model_cap_trace_rows": preview.get("after_model_cap_trace_rows", []),
-                "retrieved_table_model_rows": preview.get("after_model_cap_trace_rows", []),
-                "stats": {
-                    "total_unique_tables": len(preview.get("table_paths", [])),
-                    "models_with_tables": len(preview.get("models_with_tables_list", [])),
-                    "tables_source": tables_source,
-                },
-            }
-        )
-    except Exception as e:
-        return _api_error(f"preview failed: {e}", 500)
+            },
+        }
+    )
 
 
 @app.route("/api/model-search-preview", methods=["POST"])
@@ -1165,7 +1154,7 @@ def model_search_preview():
     job_id, err = _require_job_id(data)
     if err is not None:
         return err
-    card2card_mode = str(data.get("card2card_retrieval_mode") or "dense").strip().lower()
+    q2m_mode = str(data.get("query2modelcard_retrieval_mode") or "dense").strip().lower()
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
 
@@ -1173,15 +1162,15 @@ def model_search_preview():
     if not isinstance(sr, dict):
         return _api_error(f"search_results.json not found for job {job_id}", 404)
 
-    modes = sr.get("card2card_all_modes") if isinstance(sr.get("card2card_all_modes"), dict) else {}
-    mids_raw = modes.get(card2card_mode, [])
+    modes = sr.get("query2modelcard_all_modes") if isinstance(sr.get("query2modelcard_all_modes"), dict) else {}
+    mids_raw = modes.get(q2m_mode, [])
     model_ids = [str(x).strip() for x in (mids_raw if isinstance(mids_raw, list) else []) if str(x).strip()]
     if not model_ids:
         return jsonify(
             {
                 "status": "no_result",
-                "message": f"No model ids for retrieval mode {card2card_mode!r}",
-                "card2card_retrieval_mode": card2card_mode,
+                "message": f"No model ids for retrieval mode {q2m_mode!r}",
+                "query2modelcard_retrieval_mode": q2m_mode,
             }
         )
 
@@ -1192,7 +1181,7 @@ def model_search_preview():
     return jsonify(
         {
             "status": "success",
-            "card2card_retrieval_mode": card2card_mode,
+            "query2modelcard_retrieval_mode": q2m_mode,
             "models_with_tables": model_ids,
             "table_paths": table_paths,
             "model_to_table_paths": model_to_table_paths,
@@ -1216,7 +1205,7 @@ def list_saved_searches():
     searches = []
     for name, path, _ in candidates[:50]:
         json_path = os.path.join(path, "search_results.json")
-        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "model_top_k": None, "use_by_type": False, "require_seed_has_tables": False, "card2card_retrieval_mode": None, "table_search_k": None}
+        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "model_top_k": None, "use_by_type": False, "require_seed_has_tables": False, "query2modelcard_retrieval_mode": None, "table_search_k": None}
         with open(json_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
         entry["query"] = saved.get("query") or ""
@@ -1229,7 +1218,7 @@ def list_saved_searches():
         entry["model_top_k"] = saved.get("model_top_k")
         entry["use_by_type"] = bool(saved.get("use_by_type", False))
         entry["require_seed_has_tables"] = bool(saved.get("require_seed_has_tables", False))
-        entry["card2card_retrieval_mode"] = saved.get("card2card_retrieval_mode")
+        entry["query2modelcard_retrieval_mode"] = saved.get("query2modelcard_retrieval_mode")
         entry["table_search_k"] = saved.get("table_search_k")
         searches.append(entry)
     return jsonify({"status": "success", "searches": searches})
@@ -1333,7 +1322,7 @@ def integrate():
 
 @app.route("/api/integrate-model-search", methods=["POST"])
 def integrate_model_search():
-    """Integrate tables from Card2Card (model search) results"""
+    """Integrate tables from query2modelcard neighbor list (model search)."""
     t_integrate = time.time()
     data = request.get_json()
     job_id, err = _require_job_id(data)
@@ -1346,28 +1335,28 @@ def integrate_model_search():
     integration_type = data.get("integration_type", "alite")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
-    card2card_retrieval_mode = data.get("card2card_retrieval_mode") or None
+    query2modelcard_retrieval_mode = data.get("query2modelcard_retrieval_mode") or None
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
-    from src.integration.table_integration import integrate_tables_from_card2card
+    from src.integration.table_integration import integrate_tables_from_query2modelcard
     
-    result = integrate_tables_from_card2card(
+    result = integrate_tables_from_query2modelcard(
         search_results_json=results_file,
         integration_type=integration_type,
         k=k,
         max_models=max_models,
-        card2card_retrieval_mode=card2card_retrieval_mode,
+        query2modelcard_retrieval_mode=query2modelcard_retrieval_mode,
         table_resources=tr_list,
     )
-    run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
-    mode_s = card2card_retrieval_mode or "dense"
+    run_key = _model_search_key(integration_type, query2modelcard_retrieval_mode or "dense")
+    mode_s = query2modelcard_retrieval_mode or "dense"
 
     elapsed_s = round(time.time() - t_integrate, 4)
     if not result.get("success", False):
         save_payload = {
             "status": "no_result",
             "integration_type": integration_type,
-            "card2card_retrieval_mode": mode_s,
+            "query2modelcard_retrieval_mode": mode_s,
             "k": k,
             "max_models": max_models,
             "integration_elapsed_s": elapsed_s,
@@ -1399,7 +1388,7 @@ def integrate_model_search():
     save_payload = {
         "status": "success",
         "integration_type": integration_type,
-        "card2card_retrieval_mode": mode_s,
+        "query2modelcard_retrieval_mode": mode_s,
         "k": k,
         "max_models": max_models,
         "integration_elapsed_s": elapsed_s,
@@ -1410,7 +1399,7 @@ def integrate_model_search():
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
     with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
-    line = f"Integration (model search) OK in {elapsed_s:.2f}s (type={integration_type}, card2card_mode={mode_s})"
+    line = f"Integration (model search) OK in {elapsed_s:.2f}s (type={integration_type}, query2modelcard_retrieval_mode={mode_s})"
     print(f"[integrate-model-search] job_id={job_id} {line}", flush=True)
     _append_pipeline_log(job_dir, line)
     return jsonify({"status": "success", "integration_elapsed_s": elapsed_s, **result})
@@ -1475,18 +1464,19 @@ def evaluate():
     if table2_df is None or table2_df.empty:
         return jsonify({"status": "error", "message": "Model Search integration not found. Please run Model Search integration first."}), 400
 
-    # Load query from search results
-    query = "model search query"
     sr = _read_json_job(job_id, "search_results.json")
-    if sr:
-        query = sr.get("query") or query
+    query = _resolve_eval_qa_query(data, sr)
+    if not query:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Missing search query: pass a non-empty `query` in the request body, or run a search so search_results.json contains a non-empty `query`.",
+            }
+        ), 400
 
-    try:
-        sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from evaluation.llm import evaluate_diversity_with_llm
-        result = evaluate_diversity_with_llm(query=query, table1=table1_df, table2=table2_df, table1_source="Table Search Integration", table2_source="Model Search Integration")
-    except ValueError as ve:
-        return jsonify({"status": "error", "message": f"Evaluation failed: {str(ve)}"}), 500
+    sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+    from evaluation.llm import evaluate_diversity_with_llm
+    result = evaluate_diversity_with_llm(query=query, table1=table1_df, table2=table2_df, table1_source="Table Search Integration", table2_source="Model Search Integration")
 
     result = _sanitize_for_js_template(result)
 
@@ -1521,41 +1511,34 @@ def qa():
     else:
         table_df = _load_integrated_table_from_json(job_dir, "integration_model_search.json")
         table_source = "Model Search Integration"
-        qa_mode = "card2card"
+        qa_mode = "query2modelcard"
 
     if table_df is None:
         table_df = pd.DataFrame()
 
-    # Load query and search results from job
-    results_file = os.path.join(job_dir, "search_results.json")
-    query = "model search query"
-    search_results_data = None
+    sr = _read_json_job(job_id, "search_results.json")
+    query = _resolve_eval_qa_query(data, sr)
+    if not query:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Missing search query: pass a non-empty `query` in the request body, or run a search so search_results.json contains a non-empty `query`.",
+            }
+        ), 400
+
+    search_results_data = sr if isinstance(sr, dict) else None
     model_ids_to_rank = None
+    if isinstance(sr, dict) and not use_table_search:
+        modes = sr.get("query2modelcard_all_modes")
+        rmode = sr.get("query2modelcard_retrieval_mode")
+        if isinstance(modes, dict) and isinstance(rmode, str):
+            mids = modes.get(rmode)
+            if isinstance(mids, list) and mids:
+                model_ids_to_rank = list(mids)[:50]
 
-    if os.path.exists(results_file):
-        with open(results_file, "r", encoding="utf-8") as f:
-            sr = json.load(f)
-        query = sr.get("query") or query
-        search_results_data = sr
-
-        # Extract model_ids for ranking with strict schema:
-        # - If we used Table Search, do not infer model_ids_to_rank from other sources (leave as None).
-        # - Else, use only the configured Card2Card retrieval_mode list when available.
-        if not use_table_search:
-            modes = sr.get("card2card_all_modes")
-            rmode = sr.get("card2card_retrieval_mode")
-            if isinstance(modes, dict) and isinstance(rmode, str):
-                mids = modes.get(rmode)
-                if isinstance(mids, list) and mids:
-                    model_ids_to_rank = list(mids)[:50]
-
-    try:
-        sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-        from evaluation.llm_qa import answer_question_with_llm
-
-        result = answer_question_with_llm(query=query, table=table_df, table_source=table_source, qa_mode=qa_mode, model_ids_to_rank=model_ids_to_rank, search_results_data=search_results_data)
-    except ValueError as ve:
-        return jsonify({"status": "error", "message": f"QA failed: {str(ve)}"}), 500
+    sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+    from evaluation.llm_qa import answer_question_with_llm
+    result = answer_question_with_llm(query=query, table=table_df, table_source=table_source, qa_mode=qa_mode, model_ids_to_rank=model_ids_to_rank, search_results_data=search_results_data)
 
     qa_answer = result.get("answer")
     if not isinstance(qa_answer, dict):
@@ -1587,12 +1570,9 @@ def save_integration_run():
     os.makedirs(job_dir, exist_ok=True)
     safe_key = re.sub(r"[^a-z0-9_]", "_", (key or "").lower().strip()) or "run"
     path = os.path.join(job_dir, f"integration_run_{safe_key}.json")
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=0)
-        return jsonify({"status": "success"})
-    except Exception as e:
-        return _api_error(str(e), 500)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=0)
+    return jsonify({"status": "success"})
 
 
 @app.route("/api/save-evaluation", methods=["POST"])
@@ -1605,12 +1585,9 @@ def save_evaluation():
     job_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
     path = os.path.join(job_dir, "evaluation_results.json")
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=0)
-        return jsonify({"status": "success"})
-    except Exception as e:
-        return _api_error(str(e), 500)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=0)
+    return jsonify({"status": "success"})
 
 
 @app.route("/api/save-qa", methods=["POST"])
@@ -1623,12 +1600,9 @@ def save_qa():
     job_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
     path = os.path.join(job_dir, "qa_results.json")
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=0)
-        return jsonify({"status": "success"})
-    except Exception as e:
-        return _api_error(str(e), 500)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=0)
+    return jsonify({"status": "success"})
 
 
 if __name__ == "__main__":
@@ -1651,13 +1625,10 @@ if __name__ == "__main__":
             "Set BACKEND_SKIP_WARMUP=1 or --no-warmup to skip; BACKEND_LOAD_QUIET=1 to silence [load] details.",
             flush=True,
         )
-        try:
-            from src.search.query2modelcard import warmup_dense_runtimes_for_backend
+        from src.search.query2modelcard import warmup_dense_runtimes_for_backend
 
-            warmup_dense_runtimes_for_backend(log=lambda m: print(m, flush=True))
-            print("[startup] Warmup finished. Binding HTTP server...", flush=True)
-        except Exception as e:
-            print(f"[warmup] failed (server still starts; first job may be slow): {e}", flush=True)
+        warmup_dense_runtimes_for_backend(log=lambda m: print(m, flush=True))
+        print("[startup] Warmup finished. Binding HTTP server...", flush=True)
     else:
         print("[startup] Warmup skipped (--no-warmup or BACKEND_SKIP_WARMUP=1).", flush=True)
     port = args.port if args.port is not None else int(os.environ.get("PORT", "5002"))

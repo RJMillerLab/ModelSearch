@@ -1,7 +1,5 @@
 """
 Table to Table Search (Blend_internal) via in-process import.
-
-The legacy subprocess wrapper is preserved in `src/search/tab2tab_CLI.py`.
 """
 
 from __future__ import annotations

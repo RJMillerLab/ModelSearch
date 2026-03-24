@@ -36,7 +36,7 @@ def get_qa_prompt(
             f"Do not add or remove any model IDs from this list.\n"
         )
 
-    if qa_mode == "card2card":
+    if qa_mode == "query2modelcard":
         mode_instructions = """
 ## Analysis Mode: Card2Card (Model Card Based)
 - **Primary Source**: Model card information (text descriptions, metadata, specifications)

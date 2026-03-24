@@ -85,7 +85,7 @@ def run_one_query(
     mode: str = "query",
     top_k: int = 100,
     table_search_k: int = 3,
-    card2card_retrieval_mode: str = "dense",
+    query2modelcard_retrieval_mode: str = "dense",
     require_seed_has_tables: bool = True,
     use_by_type: bool = False,
     run_integration: bool = False,
@@ -104,7 +104,7 @@ def run_one_query(
         "top_k": top_k,
         "tab2tab_mode": "search",
         "table_search_k": table_search_k,
-        "card2card_retrieval_mode": card2card_retrieval_mode,
+        "query2modelcard_retrieval_mode": query2modelcard_retrieval_mode,
         "use_by_type": use_by_type,
     }
     if mode == "query":
@@ -143,7 +143,7 @@ def run_one_query(
     if not run_integration:
         return outcome
 
-    # Run model-search integration (Card2Card) and table-search integration (Card2Tab2Card),
+    # Run model-search integration (query2modelcard neighbors) and table-search integration (Card2Tab2Card),
     # mirroring frontend's runBothIntegrations behavior (simplified defaults).
     print("    ↳ Running integrations (model + table)...")
     model_int_url = f"{backend_url}/api/integrate-model-search"
@@ -155,7 +155,7 @@ def run_one_query(
         "integration_type": integration_type,
         "k": integration_k,
         "max_models": integration_max_models,
-        "card2card_retrieval_mode": card2card_retrieval_mode,
+        "query2modelcard_retrieval_mode": query2modelcard_retrieval_mode,
     }
     model_int_res: Optional[Dict[str, Any]] = None
     try:
@@ -313,7 +313,7 @@ def main() -> int:
                 mode="query",
                 top_k=args.top_k,
                 table_search_k=args.table_search_k,
-                card2card_retrieval_mode="dense",
+                query2modelcard_retrieval_mode="dense",
                 require_seed_has_tables=require_seed_has_tables,
                 use_by_type=bool(args.use_by_type),
                 run_integration=bool(args.run_integration),

@@ -485,15 +485,15 @@ def integrate_tables_from_card2tab2card(
     print(f"⏱️  Table Search integration elapsed: {elapsed:.2f}s (tables_source={tables_source})")
     return result
 
-def integrate_tables_from_card2card(
+def integrate_tables_from_query2modelcard(
     search_results_json: str,
     integration_type: str = "union",
     k: int = 10,
     max_models: int = 10,
-    card2card_retrieval_mode: Optional[str] = None,
+    query2modelcard_retrieval_mode: Optional[str] = None,
     table_resources: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Integrate tables from backend search_results.json Card2Card payloads."""
+    """Integrate tables from backend search_results.json query2modelcard neighbor lists."""
     t0 = time.time()
     print(f"\n{'='*60}")
     print(f"🔗 Table Integration from Model Search Results")
@@ -515,26 +515,26 @@ def integrate_tables_from_card2card(
     print(f"ℹ️  Parquet table-list columns scoped to resources={_scope_c2c} (hugging/github/arxiv/llm)")
     
     # Only support the current backend schema:
-    # search_results["card2card_all_modes"][mode] or search_results["card2card_results"]
+    # search_results["query2modelcard_all_modes"][mode] or search_results["query2modelcard_results"]
     if not isinstance(search_results, dict):
-        return {"success": False, "error": "search_results.json must be a backend Card2Card payload object", "integrated_table": None}
+        return {"success": False, "error": "search_results.json must be a backend query2modelcard payload object", "integrated_table": None}
 
-    if card2card_retrieval_mode:
-        card2card_all_modes = search_results.get("card2card_all_modes")
-        if not isinstance(card2card_all_modes, dict):
-            return {"success": False, "error": "search_results.json must contain card2card_all_modes when card2card_retrieval_mode is specified", "integrated_table": None}
-        card2card_results = card2card_all_modes.get(card2card_retrieval_mode)
-        if isinstance(card2card_results, dict) and card2card_results.get("error"):
-            return {"success": False, "error": f"Card2Card mode '{card2card_retrieval_mode}' failed: {card2card_results.get('error')}", "integrated_table": None}
-        if not isinstance(card2card_results, list):
-            return {"success": False, "error": f"Card2Card mode '{card2card_retrieval_mode}' is missing or not a list", "integrated_table": None}
+    if query2modelcard_retrieval_mode:
+        all_modes = search_results.get("query2modelcard_all_modes")
+        if not isinstance(all_modes, dict):
+            return {"success": False, "error": "search_results.json must contain query2modelcard_all_modes when query2modelcard_retrieval_mode is specified", "integrated_table": None}
+        q2m_results = all_modes.get(query2modelcard_retrieval_mode)
+        if isinstance(q2m_results, dict) and q2m_results.get("error"):
+            return {"success": False, "error": f"query2modelcard retrieval_mode '{query2modelcard_retrieval_mode}' failed: {q2m_results.get('error')}", "integrated_table": None}
+        if not isinstance(q2m_results, list):
+            return {"success": False, "error": f"query2modelcard retrieval_mode '{query2modelcard_retrieval_mode}' is missing or not a list", "integrated_table": None}
     else:
-        card2card_results = search_results.get("card2card_results")
-        if not isinstance(card2card_results, list):
-            return {"success": False, "error": "search_results.json must contain card2card_results as a list", "integrated_table": None}
+        q2m_results = search_results.get("query2modelcard_results")
+        if not isinstance(q2m_results, list):
+            return {"success": False, "error": "search_results.json must contain query2modelcard_results as a list", "integrated_table": None}
 
     model_ids = []
-    for item in card2card_results:
+    for item in q2m_results:
         if isinstance(item, str):
             model_ids.append(item)
         elif isinstance(item, dict) and "modelId" in item:
@@ -542,10 +542,10 @@ def integrate_tables_from_card2card(
         elif isinstance(item, dict) and "model_id" in item:
             model_ids.append(item["model_id"])
     if not model_ids:
-        return {"success": False, "error": "No model IDs found in Card2Card results", "integrated_table": None}
+        return {"success": False, "error": "No model IDs found in query2modelcard results", "integrated_table": None}
     
-    print(f"✅ Found {len(model_ids)} models in Card2Card results")
-    print(f"   Processing {len(model_ids)} models from Card2Card")
+    print(f"✅ Found {len(model_ids)} models in query2modelcard results")
+    print(f"   Processing {len(model_ids)} models from query2modelcard neighbor list")
 
     # Collect all table paths from all models; also build model_id -> table_paths for UI debug
     # Fast path: DuckDB batch query (single SQL scan, no full parquet load)

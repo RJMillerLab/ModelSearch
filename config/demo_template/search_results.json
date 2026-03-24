@@ -3,12 +3,13 @@
   "model_id": "senseable/33x-coder",
   "timestamp": "2025-01-01T00:00:00",
   "top_k": 50,
-  "card2card_retrieval_mode": "dense",
-  "card2card_all_modes": {
+  "query2modelcard_retrieval_mode": "dense",
+  "query2modelcard_all_modes": {
     "dense": [],
     "sparse": [],
     "hybrid": []
   },
+  "query2modelcard_results": [],
   "card2tab2card_results": {
     "keyword": {
       "model_ids": [],

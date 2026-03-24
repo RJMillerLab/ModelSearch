@@ -160,12 +160,12 @@ def _normalize_model_id_list(raw_list) -> List[str]:
     return out
 
 
-def extract_card2card_models(
+def extract_query2modelcard_models(
     search_results: Dict,
     mode: str = "dense",
 ) -> List[str]:
     """
-    Extract a ranked model list from card2card results.
+    Extract a ranked model list from query2modelcard neighbor lists in search_results.json.
 
     Args:
         search_results: Loaded JSON from search_results.json.
@@ -175,15 +175,13 @@ def extract_card2card_models(
         List of model IDs (strings) in ranked order.
     """
     mode = (mode or "dense").strip().lower()
-    # Preferred: card2card_all_modes[mode]
-    all_modes = search_results.get("card2card_all_modes") or {}
+    all_modes = search_results.get("query2modelcard_all_modes") or {}
     raw = all_modes.get(mode)
     if isinstance(raw, dict) and "error" in raw:
         raw = []
     models = _normalize_model_id_list(raw) if raw is not None else []
-    # Fallback: top-level card2card_results (primary list)
     if not models:
-        primary = search_results.get("card2card_results")
+        primary = search_results.get("query2modelcard_results")
         models = _normalize_model_id_list(primary)
     return models
 
@@ -226,9 +224,9 @@ def load_results_from_search_results_json(
     This does NOT change the script's CLI. It is intended to be imported from
     Python or used in notebooks. Source strings are of the form:
 
-        "card2card:dense"
-        "card2card:sparse"
-        "card2card:hybrid"
+        "query2modelcard:dense"
+        "query2modelcard:sparse"
+        "query2modelcard:hybrid"
         "card2tab2card:keyword"
         "card2tab2card:single_column"
         "card2tab2card:unionable"
@@ -242,7 +240,7 @@ def load_results_from_search_results_json(
 
         a, b = load_results_from_search_results_json(
             "data/jobs/<job_id>/search_results.json",
-            system_a_source="card2card:dense",
+            system_a_source="query2modelcard:dense",
             system_b_source="card2tab2card:keyword",
         )
         # prepare item_features dict...
@@ -253,25 +251,29 @@ def load_results_from_search_results_json(
     def _parse_source(src: str) -> Tuple[str, str]:
         parts = (src or "").split(":", 1)
         if len(parts) != 2:
-            raise ValueError(f"Invalid source spec '{src}'. Expected kind:arg, e.g. card2card:dense")
+            raise ValueError(f"Invalid source spec '{src}'. Expected kind:arg, e.g. query2modelcard:dense")
         return parts[0].strip().lower(), parts[1].strip()
 
     kind_a, arg_a = _parse_source(system_a_source)
     kind_b, arg_b = _parse_source(system_b_source)
 
-    if kind_a == "card2card":
-        res_a = extract_card2card_models(data, mode=arg_a)
+    if kind_a == "query2modelcard":
+        res_a = extract_query2modelcard_models(data, mode=arg_a)
     elif kind_a == "card2tab2card":
         res_a = extract_card2tab2card_models(data, search_type=arg_a)
     else:
-        raise ValueError(f"Unknown system_a_source kind '{kind_a}' (expected 'card2card' or 'card2tab2card')")
+        raise ValueError(
+            f"Unknown system_a_source kind '{kind_a}' (expected 'query2modelcard' or 'card2tab2card')"
+        )
 
-    if kind_b == "card2card":
-        res_b = extract_card2card_models(data, mode=arg_b)
+    if kind_b == "query2modelcard":
+        res_b = extract_query2modelcard_models(data, mode=arg_b)
     elif kind_b == "card2tab2card":
         res_b = extract_card2tab2card_models(data, search_type=arg_b)
     else:
-        raise ValueError(f"Unknown system_b_source kind '{kind_b}' (expected 'card2card' or 'card2tab2card')")
+        raise ValueError(
+            f"Unknown system_b_source kind '{kind_b}' (expected 'query2modelcard' or 'card2tab2card')"
+        )
 
     return res_a, res_b
 
