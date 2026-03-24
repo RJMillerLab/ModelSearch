@@ -120,9 +120,8 @@ def _normalize_val_to_items(val):
 
 def _get_tables_per_model(model_ids: list) -> dict:
     """
-    Legacy: load full parquet + per-model filter 
-
-    Deprecated: load parquet is slow
+    Slow path: read full relationship parquet and filter to ``model_ids``.
+    Prefer batch SQL helpers (e.g. ``_get_models_to_tables_batch_sql``) for speed.
     """
     import pandas as pd
     from src.config import RELATIONSHIP_PARQUET
@@ -304,11 +303,10 @@ def load_modelid_to_csvlist(model_id: str, resources: Optional[List[str]] = None
 @lru_cache(maxsize=16384)
 def model_id_has_resolvable_local_tables(model_id: str, frozen_resources: Tuple[str, ...]) -> bool:
     """
-    True if relationship parquet lists ≥1 table basename for `frozen_resources` and
-    `resolve_table_path` finds an existing file under TABLE_BASE_DIRS.
+    True if relationship parquet lists ≥1 table basename for ``frozen_resources`` and
+    ``resolve_table_path`` finds an existing file under ``TABLE_BASE_DIRS``.
 
-    `require_seed_has_tables` must use this (not parquet membership alone); otherwise models like
-    Petercusin/... pass the allowlist but Card2Tab2Card sees zero query_tables when CSVs are missing locally.
+    Parquet alone can list basenames whose files are absent on disk; this checks local resolvability.
     """
     mid = str(model_id).strip()
     if not mid:
@@ -335,7 +333,7 @@ def _load_modelid_to_csv_expand(resources: Optional[List[str]] = None) -> pd.Dat
     Deprecated: so slow, each time generate an intermediate dataframe
     """
     parquet_path = RELATIONSHIP_PARQUET
-    # Backward compatible default: union all 4 source list columns.
+    # When ``resources`` is omitted: union all four source list columns.
     selected_cols: List[str]
     if not resources:
         selected_cols = [
@@ -401,7 +399,7 @@ def classify_resource(basename: str) -> str:
     # html/arxiv: 0705.2450v1_table39.csv or 1234.5678_table3.csv
     if re.fullmatch(r"\d+\.\d+(?:v\d+)?_table\d+\.csv", b):
         return "arxiv"
-    # hugging: 10 hex + _tableN OR fallback
+    # hugging: 10 hex + _tableN, or any basename matching *_tableN.csv
     if re.fullmatch(r"[0-9a-f]{10}_table\d+\.csv", b) or re.fullmatch(r".+_table\d+\.csv", b):
         return "hugging"
     raise ValueError(f"Unknown resource: {basename}")
@@ -649,7 +647,7 @@ def table_to_markdown(df, max_rows: int = 50) -> str:
     if df is None or df.empty:
         return "*Empty table*"
     df_display = df.head(max_rows)
-    # Prefer pipe-style markdown table; fallback to plain text if tabulate is unavailable.
+    # Prefer pipe-style markdown; if ``to_markdown`` fails, use a fenced plain-text block.
     try:
         md = df_display.to_markdown(index=False)
     except Exception:

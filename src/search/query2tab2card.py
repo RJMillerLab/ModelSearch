@@ -115,10 +115,21 @@ def search_query2tab2card(
             "query_seed_model_id": "",
             "query2modelcard_model_ids": [],
             "query2tab2card_model_ids": [],
+            "query_tables": [],
+            "searched_tables": [],
+            "model_ids": [],
             "mappings": {
                 "card_to_related_tables": {},
                 "query_table_to_retrieved_tables": {},
                 "retrieved_table_to_related_models": {},
+                "model_id_to_related_tables": {},
+                "tab2tab_retrieved_table_to_related_models": {},
+            },
+            "intermediate": {
+                "table_to_models": {},
+                "retrieved_table_filenames": [],
+                "query_table_to_retrieved_tables": {},
+                "table_id_to_filename": {},
             },
             "pipeline_trace": {
                 "query2modelcard": {"model_ids": []},

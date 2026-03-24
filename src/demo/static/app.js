@@ -651,7 +651,6 @@
                     model_top_k: modelTopK,
                     query2modelcard_retrieval_mode: query2modelcardRetrievalMode,
                     query: query,
-                    require_seed_has_tables: true,
                 };
                 
                 const response = await fetch('{{BACKEND_URL}}/api/search', {

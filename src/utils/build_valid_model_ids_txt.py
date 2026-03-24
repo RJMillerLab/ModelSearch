@@ -6,8 +6,7 @@ Build the parquet first::
 
   python scripts/build_model_to_tables_explode_parquet.py
 
-Note: The demo backend `require_seed_has_tables` is legacy API-only; table flow uses query2tab2card.
-This script is still useful for offline lists / debugging.
+Aligns with the same explode parquet as `load_modelid_to_csvlist` / table search. Useful for offline allowlists and debugging.
 
 Usage:
   python -m src.utils.build_valid_model_ids_txt --output data/valid_model_ids_with_tables_hugging.txt --resources hugging

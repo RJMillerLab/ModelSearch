@@ -91,8 +91,8 @@ def _run_integration_and_save(
 # Log basenames to skip (not search-result logs)
 _SKIP_LOG_STEMS = frozenset({"backend", "frontend"})
 
-# Fallback result JSON paths when log does not contain "Results saved to ..."
-# (e.g. card2card/query2modelcard run without --output_json; multi_column may crash before save)
+# Default result JSON paths by log stem when no "Results saved to ... .json" line is found
+# (e.g. run without --output_json or crash before save).
 _LOG_DEFAULT_JSON = {
     "card2card_dense": "data/card2card_neighbors.json",
     "card2card_hybrid": "data/card2card_neighbors.json",
@@ -115,7 +115,7 @@ def extract_json_path_from_log(log_path: str) -> Optional[str]:
         if matches:
             raw = matches[-1]
             return raw
-    # Fallback: try default path for known log names (if file exists)
+    # Try default path for known log stems (if present).
     log_name = Path(log_path).stem
     default_rel = _LOG_DEFAULT_JSON.get(log_name)
     if default_rel:
@@ -363,7 +363,7 @@ def main():
             print(f"  - {f}")
     print("\nWhat this means:")
     print("  - Generated = one md file written per log (see output_dir, e.g. md/*.md)")
-    print("  - Failed = log has no 'Results saved to ... .json' line (and no fallback file); skip or run that search with --output_json to get a result file")
+    print("  - Failed = log has no 'Results saved to ... .json' line and no default-path JSON for that log stem; skip or run that search with --output_json to get a result file")
 
 
 if __name__ == "__main__":

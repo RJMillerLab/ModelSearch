@@ -86,7 +86,6 @@ def run_one_query(
     top_k: int = 100,
     table_search_k: int = 3,
     query2modelcard_retrieval_mode: str = "dense",
-    require_seed_has_tables: bool = True,
     use_by_type: bool = False,
     run_integration: bool = False,
     integration_type: str = "alite",
@@ -109,7 +108,6 @@ def run_one_query(
     }
     if mode == "query":
         req_body["query"] = query
-        req_body["require_seed_has_tables"] = bool(require_seed_has_tables)
     else:
         # For completeness; not used when driving from preset_queries.json
         req_body["model_id"] = query
@@ -227,16 +225,6 @@ def main() -> int:
         help="Model card top_k for Card2Card (frontend hidden slider, default 100).",
     )
     parser.add_argument(
-        "--require_seed_has_tables",
-        action="store_true",
-        help="In query mode, pick first model with tables from top-20 (matches UI default).",
-    )
-    parser.add_argument(
-        "--no_require_seed_has_tables",
-        action="store_true",
-        help="In query mode, just use top-1 result regardless of tables.",
-    )
-    parser.add_argument(
         "--use_by_type",
         action="store_true",
         help="Enable Card2Tab2Card by_type run (frontend 'Use table type classification').",
@@ -271,13 +259,6 @@ def main() -> int:
     )
 
     args = parser.parse_args()
-
-    # Resolve require_seed_has_tables tri-state (CLI wins over default).
-    if args.no_require_seed_has_tables:
-        require_seed_has_tables = False
-    else:
-        # UI default: true ("Pick first model with tables").
-        require_seed_has_tables = True if not args.require_seed_has_tables else True
 
     backend_url = args.backend_url.rstrip("/")
     preset_path = args.preset_path
@@ -314,7 +295,6 @@ def main() -> int:
                 top_k=args.top_k,
                 table_search_k=args.table_search_k,
                 query2modelcard_retrieval_mode="dense",
-                require_seed_has_tables=require_seed_has_tables,
                 use_by_type=bool(args.use_by_type),
                 run_integration=bool(args.run_integration),
                 integration_type=args.integration_type,

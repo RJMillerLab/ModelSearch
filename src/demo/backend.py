@@ -334,7 +334,6 @@ def run_search_pipeline(
     model_id: Optional[str] = None,
     table_search_k: Optional[int] = None,
     query2modelcard_retrieval_mode: str = "dense",
-    require_seed_has_tables: bool = True,
     use_by_type: bool = False,
     model_top_k: int = 5,
     table_resource_allowlist: Optional[List[str]] = None,
@@ -355,9 +354,36 @@ def run_search_pipeline(
         d["run_log_path"] = os.path.join(job_dir, "pipeline_run.log")
         logger.set_results(d)
 
-    _run_pipeline_body(logger, job_id, job_dir, start_time, query, top_k, model_id, table_search_k, query2modelcard_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k=model_top_k, table_resource_allowlist=table_resource_allowlist)
+    _run_pipeline_body(
+        logger,
+        job_id,
+        job_dir,
+        start_time,
+        query,
+        top_k,
+        model_id,
+        table_search_k,
+        query2modelcard_retrieval_mode,
+        use_by_type,
+        model_top_k=model_top_k,
+        table_resource_allowlist=table_resource_allowlist,
+    )
 
-def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_time: float, query: Optional[str], top_k: int, model_id: Optional[str], table_search_k: Optional[int], query2modelcard_retrieval_mode: str, require_seed_has_tables: bool = True, use_by_type: bool = False, *, model_top_k: int = 5, table_resource_allowlist: Optional[List[str]] = ['hugging']):
+def _run_pipeline_body(
+    logger: "JobLogger",
+    job_id: str,
+    job_dir: str,
+    start_time: float,
+    query: Optional[str],
+    top_k: int,
+    model_id: Optional[str],
+    table_search_k: Optional[int],
+    query2modelcard_retrieval_mode: str,
+    use_by_type: bool = False,
+    *,
+    model_top_k: int = 5,
+    table_resource_allowlist: Optional[List[str]] = ['hugging'],
+):
     # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
@@ -386,8 +412,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     logger.log(
         f"Run settings: top_k={top_k}, model_top_k={model_top_k}, per_table_search_k={table_search_k or 1}, "
         f"query2modelcard_retrieval={query2modelcard_retrieval_mode}, "
-        f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}, "
-        f"require_seed_has_tables={require_seed_has_tables}"
+        f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}"
     )
     # Print runtime device once per pipeline run for easier debugging/profiling.
     dev = get_device()
@@ -432,14 +457,7 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
     dense_runtime_table = get_query2modelcard_dense_runtime(emb_npz_path=table_emb_npz)
     logger.log(f"[Query2Tab2Card] Dense runtime ready in {time.time() - t_preload:.2f}s")
 
-    # Table Search now delegates full flow to query2tab2card:
-    # query -> query2modelcard -> card2tab2card -> query-rerank.
-    # `require_seed_has_tables` is kept for API compatibility but no longer gates execution here.
-    if require_seed_has_tables:
-        logger.log(
-            "require_seed_has_tables=True is accepted for backward compatibility; "
-            "table flow now always runs query2tab2card and lets that module own seed + mapping logic."
-        )
+    # Table search: query -> query2modelcard -> card2tab2card -> query-rerank (query2tab2card).
 
     q2m_ordered_model_ids: Optional[List[str]] = None
 
@@ -522,102 +540,86 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
 
     def _normalize_card2tab2card_payload(payload: Any) -> Dict[str, Any]:
         """
-        Normalize historical/variant card2tab2card output formats into a canonical schema:
-          {
-            "model_ids": [...],
-            "query_tables": [...],
-            "searched_tables": [...],
-            "mappings": {
-              "card_to_related_tables": {...},
-              "query_table_to_retrieved_tables": {...},
-              "retrieved_table_to_related_models": {...}
-            },
-            "intermediate": {...},
-            "pipeline_trace": {...}
-          }
+        Expects the current ``search_query2tab2card`` JSON object only (dict with ``model_ids`` list
+        plus ``mappings``, ``intermediate``, ``pipeline_trace``, etc.). No legacy list/batch shapes.
         """
-        def _canonicalize(d: Dict[str, Any]) -> Dict[str, Any]:
-            model_ids = d.get("model_ids", [])
-            if not isinstance(model_ids, list):
-                model_ids = []
-            query_tables = d.get("query_tables", [])
-            if not isinstance(query_tables, list):
-                query_tables = []
-            searched_tables = d.get("searched_tables", [])
-            if not isinstance(searched_tables, list):
-                searched_tables = []
+        if not isinstance(payload, dict):
+            raise ValueError(f"card2tab2card payload must be a dict, got {type(payload).__name__}")
+        if "model_ids" not in payload:
+            raise ValueError("card2tab2card payload missing required key 'model_ids'")
+        if not isinstance(payload["model_ids"], list):
+            raise ValueError("card2tab2card payload 'model_ids' must be a list")
 
-            mappings = d.get("mappings", {})
-            if not isinstance(mappings, dict):
-                mappings = {}
-            m_card_to_related = mappings.get("card_to_related_tables", {})
-            if not isinstance(m_card_to_related, dict):
-                m_card_to_related = {}
-            m_qt_to_rt = mappings.get("query_table_to_retrieved_tables", {})
-            if not isinstance(m_qt_to_rt, dict):
-                m_qt_to_rt = {}
-            m_rt_to_models = mappings.get("retrieved_table_to_related_models", {})
-            if not isinstance(m_rt_to_models, dict):
-                m_rt_to_models = {}
-            m_mid_to_tables = mappings.get("model_id_to_related_tables", {})
-            if not isinstance(m_mid_to_tables, dict):
-                m_mid_to_tables = {}
-            m_tab2tab_rt_to_models = mappings.get("tab2tab_retrieved_table_to_related_models", {})
-            if not isinstance(m_tab2tab_rt_to_models, dict):
-                m_tab2tab_rt_to_models = {}
+        d = payload
+        model_ids = d["model_ids"]
+        query_tables = d.get("query_tables", [])
+        if not isinstance(query_tables, list):
+            raise ValueError("card2tab2card payload 'query_tables' must be a list when present")
+        searched_tables = d.get("searched_tables", [])
+        if not isinstance(searched_tables, list):
+            raise ValueError("card2tab2card payload 'searched_tables' must be a list when present")
 
-            inter = d.get("intermediate")
-            if not isinstance(inter, dict):
-                inter = {}
-            inter_table_to_models = inter.get("table_to_models")
-            if not isinstance(inter_table_to_models, dict):
-                inter_table_to_models = m_rt_to_models
-            inter_retrieved = inter.get("retrieved_table_filenames")
-            if not isinstance(inter_retrieved, list):
-                inter_retrieved = list(searched_tables)
-            inter_qt_to_rt = inter.get("query_table_to_retrieved_tables")
-            if not isinstance(inter_qt_to_rt, dict):
-                inter_qt_to_rt = m_qt_to_rt
+        mappings = d.get("mappings", {})
+        if not isinstance(mappings, dict):
+            raise ValueError("card2tab2card payload 'mappings' must be a dict")
+        m_card_to_related = mappings.get("card_to_related_tables", {})
+        if not isinstance(m_card_to_related, dict):
+            raise ValueError("mappings.card_to_related_tables must be a dict")
+        m_qt_to_rt = mappings.get("query_table_to_retrieved_tables", {})
+        if not isinstance(m_qt_to_rt, dict):
+            raise ValueError("mappings.query_table_to_retrieved_tables must be a dict")
+        m_rt_to_models = mappings.get("retrieved_table_to_related_models", {})
+        if not isinstance(m_rt_to_models, dict):
+            raise ValueError("mappings.retrieved_table_to_related_models must be a dict")
+        m_mid_to_tables = mappings.get("model_id_to_related_tables", {})
+        if not isinstance(m_mid_to_tables, dict):
+            raise ValueError("mappings.model_id_to_related_tables must be a dict")
+        m_tab2tab_rt_to_models = mappings.get("tab2tab_retrieved_table_to_related_models", {})
+        if not isinstance(m_tab2tab_rt_to_models, dict):
+            raise ValueError("mappings.tab2tab_retrieved_table_to_related_models must be a dict")
 
-            inter["table_to_models"] = inter_table_to_models
-            inter["retrieved_table_filenames"] = inter_retrieved
-            inter["query_table_to_retrieved_tables"] = inter_qt_to_rt
-            if not isinstance(inter.get("table_id_to_filename"), dict):
-                inter["table_id_to_filename"] = {}
+        inter = d.get("intermediate", {})
+        if not isinstance(inter, dict):
+            raise ValueError("card2tab2card payload 'intermediate' must be a dict")
+        inter_table_to_models = inter.get("table_to_models", m_rt_to_models)
+        if not isinstance(inter_table_to_models, dict):
+            raise ValueError("intermediate.table_to_models must be a dict")
+        inter_retrieved = inter.get("retrieved_table_filenames", searched_tables)
+        if not isinstance(inter_retrieved, list):
+            raise ValueError("intermediate.retrieved_table_filenames must be a list")
+        inter_qt_to_rt = inter.get("query_table_to_retrieved_tables", m_qt_to_rt)
+        if not isinstance(inter_qt_to_rt, dict):
+            raise ValueError("intermediate.query_table_to_retrieved_tables must be a dict")
 
-            out = dict(d)
-            out["model_ids"] = model_ids
-            out["query_tables"] = query_tables
-            out["searched_tables"] = searched_tables
-            out["mappings"] = {
-                "card_to_related_tables": m_card_to_related,
-                "query_table_to_retrieved_tables": m_qt_to_rt,
-                "retrieved_table_to_related_models": m_rt_to_models if m_rt_to_models else inter_table_to_models,
-                "model_id_to_related_tables": m_mid_to_tables,
-                "tab2tab_retrieved_table_to_related_models": m_tab2tab_rt_to_models,
-            }
-            out["intermediate"] = inter
-            if not isinstance(out.get("pipeline_trace"), dict):
-                out["pipeline_trace"] = {}
-            return out
+        inter = dict(inter)
+        inter["table_to_models"] = inter_table_to_models
+        inter["retrieved_table_filenames"] = inter_retrieved
+        inter["query_table_to_retrieved_tables"] = inter_qt_to_rt
+        tif = inter.get("table_id_to_filename", {})
+        if not isinstance(tif, dict):
+            raise ValueError("intermediate.table_id_to_filename must be a dict")
+        inter["table_id_to_filename"] = tif
 
-        if payload is None:
-            return _canonicalize({"model_ids": [], "intermediate": {}, "mappings": {}})
-        # Current schema: dict with model_ids + intermediate
-        if isinstance(payload, dict) and "model_ids" in payload:
-            return _canonicalize(payload)
-        # Variant: just a list of model_ids
-        if isinstance(payload, list):
-            return _canonicalize({"model_ids": payload, "intermediate": {}, "mappings": {}})
-        # Historical batch schema: { queryKey: [...]} or { queryKey: {...} }
-        if isinstance(payload, dict):
-            for v in payload.values():
-                if isinstance(v, dict) and "model_ids" in v:
-                    return _canonicalize(v)
-                if isinstance(v, list):
-                    return _canonicalize({"model_ids": v, "intermediate": {}, "mappings": {}})
-        # Fallback
-        return _canonicalize({"model_ids": [], "intermediate": {}, "mappings": {}})
+        if "pipeline_trace" not in d:
+            raise ValueError("card2tab2card payload missing required key 'pipeline_trace'")
+        pt = d["pipeline_trace"]
+        if not isinstance(pt, dict):
+            raise ValueError("card2tab2card payload 'pipeline_trace' must be a dict")
+
+        out = dict(d)
+        out["model_ids"] = model_ids
+        out["query_tables"] = query_tables
+        out["searched_tables"] = searched_tables
+        out["mappings"] = {
+            "card_to_related_tables": m_card_to_related,
+            "query_table_to_retrieved_tables": m_qt_to_rt,
+            "retrieved_table_to_related_models": m_rt_to_models if m_rt_to_models else inter_table_to_models,
+            "model_id_to_related_tables": m_mid_to_tables,
+            "tab2tab_retrieved_table_to_related_models": m_tab2tab_rt_to_models,
+        }
+        out["intermediate"] = inter
+        out["pipeline_trace"] = pt
+        return out
 
     logger.log("Step 2: Query2ModelCard neighbor list + Card2Tab2Card (serialized workers)...")
 
@@ -729,49 +731,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         effective_model_top_k = 0
     logger.log(f"effective_model_top_k: input={model_top_k}, right_max_models={right_max_models} => cap={effective_model_top_k}")
 
-    # Query2Tab2Card now owns query-driven dense rerank and emits mapping-rich payloads.
-    # Here we only ensure pipeline_trace exists for legacy payloads.
-    def _norm_table_to_models_json(t2m: Any) -> Dict[str, List[str]]:
-        out: Dict[str, List[str]] = {}
-        if not isinstance(t2m, dict):
-            return out
-        for k, v in t2m.items():
-            if isinstance(v, list):
-                out[str(k)] = [str(m) for m in v if m is not None]
-            else:
-                out[str(k)] = []
-        return out
-
-    for _st, _payload in card2tab2card_all.items():
-        if not isinstance(_payload, dict):
-            continue
-        inter = _payload.get("intermediate")
-        if not isinstance(inter, dict):
-            inter = {}
-            _payload["intermediate"] = inter
-        pt = _payload.get("pipeline_trace")
-        if not isinstance(pt, dict):
-            st_list = _payload.get("searched_tables")
-            if not isinstance(st_list, list):
-                st_list = list(inter.get("retrieved_table_filenames") or [])
-            t2m = inter.get("table_to_models") if isinstance(inter.get("table_to_models"), dict) else {}
-            mids = _payload.get("model_ids")
-            mids_list = [str(x) for x in (mids if isinstance(mids, list) else []) if x is not None]
-            _payload["pipeline_trace"] = {
-                "tab2tab": {
-                    "searched_tables": [str(x) for x in st_list],
-                    "retrieved_table_filenames": [str(x) for x in st_list],
-                    "table_to_models": _norm_table_to_models_json(t2m),
-                },
-                "model_ids_before_dense_rerank": list(mids_list),
-                "model_ids_after_dense_rerank": list(mids_list),
-                "after_model_cap": {
-                    "searched_tables": [str(x) for x in st_list],
-                    "table_to_models": _norm_table_to_models_json(t2m),
-                },
-                "dense_rerank_applied": False,
-            }
-
     # Cap model-search neighbor lists (query2modelcard_all_modes).
     for mode in QUERY2MODELCARD_RETRIEVAL_MODES:
         val = q2m_neighbors_by_mode.get(mode)
@@ -805,7 +764,6 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         "table_resources": table_resources,
         "query2modelcard_retrieval_mode": query2modelcard_retrieval_mode,
         "use_by_type": use_by_type,
-        "require_seed_has_tables": require_seed_has_tables,
         "query2modelcard_results": primary,
         "query2modelcard_all_modes": q2m_neighbors_by_mode,
         "card2tab2card_results": card2tab2card_all,
@@ -904,7 +862,6 @@ def search():
     table_search_k = data.get("table_search_k")
     model_top_k = int(data.get("model_top_k", 5))
     query2modelcard_retrieval_mode = data.get("query2modelcard_retrieval_mode", "dense")
-    require_seed_has_tables = bool(data.get("require_seed_has_tables", True))
     use_by_type = bool(data.get("use_by_type", False))
 
     query = (data.get("query") or "").strip()
@@ -916,7 +873,7 @@ def search():
 
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(job_id, query, top_k, None, table_search_k, query2modelcard_retrieval_mode, require_seed_has_tables, use_by_type, model_top_k),
+        args=(job_id, query, top_k, None, table_search_k, query2modelcard_retrieval_mode, use_by_type, model_top_k),
     )
     thread.daemon = True
     thread.start()
@@ -1205,7 +1162,7 @@ def list_saved_searches():
     searches = []
     for name, path, _ in candidates[:50]:
         json_path = os.path.join(path, "search_results.json")
-        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "model_top_k": None, "use_by_type": False, "require_seed_has_tables": False, "query2modelcard_retrieval_mode": None, "table_search_k": None}
+        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "model_top_k": None, "use_by_type": False, "query2modelcard_retrieval_mode": None, "table_search_k": None}
         with open(json_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
         entry["query"] = saved.get("query") or ""
@@ -1217,7 +1174,6 @@ def list_saved_searches():
         entry["top_k"] = saved.get("top_k")
         entry["model_top_k"] = saved.get("model_top_k")
         entry["use_by_type"] = bool(saved.get("use_by_type", False))
-        entry["require_seed_has_tables"] = bool(saved.get("require_seed_has_tables", False))
         entry["query2modelcard_retrieval_mode"] = saved.get("query2modelcard_retrieval_mode")
         entry["table_search_k"] = saved.get("table_search_k")
         searches.append(entry)
