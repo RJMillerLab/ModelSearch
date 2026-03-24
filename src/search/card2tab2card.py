@@ -11,7 +11,8 @@ import os
 import json
 import time
 import argparse
-from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional, Tuple
 
 #from src.config import MODELLAKE_DB, CARD2TAB2CARD_OUTPUT_JSON
 from src.config import *
@@ -73,11 +74,34 @@ def search_card2tab2card(
     # table2table search (tab2tab returns CSV basenames)
     similar_basenames: List[str] = []
     query_table_to_retrieved_tables: Dict[str, List[str]] = {}
-    for csv_path in query_tables:
-        if not os.path.exists(csv_path):
-            continue
+
+    def _tab2tab_one(csv_path: str) -> Tuple[str, List[str]]:
         names = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path)
         n_list = list(names) if names else []
+        return csv_path, n_list
+
+    paths_ok = [p for p in query_tables if os.path.exists(p)]
+    parallel_tab2tab = os.environ.get("CARD2TAB2CARD_PARALLEL_TAB2TAB", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "",
+    )
+    rows: List[Tuple[str, List[str]]] = []
+    if parallel_tab2tab and len(paths_ok) > 1:
+        max_workers = min(8, len(paths_ok))
+        print(
+            f"[c2t2c-trace] tab2tab parallel: {len(paths_ok)} seed tables, max_workers={max_workers}",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(_tab2tab_one, p) for p in paths_ok]
+            rows = [f.result() for f in futures]
+    else:
+        for p in paths_ok:
+            rows.append(_tab2tab_one(p))
+
+    for csv_path, n_list in rows:
         sample = n_list[:15]
         more = f" ...(+{len(n_list) - 15})" if len(n_list) > 15 else ""
         print(
@@ -85,8 +109,8 @@ def search_card2tab2card(
             f"-> n_filenames={len(n_list)} sample={sample}{more}",
             flush=True,
         )
-        if names:
-            similar_basenames.extend(names)
+        if n_list:
+            similar_basenames.extend(n_list)
         query_table_to_retrieved_tables[os.path.basename(csv_path)] = list(dict.fromkeys(n_list))
 
     if not similar_basenames:

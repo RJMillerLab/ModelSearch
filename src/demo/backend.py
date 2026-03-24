@@ -1561,10 +1561,22 @@ if __name__ == "__main__":
     import argparse as _argparse
     parser = _argparse.ArgumentParser(description="ModelSearch Demo Backend")
     parser.add_argument("--port", type=int, default=None, help="Port (default: env PORT or 5002)")
+    parser.add_argument(
+        "--no-warmup",
+        action="store_true",
+        help="Skip loading NPZ + encoder at startup (first job pays cold start).",
+    )
     args, _ = parser.parse_known_args()
 
     print("Backend (in-process) starting...", flush=True)
     if USE_BY_TYPE:
         print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled", flush=True)
+    if not args.no_warmup and os.environ.get("BACKEND_SKIP_WARMUP", "").strip().lower() not in ("1", "true", "yes"):
+        try:
+            from src.search.query2modelcard import warmup_dense_runtimes_for_backend
+
+            warmup_dense_runtimes_for_backend(log=lambda m: print(m, flush=True))
+        except Exception as e:
+            print(f"[warmup] failed (server still starts; first job may be slow): {e}", flush=True)
     port = args.port if args.port is not None else int(os.environ.get("PORT", "5002"))
     app.run(host="0.0.0.0", port=port, debug=False)

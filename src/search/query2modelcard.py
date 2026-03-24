@@ -73,6 +73,58 @@ def get_query2modelcard_dense_runtime(emb_npz_path: str = EMB_NPZ) -> Dict[str, 
     runtime["encoder_model"] = _get_encoder_model()
     return runtime
 
+
+def _emb_npz_path_for_resource_set(resources: List[str]) -> str:
+    """Same path selection as demo backend / query2tab2card._resource_paths for dense embeddings."""
+    rset = {str(r).strip().lower() for r in (resources or []) if str(r).strip()}
+    if rset == {"hugging"}:
+        return str(EMB_NPZ_HUGGING)
+    if rset == {"hugging", "github", "arxiv"}:
+        return str(EMB_NPZ)
+    return str(EMB_NPZ_HUGGING)
+
+
+def warmup_dense_runtimes_for_backend(
+    *,
+    model_resources_full: Optional[List[str]] = None,
+    table_resources: Optional[List[str]] = None,
+    log: Optional[Any] = None,
+) -> None:
+    """
+    Load card2card NPZ + FAISS + SentenceTransformer into **process-level** caches.
+
+    Call once when the API server starts so the **first** search job does not pay cold I/O.
+    Subsequent jobs and ``get_query2modelcard_dense_runtime`` reuse the same caches.
+
+    Defaults match ``backend._run_pipeline_body``: full multi-source npz + table npz from
+    ``TABLE_RESOURCE_ALLOWLIST`` when ``table_resources`` is omitted.
+    """
+    def _emit(msg: str) -> None:
+        if log is not None:
+            log(msg)
+        else:
+            print(msg, flush=True)
+
+    mr = list(model_resources_full or ["hugging", "github", "arxiv"])
+    tr = list(table_resources or TABLE_RESOURCE_ALLOWLIST)
+    jobs = [
+        ("Query2ModelCard-FULL", _emb_npz_path_for_resource_set(mr)),
+        ("Query2Tab2Card", _emb_npz_path_for_resource_set(tr)),
+    ]
+    seen: set[str] = set()
+    for label, npz_path in jobs:
+        if npz_path in seen:
+            _emit(f"[warmup] {label}: same file as earlier step, already cached ({npz_path})")
+            continue
+        seen.add(npz_path)
+        if not os.path.isfile(npz_path):
+            _emit(f"[warmup] {label}: skip, file missing: {npz_path}")
+            continue
+        t0 = time.time()
+        get_query2modelcard_dense_runtime(emb_npz_path=npz_path)
+        _emit(f"[warmup] {label}: dense runtime ready in {time.time() - t0:.2f}s ({npz_path})")
+
+
 def _search_sparse_query(
     query_text: str,
     *,
