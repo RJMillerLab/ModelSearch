@@ -175,9 +175,11 @@ python -m src.demo.frontend
 ssh -L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002 chippie.cs.uwaterloo.ca
 ```
 
-**Backend warmup (default):** On startup, `python -m src.demo.backend` preloads the same NPZ + FAISS + `SentenceTransformer` caches used by jobs (`Query2ModelCard-FULL` npz + `Query2Tab2Card` npz from `TABLE_RESOURCE_ALLOWLIST`). Skip with `--no-warmup` or env `BACKEND_SKIP_WARMUP=1`. Jobs still call `get_query2modelcard_dense_runtime` but hit **process-level** cache (no second disk read).
+**Backend warmup (default):** On startup, `python -m src.demo.backend` preloads the same NPZ + FAISS + `SentenceTransformer` caches used by jobs (`Query2ModelCard-FULL` npz + `Query2Tab2Card` npz from `TABLE_RESOURCE_ALLOWLIST`). The console prints `[startup]`, `[warmup]`, and `[load]` lines (NPZ path, FAISS build, encoder) so long stalls are visible. Skip warmup with `--no-warmup` or `BACKEND_SKIP_WARMUP=1`. Silence detailed `[load]` steps with `BACKEND_LOAD_QUIET=1`. Jobs still call `get_query2modelcard_dense_runtime` but hit **process-level** cache (no second disk read).
 
-**Card2Tab2Card tab2tab:** If the seed model has **multiple** local CSVs, tab2tab over each table runs in parallel (up to 8 threads) when env `CARD2TAB2CARD_PARALLEL_TAB2TAB` is unset/`1`/`true`. Set to `0` to force sequential (e.g. if SQLite/Blend misbehaves under concurrency). The **three** `search_type` workers (keyword / single_column / unionable) stay **serialized** in the backend (`ThreadPoolExecutor(max_workers=1)`) to avoid CUDA init races.
+**Card2Tab2Card tab2tab:** If the seed model has **multiple** local CSVs, tab2tab over each table runs in parallel (up to 8 threads) when env `CARD2TAB2CARD_PARALLEL_TAB2TAB` is unset/`1`/`true`. Set to `0` to force sequential (e.g. if SQLite/Blend misbehaves under concurrency). The **three** `search_type` workers (keyword / single_column / unionable) stay **serialized** in the backend (`ThreadPoolExecutor(max_workers=1)`) to avoid CUDA init races. **Only one seed CSV → no parallel tab2tab** (wall time unchanged vs before).
+
+**Job timing:** `pipeline_run.log` **Total time** = `/api/search` only (preload + query2modelcard + three `query2tab2card` + Card2Card list prep). **Integration** is a **separate** `POST /api/integrate` (or `/api/integrate-model-search`); it is **not** included in that total. After calling integrate, the log gains appended lines and JSON includes `integration_elapsed_s`.
 
 
 ## 3. Helpful scripts
@@ -191,8 +193,6 @@ exploded parquet
 ```bash
 python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet ../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet
 ```
-
-
 
 ---
 

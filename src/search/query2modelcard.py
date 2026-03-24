@@ -31,15 +31,25 @@ _ENCODER_BY_DEVICE: Dict[str, SentenceTransformer] = {}
 _DENSE_RUNTIME_BY_NPZ: Dict[str, Dict[str, Any]] = {}
 
 
+def _load_status(msg: str) -> None:
+    """Progress lines for slow startup / first NPZ load. Disable with BACKEND_LOAD_QUIET=1."""
+    if os.environ.get("BACKEND_LOAD_QUIET", "").strip().lower() in ("1", "true", "yes"):
+        return
+    print(msg, flush=True)
+
+
 def _get_encoder_model(device: Optional[str] = None) -> SentenceTransformer:
     """Process-level cached encoder model by runtime device."""
     dev = str(device or get_device())
     with _RUNTIME_LOCK:
         model = _ENCODER_BY_DEVICE.get(dev)
         if model is None:
+            _load_status(f"[load] Loading SentenceTransformer: {ENCODE_MODEL!r} (device={dev!r}) ...")
+            t0 = time.time()
             model = SentenceTransformer(ENCODE_MODEL, device=dev)
             model.eval()
             _ENCODER_BY_DEVICE[dev] = model
+            _load_status(f"[load]   SentenceTransformer ready in {time.time() - t0:.2f}s")
         return model
 
 
@@ -50,10 +60,19 @@ def _get_dense_runtime(emb_npz_path: str) -> Dict[str, Any]:
         cached = _DENSE_RUNTIME_BY_NPZ.get(key)
         if cached is not None:
             return cached
+        _load_status(f"[load] Loading NPZ (this can take a while): {key}")
+        t_npz = time.time()
         data = np.load(key, allow_pickle=True)
         ids = [str(x) for x in data["ids"].tolist()]
         embs = np.asarray(data["embeddings"], dtype=np.float32)
+        _load_status(
+            f"[load]   NPZ read done: {len(ids)} ids, embeddings {embs.shape}, "
+            f"elapsed {time.time() - t_npz:.2f}s"
+        )
+        _load_status("[load] Building in-memory FAISS index ...")
+        t_faiss = time.time()
         index, _ = _build_faiss_index_in_memory(embs)
+        _load_status(f"[load]   FAISS index ready in {time.time() - t_faiss:.2f}s")
         id_to_idx = {mid: i for i, mid in enumerate(ids)}
         runtime = {
             "ids": ids,
@@ -107,6 +126,10 @@ def warmup_dense_runtimes_for_backend(
 
     mr = list(model_resources_full or ["hugging", "github", "arxiv"])
     tr = list(table_resources or TABLE_RESOURCE_ALLOWLIST)
+    _emit(
+        "[warmup] Loading card2card artifacts into memory (NPZ → FAISS, then shared SentenceTransformer). "
+        "First server start is slow; later jobs reuse cache."
+    )
     jobs = [
         ("Query2ModelCard-FULL", _emb_npz_path_for_resource_set(mr)),
         ("Query2Tab2Card", _emb_npz_path_for_resource_set(tr)),

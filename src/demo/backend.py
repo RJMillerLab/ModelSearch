@@ -19,6 +19,18 @@ from src.config import *
 from src.utils import resolve_table_path, get_device
 #from src.utils import filter_results_by_classify_results
 
+def _append_pipeline_log(job_dir: str, message: str) -> None:
+    """Append one line to job_dir/pipeline_run.log (e.g. integration timing after /api/search)."""
+    try:
+        path = os.path.join(job_dir, "pipeline_run.log")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        jid = os.path.basename(os.path.abspath(job_dir))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] [{jid}] {message}\n")
+    except OSError:
+        pass
+
+
 def _sanitize_for_json(obj: Any) -> Any:
     """Replace float('nan') with None so JSON serialization produces null."""
     if isinstance(obj, float) and math.isnan(obj):
@@ -778,7 +790,11 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         primary = []
 
     elapsed_total = time.time() - start_time
-    logger.log(f"Step 3: Done. Total time: {elapsed_total:.2f}s")
+    logger.log(
+        f"Step 3: Done. Total time: {elapsed_total:.2f}s "
+        "(search pipeline only: preload + query2modelcard + Card2Tab2Card×3 + Card2Card list prep; "
+        "NOT /api/integrate or /api/integrate-model-search — those are separate requests.)"
+    )
 
     results_data = {
         "job_id": job_id,
@@ -1223,6 +1239,7 @@ def list_saved_searches():
 @app.route("/api/integrate", methods=["POST"])
 def integrate():
     """Integrate tables from Card2Tab2Card search results"""
+    t_integrate = time.time()
     data = request.get_json()
     job_id, err = _require_job_id(data)
     if err is not None:
@@ -1251,11 +1268,25 @@ def integrate():
     )
     run_key = _table_search_key(integration_type, search_type, tables_source)
 
+    elapsed_s = round(time.time() - t_integrate, 4)
     if not result.get("success", False):
-        save_payload = {"status": "no_result", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
+        save_payload = {
+            "status": "no_result",
+            "integration_type": integration_type,
+            "search_type": search_type,
+            "tables_source": tables_source,
+            "k": k,
+            "max_models": max_models,
+            "integration_elapsed_s": elapsed_s,
+            "error": result.get("error", "Integration failed"),
+            "message": result.get("error", "Integration failed"),
+        }
         json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(save_payload, f, ensure_ascii=False, indent=0)
+        line = f"Integration (table search) FAILED after {elapsed_s:.2f}s — {save_payload['message']}"
+        print(f"[integrate] job_id={job_id} {line}", flush=True)
+        _append_pipeline_log(job_dir, line)
         return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
 
     # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
@@ -1274,19 +1305,36 @@ def integrate():
     # Ensure models_with_tables is always present for Table Search (model IDs used in this integration; may differ from full retrieval list)
     if "models_with_tables" not in result:
         result["models_with_tables"] = []
-    save_payload = {"status": "success", "integration_type": integration_type, "search_type": search_type, "tables_source": tables_source, "k": k, "max_models": max_models, **result}
+    elapsed_s = round(time.time() - t_integrate, 4)
+    save_payload = {
+        "status": "success",
+        "integration_type": integration_type,
+        "search_type": search_type,
+        "tables_source": tables_source,
+        "k": k,
+        "max_models": max_models,
+        "integration_elapsed_s": elapsed_s,
+        **result,
+    }
     json_path = os.path.join(job_dir, f"integration_table_search_{run_key}.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
     with open(os.path.join(job_dir, "integration_table_search.json"), "w", encoding="utf-8") as f:
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
-    return jsonify({"status": "success", **result})
+    line = (
+        f"Integration (table search) OK in {elapsed_s:.2f}s "
+        f"(type={integration_type}, search_type={search_type}, tables_source={tables_source})"
+    )
+    print(f"[integrate] job_id={job_id} {line}", flush=True)
+    _append_pipeline_log(job_dir, line)
+    return jsonify({"status": "success", "integration_elapsed_s": elapsed_s, **result})
 
 
 
 @app.route("/api/integrate-model-search", methods=["POST"])
 def integrate_model_search():
     """Integrate tables from Card2Card (model search) results"""
+    t_integrate = time.time()
     data = request.get_json()
     job_id, err = _require_job_id(data)
     if err is not None:
@@ -1312,12 +1360,26 @@ def integrate_model_search():
         table_resources=tr_list,
     )
     run_key = _model_search_key(integration_type, card2card_retrieval_mode or "dense")
+    mode_s = card2card_retrieval_mode or "dense"
 
+    elapsed_s = round(time.time() - t_integrate, 4)
     if not result.get("success", False):
-        save_payload = {"status": "no_result", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, "error": result.get("error", "Integration failed"), "message": result.get("error", "Integration failed")}
+        save_payload = {
+            "status": "no_result",
+            "integration_type": integration_type,
+            "card2card_retrieval_mode": mode_s,
+            "k": k,
+            "max_models": max_models,
+            "integration_elapsed_s": elapsed_s,
+            "error": result.get("error", "Integration failed"),
+            "message": result.get("error", "Integration failed"),
+        }
         json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(save_payload, f, ensure_ascii=False, indent=0)
+        line = f"Integration (model search) FAILED after {elapsed_s:.2f}s — {save_payload['message']}"
+        print(f"[integrate-model-search] job_id={job_id} {line}", flush=True)
+        _append_pipeline_log(job_dir, line)
         return jsonify({"status": "no_result", "message": save_payload["message"], **save_payload})
 
     # Convert DataFrame to dict for JSON response (NaN -> null for valid JSON).
@@ -1333,13 +1395,25 @@ def integrate_model_search():
         saved_path = _integration_saved_path_for_api(job_id, csv_name)
     if saved_path:
         result["saved_path"] = saved_path
-    save_payload = {"status": "success", "integration_type": integration_type, "card2card_retrieval_mode": card2card_retrieval_mode or "dense", "k": k, "max_models": max_models, **result}
+    elapsed_s = round(time.time() - t_integrate, 4)
+    save_payload = {
+        "status": "success",
+        "integration_type": integration_type,
+        "card2card_retrieval_mode": mode_s,
+        "k": k,
+        "max_models": max_models,
+        "integration_elapsed_s": elapsed_s,
+        **result,
+    }
     json_path = os.path.join(job_dir, f"integration_model_search_{run_key}.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
     with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
-    return jsonify({"status": "success", **result})
+    line = f"Integration (model search) OK in {elapsed_s:.2f}s (type={integration_type}, card2card_mode={mode_s})"
+    print(f"[integrate-model-search] job_id={job_id} {line}", flush=True)
+    _append_pipeline_log(job_dir, line)
+    return jsonify({"status": "success", "integration_elapsed_s": elapsed_s, **result})
 
 def _load_integrated_table_from_json(job_dir: str, json_name: str) -> Optional[pd.DataFrame]:
     """Load integrated table from integration JSON (has integrated_table with columns + data)."""
@@ -1572,11 +1646,19 @@ if __name__ == "__main__":
     if USE_BY_TYPE:
         print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled", flush=True)
     if not args.no_warmup and os.environ.get("BACKEND_SKIP_WARMUP", "").strip().lower() not in ("1", "true", "yes"):
+        print(
+            "[startup] Warmup enabled: expect [warmup] / [load] lines (NPZ, FAISS, SentenceTransformer). "
+            "Set BACKEND_SKIP_WARMUP=1 or --no-warmup to skip; BACKEND_LOAD_QUIET=1 to silence [load] details.",
+            flush=True,
+        )
         try:
             from src.search.query2modelcard import warmup_dense_runtimes_for_backend
 
             warmup_dense_runtimes_for_backend(log=lambda m: print(m, flush=True))
+            print("[startup] Warmup finished. Binding HTTP server...", flush=True)
         except Exception as e:
             print(f"[warmup] failed (server still starts; first job may be slow): {e}", flush=True)
+    else:
+        print("[startup] Warmup skipped (--no-warmup or BACKEND_SKIP_WARMUP=1).", flush=True)
     port = args.port if args.port is not None else int(os.environ.get("PORT", "5002"))
     app.run(host="0.0.0.0", port=port, debug=False)
