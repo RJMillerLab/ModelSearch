@@ -176,10 +176,18 @@ ssh -L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002 chippie.cs.uwaterloo.ca
 ```
 
 
-## 3. mimic user for batch running
+## 3. Helpful scripts
+
+mimic user for batch running
 ```bash
 python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 --preset_path config/preset_queries.json --run_integration
 ```
+
+exploded parquet
+```bash
+python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet data_251117/relationship_parquet_v2_251117.parquet
+```
+
 
 
 ---

@@ -10,8 +10,7 @@ import os, sys, json, random, string, threading, time, math, re, html, shutil
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import lru_cache
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
@@ -383,20 +382,17 @@ def _run_pipeline_body(logger: "JobLogger", job_id: str, job_dir: str, start_tim
         f"require_seed_has_tables={require_seed_has_tables}"
     )
     # Print runtime device once per pipeline run for easier debugging/profiling.
-    try:
-        dev = get_device()
-        if dev == "cuda":
-            try:
-                import torch
-                gpu_count = int(torch.cuda.device_count())
-                gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
-                logger.log(f"Runtime device: {dev} (gpu_count={gpu_count}, gpu0={gpu_name})")
-            except Exception as e:
-                logger.log(f"Runtime device: {dev} (gpu details unavailable: {e})")
-        else:
-            logger.log(f"Runtime device: {dev}")
-    except Exception as e:
-        logger.log(f"Runtime device detection failed: {e}")
+    dev = get_device()
+    if dev == "cuda":
+        try:
+            import torch
+            gpu_count = int(torch.cuda.device_count())
+            gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
+            logger.log(f"Runtime device: {dev} (gpu_count={gpu_count}, gpu0={gpu_name})")
+        except Exception as e:
+            logger.log(f"Runtime device: {dev} (gpu details unavailable: {e})")
+    else:
+        logger.log(f"Runtime device: {dev}")
     logger.set_status("running")
 
     # Normalize resource selection once and reuse in in-process calls.

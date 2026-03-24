@@ -6,7 +6,7 @@ Pipeline:
 2) card2tab2card (tab2tab -> parquet model ids)
 3) candidate_pool = tab2tab models ∩ query2modelcard[:q2m_table_candidate_k]
 4) dense rerank candidate_pool by query -> take model_top_k
-5) expand each top-k model with load_modelid_to_csvlist -> searched_tables + table_to_models
+5) batch-expand top-k models (exploded parquet) -> searched_tables + table_to_models
 """
 
 import argparse
@@ -22,7 +22,7 @@ from src.search.query2modelcard import (
     get_query2modelcard_dense_runtime,
     search_query2modelcard,
 )
-from src.utils import load_modelid_to_csvlist
+from src.utils import _get_models_to_tables_batch_sql
 
 
 def _resource_paths(resources: List[str]) -> Tuple[str, str]:
@@ -42,22 +42,24 @@ def _expand_models_to_parquet_tables(
     table_resources: Optional[List[str]],
 ) -> Tuple[List[str], Dict[str, List[str]], Dict[str, List[str]]]:
     """
-    For each model id, load CSV basenames from relationship parquet (load_modelid_to_csvlist).
+    Load CSV basenames for all model ids in one DuckDB pass over MODEL_TO_TABLES_EXPLODE_PARQUET.
 
     Returns:
-        ordered_basenames: stable unique basenames in first-seen order
+        ordered_basenames: stable unique basenames in first-seen order (follows ``model_ids`` order)
         table_to_models: basename -> list of model ids (from the input set) that own that table
         model_id_to_tables: model_id -> list of basenames
     """
+    mids_ordered = [str(mid).strip() for mid in model_ids if str(mid).strip()]
     model_id_to_tables: Dict[str, List[str]] = {}
     table_to_models: Dict[str, List[str]] = {}
     ordered: List[str] = []
     seen_bn: Set[str] = set()
-    for mid in model_ids:
-        sm = str(mid).strip()
-        if not sm:
-            continue
-        basenames = load_modelid_to_csvlist(sm, resources=table_resources)
+    if not mids_ordered:
+        return ordered, table_to_models, model_id_to_tables
+
+    batch = _get_models_to_tables_batch_sql(mids_ordered, resources=table_resources)
+    for sm in mids_ordered:
+        basenames = batch.get(sm, [])
         norm: List[str] = []
         for b in basenames:
             bn = os.path.basename(str(b).strip())

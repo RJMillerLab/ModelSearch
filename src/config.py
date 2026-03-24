@@ -98,6 +98,10 @@ VALID_MODEL_IDS_TXT = os.path.join(OUTPUT_DIR, "valid_model_ids_with_tables.txt"
 # Hugging-only tables subset (matches build_valid_model_ids_txt --resources hugging)
 VALID_MODEL_IDS_WITH_TABLES_HUGGING_TXT = os.path.join(OUTPUT_DIR, "valid_model_ids_with_tables_hugging.txt")
 
+# Flattened relationship index (modelId <-> csv_basename) built once from RELATIONSHIP_PARQUET.
+# Kept under repo-local data/ per user workflow preference.
+MODEL_TO_TABLES_EXPLODE_PARQUET = os.path.join(OUTPUT_DIR, "model_to_tables_explode_v2_251117.parquet")
+
 def abs_path(relative_path: str) -> str:
     """Return absolute path for a path that may be relative to repo root."""
     p = relative_path

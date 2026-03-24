@@ -331,7 +331,7 @@ def main() -> int:
     # Optionally dump a summary JSON under data/jobs/batch_runs for inspection.
     try:
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        summary_dir = os.path.join(repo_root, "data", "jobs", "batch_runs")
+        summary_dir = os.path.join(repo_root, "data_251117", "jobs_251117", "batch_runs")
         os.makedirs(summary_dir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         summary_path = os.path.join(summary_dir, f"batch_preset_queries_{ts}.json")

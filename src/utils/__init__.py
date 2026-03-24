@@ -8,9 +8,9 @@ import numpy as np
 from functools import lru_cache
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
-from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS
+from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS, MODEL_TO_TABLES_EXPLODE_PARQUET
 
-__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "classify_results", "filter_results_by_classify_results", "load_modelid_to_csvlist", "load_csvs_to_modelids", "model_id_has_resolvable_local_tables", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db",
+__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "classify_results", "filter_results_by_classify_results", "load_modelid_to_csvlist", "load_csvs_to_modelids", "model_id_has_resolvable_local_tables", "list_model_ids_with_tables_from_explode", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db",
     "is_model_search_log",
     "is_table_search_log",
     "get_repo_root",
@@ -167,55 +167,89 @@ def _relationship_table_list_column_names(
 
 
 def _get_models_to_tables_batch_sql(model_ids: list, resources: Optional[List[str]] = None) -> dict:
-    """DuckDB batch query. If resources is set, only unnest those sources (must match card2tab2card / valid-id filter)."""
-    import duckdb
-    import pandas as pd
-    from src.config import RELATIONSHIP_PARQUET
-    
-    path_abs = os.path.abspath(RELATIONSHIP_PARQUET).replace("\\", "/")
+    """Batch query over pre-exploded parquet: modelId -> csv_basenames."""
+    mids = [str(m).strip() for m in model_ids if str(m).strip()]
+    model_to_tables: Dict[str, List[str]] = {m: [] for m in mids}
+    if not mids:
+        return model_to_tables
+    explode_path = os.path.abspath(MODEL_TO_TABLES_EXPLODE_PARQUET).replace("\\", "/")
+    if not os.path.isfile(explode_path):
+        raise FileNotFoundError(
+            f"Missing exploded parquet: {explode_path}. "
+            "Build it first with scripts/build_model_to_tables_explode_parquet.py"
+        )
+    resource_filter = sorted(_normalize_allowed_resource_labels(resources)) if resources else []
     conn = duckdb.connect(":memory:")
-    ids_sql = ",".join(repr(m) for m in model_ids)
-    try:
-        cols = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path_abs]).fetchall()
-    except Exception:
-        cols = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{path_abs}')").fetchall()
-    available = {c[0] for c in cols}
-    list_cols = _relationship_table_list_column_names(resources, available_in_parquet=available)
-    if not list_cols:
-        conn.close()
-        return {}
-    select_cols = "modelId, " + ", ".join(f'"{c}"' for c in list_cols)
-    try:
-        full_df = conn.execute(f"""
-            SELECT {select_cols} FROM read_parquet(?)
-            WHERE modelId IN ({ids_sql})
-        """, [path_abs]).fetchdf()
-    except Exception:
-        full_df = conn.execute(f"""
-            SELECT {select_cols} FROM read_parquet('{path_abs}')
-            WHERE modelId IN ({ids_sql})
-        """).fetchdf()
+    conn.register("input_model_ids", pd.DataFrame({"modelId": mids}))
+    if resource_filter:
+        conn.register("input_resources", pd.DataFrame({"resource": resource_filter}))
+        sql = f"""
+        SELECT
+            e.modelId,
+            list(DISTINCT e.csv_basename ORDER BY e.csv_basename) AS csv_basenames
+        FROM read_parquet('{explode_path}') AS e
+        JOIN input_model_ids AS i
+          ON e.modelId = i.modelId
+        JOIN input_resources AS r
+          ON e.resource = r.resource
+        GROUP BY e.modelId
+        """
+    else:
+        sql = f"""
+        SELECT
+            e.modelId,
+            list(DISTINCT e.csv_basename ORDER BY e.csv_basename) AS csv_basenames
+        FROM read_parquet('{explode_path}') AS e
+        JOIN input_model_ids AS i
+          ON e.modelId = i.modelId
+        GROUP BY e.modelId
+        """
+    rows = conn.execute(sql).fetchall()
     conn.close()
-    model_to_tables = {m: [] for m in model_ids}
-    for _, row in full_df.iterrows():
-        mid = str(row["modelId"])
-        for col in list_cols:
-            val = row.get(col)
-            if val is None or (isinstance(val, float) and __import__("pandas").isna(val)):
-                continue
-            items = _normalize_val_to_items(val)
-            for v in items:
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s:
-                    base = os.path.basename(s)
-                    if base and base not in model_to_tables[mid]:
-                        model_to_tables[mid].append(base)
+    for mid, basenames in rows:
+        key = str(mid).strip()
+        model_to_tables[key] = [str(b).strip() for b in _normalize_val_to_items(basenames) if str(b).strip()]
     return model_to_tables
 
+
+def list_model_ids_with_tables_from_explode(resources: Optional[List[str]] = None) -> List[str]:
+    """
+    Distinct modelIds that have ≥1 non-empty csv_basename in MODEL_TO_TABLES_EXPLODE_PARQUET.
+
+    When ``resources`` is omitted or empty, include all sources (hugging/github/arxiv/llm).
+    Otherwise restrict to normalized labels (same semantics as ``load_modelid_to_csvlist``).
+    """
+    explode_path = os.path.abspath(MODEL_TO_TABLES_EXPLODE_PARQUET).replace("\\", "/")
+    if not os.path.isfile(explode_path):
+        raise FileNotFoundError(
+            f"Missing exploded parquet: {explode_path}. "
+            "Build it first with scripts/build_model_to_tables_explode_parquet.py"
+        )
+    conn = duckdb.connect(":memory:")
+    resource_filter = sorted(_normalize_allowed_resource_labels(resources)) if resources else []
+    if resource_filter:
+        conn.register("input_resources", pd.DataFrame({"resource": resource_filter}))
+        sql = f"""
+        SELECT DISTINCT CAST(e.modelId AS VARCHAR) AS modelId
+        FROM read_parquet('{explode_path}') AS e
+        INNER JOIN input_resources AS r ON e.resource = r.resource
+        WHERE e.csv_basename IS NOT NULL AND length(trim(CAST(e.csv_basename AS VARCHAR))) > 0
+        ORDER BY 1
+        """
+    else:
+        sql = f"""
+        SELECT DISTINCT CAST(modelId AS VARCHAR) AS modelId
+        FROM read_parquet('{explode_path}')
+        WHERE csv_basename IS NOT NULL AND length(trim(CAST(csv_basename AS VARCHAR))) > 0
+        ORDER BY 1
+        """
+    rows = conn.execute(sql).fetchall()
+    conn.close()
+    return [str(r[0]).strip() for r in rows if r[0] is not None and str(r[0]).strip()]
+
+
 def _get_tables_to_models_batch_sql(csv_basenames: List[str]) -> Dict[str, List[str]]:
-    """DuckDB batch query for csv basename -> modelIds."""
+    """DuckDB batch query over pre-exploded parquet: csv basename -> modelIds."""
     normalized_basenames = []
     seen = set()
     for basename in csv_basenames:
@@ -228,36 +262,25 @@ def _get_tables_to_models_batch_sql(csv_basenames: List[str]) -> Dict[str, List[
     if not normalized_basenames:
         return {}
 
-    conn = duckdb.connect(":memory:")
-    try:
-        conn.register("input_basenames", pd.DataFrame({"csv_basename": normalized_basenames}))
-        sql = """
-        WITH exploded AS (
-            SELECT DISTINCT
-                modelId,
-                regexp_extract(csv_path, '[^/]+$') AS csv_basename
-            FROM read_parquet(?),
-            UNNEST(
-                list_concat(
-                    coalesce(hugging_table_list_dedup, []),
-                    coalesce(github_table_list_dedup, []),
-                    coalesce(html_table_list_mapped_dedup, []),
-                    coalesce(llm_table_list_mapped_dedup, [])
-                )
-            ) AS t(csv_path)
-            WHERE csv_path IS NOT NULL
+    explode_path = os.path.abspath(MODEL_TO_TABLES_EXPLODE_PARQUET).replace("\\", "/")
+    if not os.path.isfile(explode_path):
+        raise FileNotFoundError(
+            f"Missing exploded parquet: {explode_path}. "
+            "Build it first with scripts/build_model_to_tables_explode_parquet.py"
         )
-        SELECT
-            b.csv_basename,
-            list(DISTINCT e.modelId ORDER BY e.modelId) FILTER (WHERE e.modelId IS NOT NULL) AS model_ids
-        FROM input_basenames AS b
-        LEFT JOIN exploded AS e
-            ON e.csv_basename = b.csv_basename
-        GROUP BY b.csv_basename
-        """
-        rows = conn.execute(sql, [RELATIONSHIP_PARQUET]).fetchall()
-    finally:
-        conn.close()
+    conn = duckdb.connect(":memory:")
+    conn.register("input_basenames", pd.DataFrame({"csv_basename": normalized_basenames}))
+    sql = f"""
+    SELECT
+        b.csv_basename,
+        list(DISTINCT e.modelId ORDER BY e.modelId) FILTER (WHERE e.modelId IS NOT NULL) AS model_ids
+    FROM input_basenames AS b
+    LEFT JOIN read_parquet('{explode_path}') AS e
+      ON e.csv_basename = b.csv_basename
+    GROUP BY b.csv_basename
+    """
+    rows = conn.execute(sql).fetchall()
+    conn.close()
 
     basename_to_models: Dict[str, List[str]] = {basename: [] for basename in normalized_basenames}
     for basename, model_ids in rows:
