@@ -37,14 +37,18 @@ def __getattr__(name):
         'search_multi_column',
         'search_keyword',
         'search_table2table',
-        'search_table2table_by_type'
+        'search_table2table_by_type',
     }
-    
+
     if name in tab2tab_functions:
         if _tab2tab_module is None:
             # Repo root already in sys.path at top of this file; single import, no try/except
             from src.search import tab2tab as _tab2tab_module
         return getattr(_tab2tab_module, name)
+
+    if name == "search_tab2tab_aug":
+        from src.search import tab2tab_aug as _tab2tab_aug_module
+        return getattr(_tab2tab_aug_module, name)
 
     # Lazy import for card2card so `python -m src.search.card2card ...` does not
     # get its module pre-imported during package init (avoids runpy RuntimeWarning).
@@ -81,6 +85,7 @@ __all__ = [
     'search_multi_column',
     'search_keyword',
     'search_table2table',
+    'search_tab2tab_aug',
     # query2modelcard
     'search_query2modelcard',
     # card2tab2card

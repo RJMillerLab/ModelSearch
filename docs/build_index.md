@@ -11,8 +11,11 @@
 Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
 
 ```bash
+# valid model ids txt
 python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables.txt
 python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables_hugging.txt --resources hugging
+# explode parquet
+python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet ../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet
 ```
 
 ```bash
@@ -43,6 +46,7 @@ ln -s ../Blend_internal others/Blend_internal
 
 # optional: create subset of duckdb index for later search
 # python -m scripts.create_index_duckdb --db_path database/modellake_v2_251117_nomask_hugging.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/*.csv"
+# python -m scripts.create_index_duckdb --db_path database/modellake_v2_251117_nomask_hugging_tr.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117_tr/*.csv" --workers 8 --insert-batch 4
 # here we don't use the mask file, as we don't need <MUST CONTAIN TITLE> condition
 ```
 
@@ -112,6 +116,20 @@ python -m src.search.tab2tab --resources hugging --search_type single_column --q
 python -m src.search.tab2tab --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_multi_column.json > logs/tab2tab_multi_column.log 2>&1
 python -m src.search.tab2tab --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json > logs/tab2tab_unionable.log 2>&1
 ```
+
+## 2.3b Augmented tab2tab (`tab2tab_aug`)
+
+Runs **four** in-process tab2tab calls (original vs transposed **query** × original vs transposed **DuckDB**), then **RRF-merges** ranked lists. Transpose-corpus hits (`*_t.csv`) are folded to canonical `*.csv` names in `merged_ranking` (see `src.search.tab2tab_aug`). Requires **both** hugging DuckDBs built (non-transposed + `*_hugging_tr.db`); paths default from `src.config` (`MODELLAKE_DB_HUGGING`, `MODELLAKE_DB_HUGGING_TRANSPOSED`). Default JSON path: `TAB2TAB_AUG_OUTPUT_JSON` (e.g. `data_251117/tab2tab_aug_results.json`).
+
+```bash
+# Module: src.search.tab2tab_aug (run from repo root with PYTHONPATH or `python -m` from env that has the package)
+python -m src.search.tab2tab_aug --resources hugging --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_keyword.json > logs/tab2tab_aug_keyword.log 2>&1
+python -m src.search.tab2tab_aug --resources hugging --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_single_column.json > logs/tab2tab_aug_single_column.log 2>&1
+python -m src.search.tab2tab_aug --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_multi_column.json > logs/tab2tab_aug_multi_column.log 2>&1
+python -m src.search.tab2tab_aug --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_unionable.json > logs/tab2tab_aug_unionable.log 2>&1
+```
+
+Optional: `--transposed_query_csv` to fix the transposed-query CSV path (default: hashed file under `OUTPUT_DIR`); env `TAB2TAB_AUG_RRF_K` for RRF constant (default 60). Output JSON includes `lane_rankings` (four lists), `rrf_by_basename`, and `merged_ranking`.
 
 ## 2.4 query2tab2card (recommended) + card2tab2card (deprecated mapping-only)
 
@@ -189,10 +207,6 @@ mimic user for batch running
 python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 --preset_path config/preset_queries.json --run_integration
 ```
 
-exploded parquet
-```bash
-python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet ../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet
-```
 
 ---
 
@@ -211,6 +225,7 @@ python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_25
 | query2tab2card | --query + --search_type (keyword/single_column/multi_column/unionable) + --table_top_k |
 | card2tab2card (deprecated) | --model_id + --search_type + --table_top_k (mapping-only; no model_top_k/query args) |
 | tab2tab | --search_type keyword \| single_column \| multi_column \| unionable (test all 4) |
+| tab2tab_aug | `python -m src.search.tab2tab_aug` — same four search_type values; four lanes + RRF; needs ori + tr DuckDB (config hugging pair) |
 | tab2tab_by_type | same 4 search_type with --classification_json (test all 4) |
 | Generate table MD | `python -m src.postprocess.generate_table_md` (--table_ids / --model_id); `generate_md_from_logs` for logs → md/ |
 | Demo | backend + frontend → http://localhost:5001 |

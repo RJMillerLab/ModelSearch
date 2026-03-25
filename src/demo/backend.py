@@ -1573,6 +1573,14 @@ if __name__ == "__main__":
     args, _ = parser.parse_known_args()
 
     print("Backend (in-process) starting...", flush=True)
+    if USE_TAB2TAB_AUG:
+        print(
+            "  USE_TAB2TAB_AUG: Card2Tab2Card uses search_tab2tab_aug when table_resources are hugging-only "
+            "(set BACKEND_USE_TAB2TAB_AUG=0 for classic tab2tab).",
+            flush=True,
+        )
+    else:
+        print("  USE_TAB2TAB_AUG=0: Card2Tab2Card uses classic search_table2table only.", flush=True)
     if USE_BY_TYPE:
         print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled", flush=True)
     if not args.no_warmup and os.environ.get("BACKEND_SKIP_WARMUP", "").strip().lower() not in ("1", "true", "yes"):

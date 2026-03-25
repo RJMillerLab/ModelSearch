@@ -24,6 +24,8 @@ V2_SUFFIX = "_v2"
 # --- modellake.db ---
 MODELLAKE_DB = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_nomask_251117.db") # because there is no condition on Title, we don't need to use the mask file
 MODELLAKE_DB_HUGGING = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117_nomask_hugging.db")
+# Paired DuckDB built from the same corpus with tables row/col transposed (build + import separately; path is conventional).
+MODELLAKE_DB_HUGGING_TRANSPOSED = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117_nomask_hugging_tr.db")
 INDEX_TABLE = "modellake_index"
 
 DEDUPED_HUGGING_CSVS =  os.path.join(PROCESSED_DIR, f"deduped_hugging_csvs{V2_SUFFIX}{DATA_TAG}")
@@ -45,6 +47,8 @@ CLASSIFICATION_JSON                       = os.path.join(OUTPUT_DIR, "table_clas
 SCHEMA_LOG                                = os.path.join(ROOT_DIR, "ModelTables", "logs", "parquet_schema.log")
 CARD2TAB2CARD_OUTPUT_JSON                 = os.path.join(OUTPUT_DIR, "card2tab2card_results.json")
 TAB2TAB_OUTPUT_JSON                       = os.path.join(OUTPUT_DIR, "tab2tab_results.json")
+# Augmented 4-lane tab2tab (see src.search.tab2tab_aug); do not reuse TAB2TAB_OUTPUT_JSON.
+TAB2TAB_AUG_OUTPUT_JSON                   = os.path.join(OUTPUT_DIR, "tab2tab_aug_results.json")
 TAB2TAB_BY_TYPE_OUTPUT_JSON               = os.path.join(OUTPUT_DIR, "tab2tab_by_type_results.json")
 CARD2TAB2CARD_BY_TYPE_STANDALONE_JSON     = os.path.join(OUTPUT_DIR, "card2tab2card_by_type_standalone.json")
 CLASSIFICATION_OUTPUT_JSON                = os.path.join(OUTPUT_DIR, "table_classifications_output.json")
@@ -62,6 +66,27 @@ CARD2CARD_NEIGHBORS_JSON                  = os.path.join(OUTPUT_DIR, "card2card_
 PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
 
 CARD2TAB2CARD_TIMEOUT = 600
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    s = str(raw).strip().lower()
+    if not s:
+        return default
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+# Card2Tab2Card / query2tab2card: when table resources are hugging-only, call ``search_tab2tab_aug``
+# (4-lane + RRF; canonical ``*.csv`` basenames) instead of single ``search_table2table``.
+# ``BACKEND_USE_TAB2TAB_AUG=0`` forces classic one-lane tab2tab.
+USE_TAB2TAB_AUG = _env_bool("BACKEND_USE_TAB2TAB_AUG", True)
+
 USE_BY_TYPE = False
 JOBS_DIR = os.path.join(OUTPUT_DIR, f"jobs{DATA_TAG}")
 os.makedirs(JOBS_DIR, exist_ok=True)

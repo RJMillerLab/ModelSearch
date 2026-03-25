@@ -20,6 +20,11 @@ from src.search.tab2tab import search_table2table
 from src.utils import load_modelid_to_csvlist, load_csvs_to_modelids, resolve_table_path
 
 
+def _table_resources_hugging_only(table_resources: Optional[List[str]]) -> bool:
+    rs = {str(r).strip().lower() for r in (table_resources or ["hugging"]) if str(r).strip()}
+    return rs == {"hugging"}
+
+
 def search_card2tab2card(   
     model_id: str,
     search_type: str = "keyword",
@@ -30,6 +35,7 @@ def search_card2tab2card(
 )-> Dict[str, object]:
     """Simplified card->tab->card search using relationship parquet + tab2tab import."""
     print(f"[Card2Tab2Card] model_id={model_id} search_type={search_type} table_top_k={table_top_k} table_resources={table_resources!r}")
+    use_tab2tab_aug = bool(USE_TAB2TAB_AUG) and _table_resources_hugging_only(table_resources)
     # model_id -> csv_basenames (only columns for --resources, e.g. hugging-only)
     query_table_basenames = load_modelid_to_csvlist(model_id, resources=table_resources)
     # utils returns csv basenames; resolve to local csv paths for reading.
@@ -59,6 +65,9 @@ def search_card2tab2card(
                 "table_to_models": {},
                 "query_table_to_retrieved_tables": {},
             },
+            "pipeline_trace": {
+                "tab2tab": {"backend": "aug" if use_tab2tab_aug else "classic"},
+            },
         }
         if output_json:
             os.makedirs(os.path.dirname(output_json) or ".", exist_ok=True)
@@ -71,12 +80,39 @@ def search_card2tab2card(
     for qp in query_tables:
         print(f"  seed_csv: {os.path.basename(qp)}  path={qp}", flush=True)
 
-    # table2table search (tab2tab returns CSV basenames)
+    if use_tab2tab_aug:
+        from src.search.tab2tab_aug import search_tab2tab_aug as _search_tab2tab_aug
+
+        print(
+            "[c2t2c-trace] tab2tab_backend=aug (search_tab2tab_aug: 4 lanes + RRF; "
+            f"MODELLAKE_DB_HUGGING + TRANSPOSED)",
+            flush=True,
+        )
+    else:
+        _search_tab2tab_aug = None  # type: ignore[assignment]
+        print(
+            f"[c2t2c-trace] tab2tab_backend=classic search_table2table db_path={os.path.abspath(db_path)}",
+            flush=True,
+        )
+
+    # table2table search → CSV basenames (same list shape for aug or classic)
     similar_basenames: List[str] = []
     query_table_to_retrieved_tables: Dict[str, List[str]] = {}
 
     def _tab2tab_one(csv_path: str) -> Tuple[str, List[str]]:
-        names = search_table2table(query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path)
+        if use_tab2tab_aug:
+            names = _search_tab2tab_aug(
+                search_type=search_type,
+                query=csv_path,
+                k=table_top_k,
+                db_original=MODELLAKE_DB_HUGGING,
+                db_transposed=MODELLAKE_DB_HUGGING_TRANSPOSED,
+                output_json=None,
+            )
+        else:
+            names = search_table2table(
+                query=csv_path, search_type=search_type, k=table_top_k, db_path=db_path
+            )
         n_list = list(names) if names else []
         return csv_path, n_list
 
@@ -130,6 +166,9 @@ def search_card2tab2card(
                 "table_id_to_filename": {},
                 "table_to_models": {},
                 "query_table_to_retrieved_tables": query_table_to_retrieved_tables,
+            },
+            "pipeline_trace": {
+                "tab2tab": {"backend": "aug" if use_tab2tab_aug else "classic"},
             },
         }
         # Downstream expects `--output_json` to always be written so that
@@ -194,6 +233,7 @@ def search_card2tab2card(
         },
         "pipeline_trace": {
             "tab2tab": {
+                "backend": "aug" if use_tab2tab_aug else "classic",
                 "searched_tables": list(retrieved_tables),
                 "retrieved_table_filenames": list(retrieved_tables),
                 "table_to_models": table_to_models,
