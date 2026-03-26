@@ -8,9 +8,9 @@ import numpy as np
 from functools import lru_cache
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
-from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS, MODEL_TO_TABLES_EXPLODE_PARQUET
+from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS, MODEL_TO_TABLES_EXPLODE_PARQUET, INDEX_TABLE
 
-__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "classify_results", "filter_results_by_classify_results", "load_modelid_to_csvlist", "load_csvs_to_modelids", "model_id_has_resolvable_local_tables", "list_model_ids_with_tables_from_explode", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db",
+__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "classify_results", "filter_results_by_classify_results", "load_modelid_to_csvlist", "load_csvs_to_modelids", "model_id_has_resolvable_local_tables", "list_model_ids_with_tables_from_explode", "list_model_ids_with_tables_from_explode_filtered_by_modellake_db", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db",
     "is_model_search_log",
     "is_table_search_log",
     "get_repo_root",
@@ -211,14 +211,17 @@ def _get_models_to_tables_batch_sql(model_ids: list, resources: Optional[List[st
     return model_to_tables
 
 
-def list_model_ids_with_tables_from_explode(resources: Optional[List[str]] = None) -> List[str]:
+def list_model_ids_with_tables_from_explode(
+    resources: Optional[List[str]] = None,
+    explode_parquet: Optional[str] = None,
+) -> List[str]:
     """
     Distinct modelIds that have ≥1 non-empty csv_basename in MODEL_TO_TABLES_EXPLODE_PARQUET.
 
     When ``resources`` is omitted or empty, include all sources (hugging/github/arxiv/llm).
     Otherwise restrict to normalized labels (same semantics as ``load_modelid_to_csvlist``).
     """
-    explode_path = os.path.abspath(MODEL_TO_TABLES_EXPLODE_PARQUET).replace("\\", "/")
+    explode_path = os.path.abspath(explode_parquet or MODEL_TO_TABLES_EXPLODE_PARQUET).replace("\\", "/")
     if not os.path.isfile(explode_path):
         raise FileNotFoundError(
             f"Missing exploded parquet: {explode_path}. "
@@ -245,6 +248,68 @@ def list_model_ids_with_tables_from_explode(resources: Optional[List[str]] = Non
     rows = conn.execute(sql).fetchall()
     conn.close()
     return [str(r[0]).strip() for r in rows if r[0] is not None and str(r[0]).strip()]
+
+
+def list_model_ids_with_tables_from_explode_filtered_by_modellake_db(
+    resources: Optional[List[str]] = None,
+    db_path: str = "",
+    index_table: str = INDEX_TABLE,
+    filename_col: str = "filename",
+    explode_parquet: Optional[str] = None,
+) -> List[str]:
+    """
+    Like ``list_model_ids_with_tables_from_explode`` but only keeps rows where exploded.csv_basename
+    exists in a DuckDB index table (e.g. modellake_index.filename).
+
+    Matching is performed on basenames (strip any directory in the DB column).
+    """
+    if not db_path:
+        raise ValueError("db_path is required")
+    db_abs = os.path.abspath(db_path)
+    if not os.path.isfile(db_abs):
+        raise FileNotFoundError(f"Missing DuckDB file: {db_abs}")
+
+    explode_path = os.path.abspath(explode_parquet or MODEL_TO_TABLES_EXPLODE_PARQUET).replace("\\", "/")
+    if not os.path.isfile(explode_path):
+        raise FileNotFoundError(
+            f"Missing exploded parquet: {explode_path}. "
+            "Build it first with scripts/build_model_to_tables_explode_parquet.py"
+        )
+
+    resource_filter = sorted(_normalize_allowed_resource_labels(resources)) if resources else []
+    with duckdb.connect(db_abs, read_only=True) as conn:
+        if resource_filter:
+            conn.register("input_resources", pd.DataFrame({"resource": resource_filter}))
+            sql = f"""
+            WITH filenames AS (
+                SELECT DISTINCT
+                    regexp_extract(CAST({filename_col} AS VARCHAR), '[^/]+$') AS csv_basename
+                FROM {index_table}
+                WHERE {filename_col} IS NOT NULL
+            )
+            SELECT DISTINCT CAST(e.modelId AS VARCHAR) AS modelId
+            FROM read_parquet('{explode_path}') AS e
+            INNER JOIN input_resources AS r ON e.resource = r.resource
+            INNER JOIN filenames AS f ON f.csv_basename = CAST(e.csv_basename AS VARCHAR)
+            WHERE e.csv_basename IS NOT NULL AND length(trim(CAST(e.csv_basename AS VARCHAR))) > 0
+            ORDER BY 1
+            """
+        else:
+            sql = f"""
+            WITH filenames AS (
+                SELECT DISTINCT
+                    regexp_extract(CAST({filename_col} AS VARCHAR), '[^/]+$') AS csv_basename
+                FROM {index_table}
+                WHERE {filename_col} IS NOT NULL
+            )
+            SELECT DISTINCT CAST(e.modelId AS VARCHAR) AS modelId
+            FROM read_parquet('{explode_path}') AS e
+            INNER JOIN filenames AS f ON f.csv_basename = CAST(e.csv_basename AS VARCHAR)
+            WHERE e.csv_basename IS NOT NULL AND length(trim(CAST(e.csv_basename AS VARCHAR))) > 0
+            ORDER BY 1
+            """
+        rows = conn.execute(sql).fetchall()
+    return [str(r[0]).strip() for r in rows if r and r[0] is not None and str(r[0]).strip()]
 
 
 def _get_tables_to_models_batch_sql(csv_basenames: List[str]) -> Dict[str, List[str]]:

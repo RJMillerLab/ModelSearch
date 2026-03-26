@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import threading
+from contextlib import contextmanager
 from typing import Any, List, Optional
 
 import pandas as pd
@@ -14,73 +17,50 @@ import pandas as pd
 from src.config import *
 from src.utils import resolve_table_path
 
-
-def _normalize_header_token_for_index(s: str) -> str:
-    """
-    Match Blend_internal src.utils.df_to_index header path:
-    col_name = str(df.columns[col_counter]).lower().strip()[:200]
-    """
-    return str(s).lower().strip()[:200]
-
-
-def _normalize_cell_token_for_index(s: str) -> str:
-    """
-    Match Blend_internal src.utils.df_to_index body path (tokenized cell string).
-    """
-    t = (
-        str(s)
-        .lower()
-        .replace("\\", "")
-        .replace("'", "")
-        .replace('"', "")
-        .replace("\t", "")
-        .replace("\n", "")
-        .replace("\r", "")
-        .strip()[:200]
-    )
-    if t in ("nan", "none", ""):
-        return ""
-    return t
-
-
-def _extract_keyword_query_from_table(table_path: str) -> List[str]:
-    """Build keyword query from table headers (normalized like DuckDB index)."""
-    out: List[str] = []
-    seen = set()
-    try:
-        df = pd.read_csv(table_path, nrows=0)
-    except Exception:
-        return []
-    for c in df.columns:
-        s = _normalize_header_token_for_index(str(c))
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
-def _extract_single_column_query_from_table(table_path: str, max_rows_per_table: int = 100) -> List[str]:
-    """Build single-column query from first-column values (normalized like DuckDB index)."""
-    try:
-        df = pd.read_csv(table_path, nrows=max_rows_per_table)
-    except Exception:
-        return []
-    if len(df.columns) == 0:
-        return []
-    vals = df[df.columns[0]].dropna().astype(str).tolist()
-    out: List[str] = []
-    seen = set()
-    for v in vals:
-        s = _normalize_cell_token_for_index(v)
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
 def _load_blend_tab2tab_module():
     from others.Blend_internal.scripts import tab2tab as blend_tab2tab
     return blend_tab2tab
+
+
+_BLEND_SRC_ISOLATION_LOCK = threading.RLock()
+
+
+@contextmanager
+def _blend_internal_src_isolation():
+    """
+    Strictly isolate Blend_internal's `src` during import+call.
+
+    Collision source: both repos use the top-level package name `src`,
+    so `src.utils` / `src.Operators.*` may resolve to the wrong code.
+    """
+    with _BLEND_SRC_ISOLATION_LOCK:
+        if not BLEND_INTERNAL_REPO or not os.path.exists(BLEND_INTERNAL_REPO):
+            yield
+            return
+
+        orig_sys_path = list(sys.path)
+        orig_src_modules = {k: v for k, v in sys.modules.items() if k == "src" or k.startswith("src.")}
+
+        # Force import resolution to Blend_internal's `src` directory.
+        for k in list(orig_src_modules.keys()):
+            sys.modules.pop(k, None)
+
+        # Prepend so imports see Blend_internal first.
+        if BLEND_INTERNAL_REPO in sys.path:
+            sys.path.remove(BLEND_INTERNAL_REPO)
+        sys.path.insert(0, BLEND_INTERNAL_REPO)
+
+        try:
+            yield
+        finally:
+            # Clean any Blend_internal `src*` modules loaded during the context.
+            for k in list(sys.modules.keys()):
+                if k == "src" or k.startswith("src."):
+                    sys.modules.pop(k, None)
+
+            # Restore our original `src*` module set.
+            sys.path = orig_sys_path
+            sys.modules.update(orig_src_modules)
 
 
 def _ensure_blend_exists() -> None:
@@ -97,61 +77,75 @@ def search_table2table(
     query: Any,
     k: int,
     db_path: Optional[str] = None,
+    augmentation_types: Optional[List[str]] = None,
     output_json: Optional[str] = None,
     parse_payload: bool = True,
 ) -> List[str]:
     """
-    Run Blend_internal tab2tab in-process and return CSV **basenames** only.
+    Run Blend_internal table_searcher in-process and return CSV **basenames** only.
 
     The query table basename is filtered out from results if present.
     """
-    _ensure_blend_exists()
-    blend_tab2tab = _load_blend_tab2tab_module()
-
-    # Used for debug prints (keyword/single_column paths).
-    query_tokens: List[str] = []
-    blend_query: Any
-
     if not isinstance(query, str):
         raise ValueError("query must be a table name/path string")
     table_path = resolve_table_path(query) or (query if os.path.exists(query) else None)
     if not table_path:
         raise ValueError(f"No existing table found for query: {query!r}")
 
-    if search_type in ("single_column", "keyword"):
-        if search_type == "keyword":
-            query_tokens = _extract_keyword_query_from_table(table_path)
-        else:
-            query_tokens = _extract_single_column_query_from_table(table_path)
-        if not query_tokens:
-            raise ValueError(f"Empty extracted query from table path: {table_path!r}")
-        print(
-            f"[tab2tab-debug] search_type={search_type} "
-            f"table={os.path.basename(table_path)} "
-            f"query_tokens={len(query_tokens)} "
-            f"tokens_preview={query_tokens[:20]!r}",
-            flush=True,
-        )
-        blend_query = query_tokens
-    elif search_type in ("multi_column", "unionable"):
-        try:
-            blend_query = pd.read_csv(table_path)
-        except Exception as e:
-            raise ValueError(f"Failed to load query table for {search_type}: {table_path!r}: {e}") from e
-    else:
-        raise ValueError(f"Unknown search_type: {search_type}")
+    _ensure_blend_exists()
+    db_path = db_path or MODELLAKE_DB
+    aug_types = augmentation_types or ["ori", "tr", "str"]
 
-    raw_table_ids = blend_tab2tab.search_table2table(
-        query=blend_query,
-        search_type=search_type,
-        k=k,
-        db_path=db_path,
-    )
-    table_ids = [int(tid) for tid in (raw_table_ids or [])]
-    table_names = blend_tab2tab._table_ids_to_table_names(table_ids, db_path=db_path)
     query_bn = os.path.basename(table_path)
-    filenames = [os.path.basename(str(name).strip()) for name in table_names if str(name).strip()]
-    filenames = [f for f in filenames if f != query_bn]
+    search_type_l = str(search_type).strip().lower()
+
+    with _blend_internal_src_isolation():
+        from others.Blend_internal.scripts.table_searcher import (
+            TableKeywordSearcher,
+            TableSingleColJoinableSearcher,
+            TableUnionableSearcher,
+            TableMultiColJoinableSearcher,
+        )
+
+        if search_type_l == "keyword":
+            searcher = TableKeywordSearcher(
+                index_table=INDEX_TABLE,
+                augmentation_types=aug_types,
+                db_path=db_path,
+            )
+        elif search_type_l == "single_column":
+            # Match original semantics: "cell values only" (no header tokens).
+            searcher = TableSingleColJoinableSearcher(
+                index_table=INDEX_TABLE,
+                augmentation_types=aug_types,
+                mode="without_header",
+                db_path=db_path,
+            )
+        elif search_type_l == "unionable":
+            # Match original semantics: per-column overlap over "cell values".
+            searcher = TableUnionableSearcher(
+                index_table=INDEX_TABLE,
+                augmentation_types=aug_types,
+                mode="without_header",
+                db_path=db_path,
+            )
+        elif search_type_l == "multi_column":
+            # Match original semantics: MultiColumnOverlap uses cell values only.
+            searcher = TableMultiColJoinableSearcher(
+                index_table=INDEX_TABLE,
+                augmentation_types=aug_types,
+                mode="without_header",
+                db_path=db_path,
+            )
+        else:
+            raise ValueError(
+                f"Unknown search_type: {search_type!r}. Expected one of: keyword/single_column/unionable/multi_column."
+            )
+
+        # Pass full path so external-mode tokenization always works; internal-mode
+        # can still happen when Blend_internal finds the exact filename in index.
+        filenames = searcher.search_table(query_filename=table_path, k=k)
+        filenames = [str(f).strip() for f in (filenames or []) if str(f).strip()]
 
     if output_json:
         parent = os.path.dirname(os.path.abspath(output_json))
@@ -172,15 +166,10 @@ def main() -> None:
     import time
     parser = argparse.ArgumentParser(description="Table to Table Search using Blend_internal (in-process wrapper)")
     parser.add_argument("--search_type", choices=["single_column", "multi_column", "keyword", "unionable"], required=True)
-    parser.add_argument(
-        "--query",
-        default=None,
-        required=True,
-        help="Input table path/name. keyword/single_column extract normalized tokens (JSON array sent to Blend); multi_column/unionable pass table path directly.",
-    )
+    parser.add_argument("--query", required=True, help="Input table path/name. keyword/single_column extract normalized tokens (JSON array sent to Blend); multi_column/unionable pass table path directly.")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--output_json", default="", help="Optional output json path to write Blend_internal results.")
-    parser.add_argument("--resources", nargs="+", default=["hugging"], choices=["hugging", "github", "arxiv"], help="Optional table resource filter on tab2tab results.")
+    parser.add_argument("--resources", nargs="+", default=["hugging"], choices=["hugging", "github", "arxiv"], help="Table resource filter on tab2tab results.")
     args = parser.parse_args()
 
     resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]

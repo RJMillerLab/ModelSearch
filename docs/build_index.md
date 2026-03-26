@@ -13,9 +13,10 @@ Extract model_id that have tables (non-empty `csv_basename` in relationship parq
 ```bash
 # valid model ids txt
 python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables.txt
-python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables_hugging.txt --resources hugging
 # explode parquet
 python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet ../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet
+# valid model ids which table exist in DuckDB index
+python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables_hugging.txt --resources hugging --duckdb_path ../Blend_internal/database_251117/modellake_v2_251117_nomask_hugging.db --explode_parquet data_251117/model_to_tables_explode_v2_251117.parquet
 ```
 
 ```bash
@@ -119,7 +120,7 @@ python -m src.search.tab2tab --resources hugging --search_type unionable --query
 
 ## 2.3b Augmented tab2tab (`tab2tab_aug`)
 
-Runs **four** in-process tab2tab calls (original vs transposed **query** × original vs transposed **DuckDB**), then **RRF-merges** ranked lists. Transpose-corpus hits (`*_t.csv`) are folded to canonical `*.csv` names in `merged_ranking` (see `src.search.tab2tab_aug`). Requires **both** hugging DuckDBs built (non-transposed + `*_hugging_tr.db`); paths default from `src.config` (`MODELLAKE_DB_HUGGING`, `MODELLAKE_DB_HUGGING_TRANSPOSED`). Default JSON path: `TAB2TAB_AUG_OUTPUT_JSON` (e.g. `data_251117/tab2tab_aug_results.json`).
+Runs **four** in-process tab2tab calls (original vs transposed **query** × candidate `table_type` partition derived from `ori/tr/str`), then **RRF-merges** ranked lists. Transpose-corpus hits (`*_t.csv`) are folded to canonical `*.csv` names in `merged_ranking` (see `src.search.tab2tab_aug`). Default JSON path: `TAB2TAB_AUG_OUTPUT_JSON` (e.g. `data_251117/tab2tab_aug_results.json`).
 
 ```bash
 # Module: src.search.tab2tab_aug (run from repo root with PYTHONPATH or `python -m` from env that has the package)

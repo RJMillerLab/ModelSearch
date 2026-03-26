@@ -6,8 +6,8 @@ Pipeline (always the same):
 1. Resolve the query to one on-disk CSV path.
 2. Build a transposed copy of that CSV (Blend transposed-corpus layout).
 3. Call Blend ``search_table2table`` four times — every combination of
-   (original vs transposed query) × (original vs transposed DuckDB).
-4. Merge the four ranked lists with RRF.  ``*_t.csv`` / ``*_s.csv`` hits are
+   (original vs transposed query) × (candidate table_type filter derived from ori/tr vs tr).
+4. Merge the four ranked lists with RRF. ``*_t.csv`` / ``*_s.csv`` hits are
    folded to the same key as ``<group>.csv`` (Blend index ``table_group``).
 5. Optionally write **one** JSON: four intermediate ranked lists (``lane_rankings``),
    RRF breakdown (``rrf_by_basename``), and the postprocessed list (``merged_ranking``).
@@ -32,7 +32,6 @@ import pandas as pd
 from src.config import (
     BLEND_INTERNAL_REPO,
     MODELLAKE_DB_HUGGING,
-    MODELLAKE_DB_HUGGING_TRANSPOSED,
     OUTPUT_DIR,
     TAB2TAB_AUG_OUTPUT_JSON,
 )
@@ -165,20 +164,30 @@ def search_tab2tab_aug(
     query_bn = os.path.basename(table_path)
     transposed_query_bn = os.path.basename(t_csv)
 
-    runs: List[Tuple[str, str, str]] = [
-        (LANE_RANKING_KEYS[0], table_path, db_original),
-        (LANE_RANKING_KEYS[1], table_path, db_transposed),
-        (LANE_RANKING_KEYS[2], t_csv, db_original),
-        (LANE_RANKING_KEYS[3], t_csv, db_transposed),
+    # We no longer switch to a separate "transposed DuckDB".
+    # Instead, we filter candidate tables by `table_type` inside `db_original`
+    # using `augmentation_types` (ori/tr/str).
+    def lane_to_augmentation_types(lane_name: str) -> List[str]:
+        return ["tr", "str"] if "transposed_db" in lane_name else ["ori", "str"]
+
+    runs: List[Tuple[str, str]] = [
+        (LANE_RANKING_KEYS[0], table_path),
+        (LANE_RANKING_KEYS[1], table_path),
+        (LANE_RANKING_KEYS[2], t_csv),
+        (LANE_RANKING_KEYS[3], t_csv),
     ]
     lane_rankings: Dict[str, List[str]] = {}
-    for label, q_path, db_path in runs:
+    lane_augmentation_types: Dict[str, List[str]] = {}
+    for label, q_path in runs:
+        aug_types = lane_to_augmentation_types(label)
+        lane_augmentation_types[label] = aug_types
         lane_rankings[label] = search_table2table(
             search_type=search_type,
             query=q_path,
             k=k,
-            db_path=db_path,
+            db_path=db_original,
             output_json=None,
+            augmentation_types=aug_types,
         )
 
     final_ranking, rrf_by_basename = rrf_merge_lane_rankings(
@@ -197,6 +206,8 @@ def search_tab2tab_aug(
         "k_per_lane": k,
         "db_original": os.path.abspath(db_original),
         "db_transposed": os.path.abspath(db_transposed),
+        "db_transposed_ignored": True,
+        "lane_augmentation_types": lane_augmentation_types,
         "rrf_k": rrf_k(),
         "lane_rankings": lane_rankings,
         "rrf_by_basename": rrf_by_basename,
@@ -230,7 +241,7 @@ def main() -> None:
         nargs="+",
         default=["hugging"],
         choices=["hugging"],
-        help="Must be hugging; DuckDB paths from src.config (MODELLAKE_DB_HUGGING + _TRANSPOSED).",
+        help="Must be hugging; uses MODELLAKE_DB_HUGGING (candidate variants via augmentation_types).",
     )
     parser.add_argument(
         "--output_json",
@@ -246,14 +257,15 @@ def main() -> None:
 
     resources = [str(r).strip().lower() for r in args.resources if str(r).strip()]
     db_original = MODELLAKE_DB_HUGGING
-    db_transposed = MODELLAKE_DB_HUGGING_TRANSPOSED
+    # Kept only for backward-compatible signature / payload; search ignores it.
+    db_transposed = db_original
 
     out_path = args.output_json or TAB2TAB_AUG_OUTPUT_JSON
     t_wall = time.perf_counter()
     print(
         "[tab2tab_aug] "
         f"resources={resources!r} | db_original={os.path.abspath(db_original)} | "
-        f"db_transposed={os.path.abspath(db_transposed)} | blend={os.path.abspath(BLEND_INTERNAL_REPO or '')}",
+        f"db_transposed={os.path.abspath(db_transposed)} (ignored) | blend={os.path.abspath(BLEND_INTERNAL_REPO or '')}",
         flush=True,
     )
     merged = search_tab2tab_aug(
