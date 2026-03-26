@@ -9,7 +9,7 @@ import os
 import sys
 import threading
 from contextlib import contextmanager
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -65,22 +65,10 @@ def _blend_internal_src_isolation():
 
 def _ensure_blend_exists() -> None:
     if not BLEND_INTERNAL_REPO or not os.path.exists(BLEND_INTERNAL_REPO):
-        raise FileNotFoundError(
-            "Blend_internal not found. Please clone it into `others/Blend_internal` "
-            f"(expected at: {BLEND_INTERNAL_REPO})."
-        )
+        raise FileNotFoundError(f"Blend_internal not found. Please clone it into `others/Blend_internal` (expected at: {BLEND_INTERNAL_REPO}).")
 
 
-def search_table2table(
-    *,
-    search_type: str,
-    query: Any,
-    k: int,
-    db_path: Optional[str] = None,
-    augmentation_types: Optional[List[str]] = None,
-    output_json: Optional[str] = None,
-    parse_payload: bool = True,
-) -> List[str]:
+def search_table2table(*, search_type: str, query: Any, k: int, db_path: Optional[str] = None, augmentation_types: Optional[List[str]] = None, output_json: Optional[str] = None, parse_payload: bool = True) -> List[str]:
     """
     Run Blend_internal table_searcher in-process and return CSV **basenames** only.
 
@@ -88,59 +76,37 @@ def search_table2table(
     """
     if not isinstance(query, str):
         raise ValueError("query must be a table name/path string")
-    table_path = resolve_table_path(query) or (query if os.path.exists(query) else None)
+    # Accept three query forms:
+    # 1) basename resolvable in TABLE_BASE_DIRS
+    # 2) existing filesystem path
+    # 3) raw filename stored in Blend index (e.g. *_t.csv / *_s.csv)
+    table_path = resolve_table_path(query) or (query if os.path.exists(query) else query.strip())
     if not table_path:
-        raise ValueError(f"No existing table found for query: {query!r}")
+        raise ValueError(f"No existing or indexed table found for query: {query!r}")
 
-    _ensure_blend_exists()
-    db_path = db_path or MODELLAKE_DB
-    aug_types = augmentation_types or ["ori", "tr", "str"]
+    if augmentation_types is None:
+        augmentation_types = ["ori"]
+    aug_types = augmentation_types
 
     query_bn = os.path.basename(table_path)
     search_type_l = str(search_type).strip().lower()
 
     with _blend_internal_src_isolation():
-        from others.Blend_internal.scripts.table_searcher import (
-            TableKeywordSearcher,
-            TableSingleColJoinableSearcher,
-            TableUnionableSearcher,
-            TableMultiColJoinableSearcher,
-        )
+        from others.Blend_internal.scripts.table_searcher import (TableKeywordSearcher, TableSingleColJoinableSearcher, TableUnionableSearcher, TableMultiColJoinableSearcher)
 
         if search_type_l == "keyword":
-            searcher = TableKeywordSearcher(
-                index_table=INDEX_TABLE,
-                augmentation_types=aug_types,
-                db_path=db_path,
-            )
+            searcher = TableKeywordSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, db_path=db_path)
         elif search_type_l == "single_column":
             # Match original semantics: "cell values only" (no header tokens).
-            searcher = TableSingleColJoinableSearcher(
-                index_table=INDEX_TABLE,
-                augmentation_types=aug_types,
-                mode="without_header",
-                db_path=db_path,
-            )
+            searcher = TableSingleColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
         elif search_type_l == "unionable":
             # Match original semantics: per-column overlap over "cell values".
-            searcher = TableUnionableSearcher(
-                index_table=INDEX_TABLE,
-                augmentation_types=aug_types,
-                mode="without_header",
-                db_path=db_path,
-            )
+            searcher = TableUnionableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
         elif search_type_l == "multi_column":
             # Match original semantics: MultiColumnOverlap uses cell values only.
-            searcher = TableMultiColJoinableSearcher(
-                index_table=INDEX_TABLE,
-                augmentation_types=aug_types,
-                mode="without_header",
-                db_path=db_path,
-            )
+            searcher = TableMultiColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
         else:
-            raise ValueError(
-                f"Unknown search_type: {search_type!r}. Expected one of: keyword/single_column/unionable/multi_column."
-            )
+            raise ValueError(f"Unknown search_type: {search_type!r}. Expected one of: keyword/single_column/unionable/multi_column.")
 
         # Pass full path so external-mode tokenization always works; internal-mode
         # can still happen when Blend_internal finds the exact filename in index.
@@ -158,6 +124,71 @@ def search_table2table(
         return []
     return filenames
 
+
+def search_table2table_with_scores(*, search_type: str, query: Any, k: int, db_path: Optional[str] = None, augmentation_types: Optional[List[str]] = None, output_json: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Run Blend_internal table_searcher in-process and return scored ranked results.
+
+    Returned items are dicts:
+      - ``filename``: Blend DB stored filename (e.g. ``foo.csv`` / ``foo_t.csv`` / ``foo_s.csv``)
+      - ``score``: primary numeric score for reranking (definition depends on ``search_type``)
+      - ``rank``: 1-based rank within this single run (after searcher rerank)
+
+    Notes:
+    - For some searchers (e.g. multi-column overlap), Blend_internal only exposes ordering; we use an
+      order-derived proxy score so callers can still re-rank.
+    """
+    if not isinstance(query, str):
+        raise ValueError("query must be a table name/path string")
+    # Accept both local paths and indexed filenames (same semantics as search_table2table).
+    table_path = resolve_table_path(query) or (query if os.path.exists(query) else query.strip())
+    if not table_path:
+        raise ValueError(f"No existing or indexed table found for query: {query!r}")
+
+    _ensure_blend_exists()
+    db_path = db_path or MODELLAKE_DB
+    aug_types = augmentation_types or ["ori", "tr", "str"]
+
+    search_type_l = str(search_type).strip().lower()
+    with _blend_internal_src_isolation():
+        from collections import defaultdict
+
+        from others.Blend_internal.scripts.table_searcher import (TableKeywordSearcher, TableSingleColJoinableSearcher, TableUnionableSearcher, TableMultiColJoinableSearcher)
+
+        if search_type_l == "keyword":
+            searcher = TableKeywordSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, db_path=db_path)
+        elif search_type_l == "single_column":
+            searcher = TableSingleColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+        elif search_type_l == "unionable":
+            searcher = TableUnionableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+        elif search_type_l == "multi_column":
+            searcher = TableMultiColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+        else:
+            raise ValueError(f"Unknown search_type: {search_type!r}. Expected one of: keyword/single_column/unionable/multi_column.")
+
+        # Mirror BaseTableSearcher.search_table() but keep score-like detail.
+        mode, payload = searcher.check_query_get_tid(table_path)
+        if mode == "internal":
+            tokens = searcher._tokens_from_index(payload["filename"])
+        else:
+            tokens = searcher._tokens_from_new(table_path)
+
+        results_detail = searcher.search_table_detail(query_tokens=tokens, query_group=payload["group"], k=k)
+        ranked_results_with_scores = searcher.rerank(results_detail, k=k)
+
+        out: List[Dict[str, Any]] = []
+        for i, item in enumerate(ranked_results_with_scores[:k], start=1):
+            out.append({"filename": str(item[0]), "score": float(item[1]), "rank": i})
+
+    if output_json:
+        parent = os.path.dirname(os.path.abspath(output_json))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(output_json, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+
+    return out
+
 def main() -> None:
     """
     Minimal CLI for local testing (kept consistent with build_index.md usage).
@@ -170,6 +201,7 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--output_json", default="", help="Optional output json path to write Blend_internal results.")
     parser.add_argument("--resources", nargs="+", default=["hugging"], choices=["hugging", "github", "arxiv"], help="Table resource filter on tab2tab results.")
+    parser.add_argument("--augmentation_types", default="ori", help="Table augmentation types. Comma-separated or space-separated; e.g. 'ori' or 'ori,tr,str'.") # no space separator
     args = parser.parse_args()
 
     resources = [str(r).strip().lower() for r in (args.resources or []) if str(r).strip()]
@@ -190,7 +222,12 @@ def main() -> None:
     )
 
     start = time.time()
-    results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, db_path=db_path, output_json=args.output_json)
+    augmentation_types = [x.strip().lower() for x in args.augmentation_types.split(",") if x.strip()]
+    allowed = {"ori", "tr", "str"}
+    bad = [x for x in augmentation_types if x not in allowed]
+    if bad:
+        raise ValueError(f"Invalid augmentation_types={bad!r}. Allowed: {sorted(allowed)}")
+    results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, db_path=db_path, output_json=args.output_json, augmentation_types=augmentation_types)
     if args.output_json:
         print(f"Saved json: {args.output_json}")
     else:

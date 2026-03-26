@@ -84,7 +84,7 @@ def search_card2tab2card(
         from src.search.tab2tab_aug import search_tab2tab_aug as _search_tab2tab_aug
 
         print(
-            "[c2t2c-trace] tab2tab_backend=aug (search_tab2tab_aug: 4 lanes + RRF; "
+            "[c2t2c-trace] tab2tab_backend=aug (search_tab2tab_aug: 9 lanes + rerank; "
             f"MODELLAKE_DB_HUGGING + TRANSPOSED)",
             flush=True,
         )

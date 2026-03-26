@@ -6,25 +6,36 @@
 # Part 1 — Must run (in order)
 
 
-## 1.0 Valid model IDs for Table Search (optional; for demo “Narrow down”)
+## 1.0 Blend + data
+
+```bash
+# Build DuckDB index from csvs, for later search
+git clone git@github.com:DoraDong-2023/Blend_internal.git 
+ln -s ../Blend_internal others/Blend_internal
+# create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117_nomask.db
+
+# optional: create subset of duckdb index for later search
+# under blend_internal/scripts/create_index_duckdb.py
+# python -m scripts.create_index_duckdb --db_path database/modellake_v2_251117_nomask_hugging.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/*.csv,../ModelTables/data/processed/deduped_hugging_csvs_v2_251117_tr/*.csv,../ModelTables/data/processed/deduped_hugging_csvs_v2_251117_str/*.csv" --workers 8 --insert-batch 4 --skip-large-tables
+# here we don't use the mask file, as we don't need <MUST CONTAIN TITLE> condition
+# but we skip table with size > 200 rows or 100 columns
+```
+
+## 1.1 Valid model IDs for Table Search
 
 Extract model_id that have tables (non-empty `csv_basename` in relationship parquet) into a txt so inference only loads it. Run once after parquet is available.
 
 ```bash
-# valid model ids txt
-python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables.txt
-# explode parquet
+# explode parquet, get model-csv pair relationship from modelcard_step3_dedup_v2_251117.parquet (data from ModelTables)
 python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet ../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet
+
 # valid model ids which table exist in DuckDB index
 python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables_hugging.txt --resources hugging --duckdb_path ../Blend_internal/database_251117/modellake_v2_251117_nomask_hugging.db --explode_parquet data_251117/model_to_tables_explode_v2_251117.parquet
+# update explode parquet in-place by DuckDB table list (filter hugging rows only)
+python -m scripts.update_model_to_tables_explode_parquet_by_db_tables --parquet_path data_251117/model_to_tables_explode_v2_251117.parquet --resources hugging --duckdb_path ../Blend_internal/database_251117/modellake_v2_251117_nomask_hugging.db > logs/update_model_to_tables_explode_parquet_by_db_tables_hugging.log 2>&1 # so it won't affect downstream getting csvs, otherwise it will get csv that don't exist in DuckDB index
 ```
 
-```bash
-git clone git@github.com:RJMillerLab/ModelTables.git
-# Install dependencies and download data, as remaining steps depend on it
-```
-
-## 1.1 Modelcard index
+## 1.2 Modelcard index
 
 ```bash
 # build index for dense retrieval (FAISS) and sparse retrieval (Pyserini Lucene) from modelcard_step1.parquet
@@ -35,20 +46,6 @@ python -m src.search.card2card build-sparse-index
 python -m src.utils.build_card2card_subset_from_embeddings_and_ids --model_ids_txt data_251117/valid_model_ids_with_tables_hugging.txt --threads 4
 # Test numbers of filtered files
 # python -c "from pyserini.search.lucene import LuceneSearcher; s=LuceneSearcher('data_251117/card2card_sparse_index_hugging'); print('index_docs=', s.num_docs)"
-```
-
-## 1.2 Blend + data
-
-```bash
-# Build DuckDB index from csvs, for later search
-git clone git@github.com:DoraDong-2023/Blend_internal.git 
-ln -s ../Blend_internal others/Blend_internal
-# create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117_nomask.db
-
-# optional: create subset of duckdb index for later search
-# python -m scripts.create_index_duckdb --db_path database/modellake_v2_251117_nomask_hugging.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/*.csv"
-# python -m scripts.create_index_duckdb --db_path database/modellake_v2_251117_nomask_hugging_tr.db --data_glob "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117_tr/*.csv" --workers 8 --insert-batch 4
-# here we don't use the mask file, as we don't need <MUST CONTAIN TITLE> condition
 ```
 
 
@@ -77,6 +74,7 @@ python -m src.search.query2modelcard --query "transformer model for code generat
 python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode hybrid --resources hugging --output_json data_251117/query2modelcard_hybrid_hugging.json > logs/query2modelcard_hybrid_hugging.log 2>&1
 ```
 
+<details><summary>(Deprecated)</summary>
 ## 2.2 card2card (dense, sparse, hybrid)
 
 **Train vs inference:** Part 1 (1.1, 1.1b) = train: build modelcard index and sparse Lucene index. Part 2 = inference: only load those artifacts and run retrieval. Sparse uses Pyserini (same as ModelTables baseline2).
@@ -92,45 +90,32 @@ python -m src.search.card2card search --model_ids_file data_251117/card2card_mod
 # hybrid (sparse + FAISS)
 python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode hybrid --resources hugging --output_json data_251117/card2card_hybrid_hugging.json > logs/card2card_hybrid_hugging.log 2>&1
 ```
-
-## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable)
-
-<details><summary>2.3 tab2tab commands (expand to see all modes)</summary>
-
-Paths from `src.config`. Keyword = match column names; single_column = cell values; multi_column/unionable = CSV path.
-
-```bash
-# keyword
-python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type keyword --query "model_name,accuracy,task" --k 10 > logs/tab2tab_keyword.log 2>&1
-python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type single_column --query "val1,val2,val3" --k 10 > logs/tab2tab_single_column.log 2>&1
-python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 > logs/tab2tab_multi_column.log 2>&1
-python -m others.Blend_internal.scripts.tab2tab --db_path ../Blend_internal/database_251117/modellake_v2_251117.db --output_json results/tab2tab_keyword.json --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 > logs/tab2tab_unionable.log 2>&1
-```
-They are wrapped in below scripts.
-
 </details>
+
+## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable) (aug mode: ori, tr, str)
 
 ```bash
 # unified input as table query
-python -m src.search.tab2tab --resources hugging --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_keyword.json > logs/tab2tab_keyword.log 2>&1
-python -m src.search.tab2tab --resources hugging --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_single_column.json > logs/tab2tab_single_column.log 2>&1
-python -m src.search.tab2tab --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_multi_column.json > logs/tab2tab_multi_column.log 2>&1
-python -m src.search.tab2tab --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json > logs/tab2tab_unionable.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_keyword.json --augmentation_types ori > logs/tab2tab_keyword.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_single_column.json --augmentation_types ori > logs/tab2tab_single_column.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_multi_column.json --augmentation_types ori > logs/tab2tab_multi_column.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json --augmentation_types ori > logs/tab2tab_unionable.log 2>&1
 ```
 
-## 2.3b Augmented tab2tab (`tab2tab_aug`)
+## 2.3b Augmented tab2tab reranker based on scores from ori/tr/str -> ori/tr/str search (`tab2tab_aug`)
 
-Runs **four** in-process tab2tab calls (original vs transposed **query** × candidate `table_type` partition derived from `ori/tr/str`), then **RRF-merges** ranked lists. Transpose-corpus hits (`*_t.csv`) are folded to canonical `*.csv` names in `merged_ranking` (see `src.search.tab2tab_aug`). Default JSON path: `TAB2TAB_AUG_OUTPUT_JSON` (e.g. `data_251117/tab2tab_aug_results.json`).
+mode for reranker: table_level, score_max, flat_noscore
+mode for query augmentation: ori, tr, str
+mode for candidate augmentation: ori, tr, str
+mode for search type: keyword, single_column, multi_column, unionable
 
 ```bash
 # Module: src.search.tab2tab_aug (run from repo root with PYTHONPATH or `python -m` from env that has the package)
-python -m src.search.tab2tab_aug --resources hugging --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_keyword.json > logs/tab2tab_aug_keyword.log 2>&1
-python -m src.search.tab2tab_aug --resources hugging --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_single_column.json > logs/tab2tab_aug_single_column.log 2>&1
-python -m src.search.tab2tab_aug --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_multi_column.json > logs/tab2tab_aug_multi_column.log 2>&1
-python -m src.search.tab2tab_aug --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json data_251117/tab2tab_aug_unionable.json > logs/tab2tab_aug_unionable.log 2>&1
+python -m src.search.tab2tab_aug --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json data_251117/tab2tab_aug_keyword.json > logs/tab2tab_aug_keyword.log 2>&1
+python -m src.search.tab2tab_aug --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json data_251117/tab2tab_aug_single_column.json > logs/tab2tab_aug_single_column.log 2>&1
+python -m src.search.tab2tab_aug --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json data_251117/tab2tab_aug_multi_column.json > logs/tab2tab_aug_multi_column.log 2>&1
+python -m src.search.tab2tab_aug --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json data_251117/tab2tab_aug_unionable.json > logs/tab2tab_aug_unionable.log 2>&1
 ```
-
-Optional: `--transposed_query_csv` to fix the transposed-query CSV path (default: hashed file under `OUTPUT_DIR`); env `TAB2TAB_AUG_RRF_K` for RRF constant (default 60). Output JSON includes `lane_rankings` (four lists), `rrf_by_basename`, and `merged_ranking`.
 
 ## 2.4 query2tab2card (recommended) + card2tab2card (deprecated mapping-only)
 

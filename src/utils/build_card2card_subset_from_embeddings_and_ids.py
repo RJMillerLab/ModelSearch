@@ -108,6 +108,7 @@ def build_sparse_subset(
     wrote = 0
     # Fast path: filter from existing full sparse corpus jsonl.
     print(f"[sparse] filtering from full corpus jsonl: {full_corpus_jsonl_path}")
+    os.makedirs(os.path.dirname(corpus_jsonl_path), exist_ok=True)
     with open(full_corpus_jsonl_path, "r", encoding="utf-8") as src, open(
         corpus_jsonl_path, "w", encoding="utf-8"
     ) as dst:

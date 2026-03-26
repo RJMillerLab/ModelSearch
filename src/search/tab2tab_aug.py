@@ -1,62 +1,30 @@
 """
-Table→table search, augmented with transpose.
+Augmented table-to-table search.
 
-Pipeline (always the same):
-
-1. Resolve the query to one on-disk CSV path.
-2. Build a transposed copy of that CSV (Blend transposed-corpus layout).
-3. Call Blend ``search_table2table`` four times — every combination of
-   (original vs transposed query) × (candidate table_type filter derived from ori/tr vs tr).
-4. Merge the four ranked lists with RRF. ``*_t.csv`` / ``*_s.csv`` hits are
-   folded to the same key as ``<group>.csv`` (Blend index ``table_group``).
-5. Optionally write **one** JSON: four intermediate ranked lists (``lane_rankings``),
-   RRF breakdown (``rrf_by_basename``), and the postprocessed list (``merged_ranking``).
-   Per-lane files are not written (inner ``search_table2table(..., output_json=None)``).
-6. Return ``merged_ranking`` (canonical ``*.csv`` basenames).  Compatible with tab2tab
-   in the sense: same ``search_type`` / ``k`` / ``db_path`` semantics per lane; return
-   type is still ``List[str]``, but names are canonicalized and RRF-merged across four runs.
+Design:
+- Keep `src.search.tab2tab` as single-run retriever.
+- Put augmentation merge logic here with clear class-based rerankers.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import time
+from abc import ABC, abstractmethod
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import pandas as pd
+from src.config import BLEND_INTERNAL_REPO, MODELLAKE_DB_HUGGING, TAB2TAB_AUG_OUTPUT_JSON
+from src.search.tab2tab import search_table2table, search_table2table_with_scores
 
-from src.config import (
-    BLEND_INTERNAL_REPO,
-    MODELLAKE_DB_HUGGING,
-    OUTPUT_DIR,
-    TAB2TAB_AUG_OUTPUT_JSON,
-)
-from src.search.tab2tab import search_table2table
-from src.utils import resolve_table_path
-
-# Labels for the four Blend runs (also JSON keys under "lane_rankings").
-LANE_RANKING_KEYS = (
-    "original_query__original_db",
-    "original_query__transposed_db",
-    "transposed_query__original_db",
-    "transposed_query__transposed_db",
-)
-
-
-def rrf_k() -> int:
-    return int(os.environ.get("TAB2TAB_AUG_RRF_K", "60"))
+AUG_TYPES: Tuple[str, str, str] = ("ori", "tr", "str")
 
 
 def canonical_modellake_basename(basename: str) -> str:
-    """
-    ``foo_t.csv`` / ``foo_s.csv`` → ``foo.csv`` (same rule as Blend
-    ``create_index_duckdb.get_group_and_type``).
-    """
-    bn = basename.strip()
+    bn = str(basename).strip()
     if bn.endswith("_t.csv"):
         return bn[:-6] + ".csv"
     if bn.endswith("_s.csv"):
@@ -64,221 +32,204 @@ def canonical_modellake_basename(basename: str) -> str:
     return bn
 
 
-def resolve_query_table_path(query: str) -> str:
+def _query_variant_basenames(query: str, query_aug_types: Sequence[str]) -> Dict[str, str]:
+    q_bn = os.path.basename(str(query).strip())
+    if not q_bn:
+        raise ValueError("query must be non-empty")
+    stem = canonical_modellake_basename(q_bn)[:-4] if canonical_modellake_basename(q_bn).endswith(".csv") else canonical_modellake_basename(q_bn)
+    out: Dict[str, str] = {}
+    for q_aug in query_aug_types:
+        if q_aug == "ori":
+            out[q_aug] = f"{stem}.csv"
+        elif q_aug == "tr":
+            out[q_aug] = f"{stem}_t.csv"
+        elif q_aug == "str":
+            out[q_aug] = f"{stem}_s.csv"
+        else:
+            raise ValueError(f"Unsupported query augmentation type: {q_aug!r}")
+    return out
+
+
+def _normalize_aug_types(values: Optional[Sequence[str]]) -> List[str]:
+    if not values:
+        return list(AUG_TYPES)
+    out = [str(v).strip().lower() for v in values if str(v).strip()]
+    bad = [x for x in out if x not in AUG_TYPES]
+    if bad:
+        raise ValueError(f"Unsupported augmentation types: {bad!r}, expected one of {AUG_TYPES}")
+    return out
+
+
+@dataclass
+class AugRetrievalOutput:
+    lane_rankings: Dict[str, List[str]]
+    lane_rankings_scored: Dict[str, List[Dict[str, Any]]]
+    query_basenames: Dict[str, str]
+    query_canon: str
+
+
+class NineLaneRetriever:
     """
-    Same resolution rule as ``tab2tab.search_table2table`` (basename → TABLE_BASE_DIRS,
-    else any path that exists).
+    Execute the 3x3 retrieval grid:
+    query_aug (ori/tr/str) x candidate_aug (ori/tr/str).
     """
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError("query must be a non-empty string")
-    q = query.strip()
-    p = resolve_table_path(q) or (q if os.path.exists(q) else None)
-    if not p:
-        raise ValueError(f"No table path for query {query!r} (same rules as tab2tab).")
-    return os.path.abspath(p)
+
+    def __init__(self, *, search_type: str, query: str, k: int, db_path: str, query_aug_types: Sequence[str], candidate_aug_types: Sequence[str]) -> None:
+        self.search_type = search_type
+        self.query = query
+        self.k = k
+        self.db_path = db_path
+        self.query_aug_types = list(query_aug_types)
+        self.candidate_aug_types = list(candidate_aug_types)
+        self.query_basenames = _query_variant_basenames(query, self.query_aug_types)
+        self.query_canon = canonical_modellake_basename(os.path.basename(str(query)))
+
+    def run(self, *, with_scores: bool) -> AugRetrievalOutput:
+        lane_rankings: Dict[str, List[str]] = {}
+        lane_rankings_scored: Dict[str, List[Dict[str, Any]]] = {}
+
+        for q_aug in self.query_aug_types:
+            q_name = self.query_basenames[q_aug]
+            for c_aug in self.candidate_aug_types:
+                lane_id = f"q_{q_aug}__cand_{c_aug}"
+                if with_scores:
+                    lane_rankings_scored[lane_id] = search_table2table_with_scores(search_type=self.search_type, query=q_name, k=self.k, db_path=self.db_path, augmentation_types=[c_aug])
+                else:
+                    lane_rankings[lane_id] = search_table2table(search_type=self.search_type, query=q_name, k=self.k, db_path=self.db_path, augmentation_types=[c_aug])
+
+        return AugRetrievalOutput(lane_rankings=lane_rankings, lane_rankings_scored=lane_rankings_scored, query_basenames=self.query_basenames, query_canon=self.query_canon)
 
 
-def write_transposed_query_csv(source_csv: str, dest_csv: str) -> None:
-    """Transpose ``source_csv`` into ``dest_csv`` (matches transposed-corpus indexing)."""
-    df = pd.read_csv(source_csv)
-    t = df.transpose().reset_index()
-    t.columns = [str(c) if str(c).strip() else f"col_{i}" for i, c in enumerate(t.columns)]
-    parent = os.path.dirname(os.path.abspath(dest_csv))
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    t.to_csv(dest_csv, index=False)
+class BaseAugReranker(ABC):
+    @abstractmethod
+    def rerank(self, *, lane_rankings: Dict[str, List[str]], lane_rankings_scored: Dict[str, List[Dict[str, Any]]], top_k: int, query_canon: str) -> Tuple[List[str], Dict[str, Any]]:
+        raise NotImplementedError
 
 
-def default_transposed_query_csv_path(source_csv: str) -> str:
-    stem = os.path.splitext(os.path.basename(source_csv))[0]
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)[:80]
-    h = hashlib.sha256(os.path.abspath(source_csv).encode("utf-8")).hexdigest()[:16]
-    out_dir = os.path.join(OUTPUT_DIR, "tab2tab_aug_transposed_queries")
-    os.makedirs(out_dir, exist_ok=True)
-    return os.path.join(out_dir, f"{safe}_{h}_T.csv")
+class TableLevelHitCountReranker(BaseAugReranker):
+    """No score required: rank by lane hit count, tie-break by best rank."""
+
+    def rerank(self, *, lane_rankings: Dict[str, List[str]], lane_rankings_scored: Dict[str, List[Dict[str, Any]]], top_k: int, query_canon: str) -> Tuple[List[str], Dict[str, Any]]:
+        hit_count: Dict[str, int] = defaultdict(int)
+        min_rank: Dict[str, int] = {}
+        for _lane, names in lane_rankings.items():
+            seen: set[str] = set()
+            for rank, n in enumerate(names, start=1):
+                key = canonical_modellake_basename(os.path.basename(n))
+                if not key or key == query_canon or key in seen:
+                    continue
+                seen.add(key)
+                hit_count[key] += 1
+                min_rank[key] = min(min_rank.get(key, 10**18), rank)
+        scored = [(k, hit_count[k], min_rank.get(k, 10**18)) for k in hit_count]
+        scored.sort(key=lambda x: (-x[1], x[2], x[0]))
+        final = [x[0] for x in scored[:top_k]]
+        stats = {k: {"hit_count": hc, "min_rank": mr} for k, hc, mr in scored[:top_k]}
+        return final, stats
 
 
-def rrf_merge_lane_rankings(
-    lane_rankings: Dict[str, List[str]],
-    *,
-    exclude_basenames: Sequence[str],
-    top_k: int,
-    k_rrf: int,
-) -> Tuple[List[str], Dict[str, Any]]:
+class ScoreMaxVariantReranker(BaseAugReranker):
     """
-    One RRF pass over the four lists.  Keys are canonical basenames; each lane
-    contributes at most one rank per key (best rank if aliases appear).
+    Score-aware mode:
+    for each canonical table, keep the best score among variants (`csv`, `csv_t`, `csv_s`),
+    then rank by this max score.
     """
-    raw_ex = {str(x).strip() for x in exclude_basenames if str(x).strip()}
-    canon_ex = {canonical_modellake_basename(x) for x in raw_ex}
 
-    best_rank_per_lane: Dict[str, Dict[str, int]] = defaultdict(dict)
-    for lane_name, names in lane_rankings.items():
-        for rank, name in enumerate(names, start=1):
-            bn = str(name).strip()
-            if not bn or bn in raw_ex:
-                continue
-            key = canonical_modellake_basename(bn)
-            if key in canon_ex:
-                continue
-            lane_map = best_rank_per_lane[key]
-            prev = lane_map.get(lane_name)
-            if prev is None or rank < prev:
-                lane_map[lane_name] = rank
-
-    scored: List[Tuple[str, int, float, int]] = []
-    rrf_detail: Dict[str, Any] = {}
-    for basename, lane_to_rank in best_rank_per_lane.items():
-        pairs = list(lane_to_rank.items())
-        n_lanes = len(pairs)
-        rrf = sum(1.0 / (k_rrf + r) for _, r in pairs)
-        min_r = min(r for _, r in pairs)
-        scored.append((basename, n_lanes, rrf, min_r))
-        rrf_detail[basename] = {
-            "lane_hits": n_lanes,
-            "rrf": round(rrf, 6),
-            "min_rank": min_r,
-            "per_lane_rank": dict(pairs),
-        }
-
-    scored.sort(key=lambda x: (-x[1], -x[2], x[3]))
-    final = [x[0] for x in scored[:top_k]]
-    return final, rrf_detail
+    def rerank(self, *, lane_rankings: Dict[str, List[str]], lane_rankings_scored: Dict[str, List[Dict[str, Any]]], top_k: int, query_canon: str) -> Tuple[List[str], Dict[str, Any]]:
+        best_score: Dict[str, float] = defaultdict(lambda: float("-inf"))
+        min_rank: Dict[str, int] = {}
+        hit_count: Dict[str, int] = defaultdict(int)
+        for _lane, items in lane_rankings_scored.items():
+            seen: set[str] = set()
+            for i, item in enumerate(items, start=1):
+                fn = str(item.get("filename", "")).strip()
+                if not fn:
+                    continue
+                key = canonical_modellake_basename(os.path.basename(fn))
+                if not key or key == query_canon:
+                    continue
+                score = float(item.get("score", 0.0) or 0.0)
+                rank = int(item.get("rank", i) or i)
+                best_score[key] = max(best_score[key], score)
+                min_rank[key] = min(min_rank.get(key, 10**18), rank)
+                if key not in seen:
+                    seen.add(key)
+                    hit_count[key] += 1
+        scored = [(k, best_score[k], hit_count.get(k, 0), min_rank.get(k, 10**18)) for k in best_score]
+        scored.sort(key=lambda x: (-x[1], -x[2], x[3], x[0]))
+        final = [x[0] for x in scored[:top_k]]
+        stats = {k: {"max_score": s, "hit_count": hc, "min_rank": mr} for k, s, hc, mr in scored[:top_k]}
+        return final, stats
 
 
-def search_tab2tab_aug(
-    *,
-    search_type: str,
-    query: str,
-    k: int,
-    db_original: str,
-    db_transposed: str,
-    output_json: Optional[str] = None,
-    transposed_query_csv: Optional[str] = None,
-) -> List[str]:
-    table_path = resolve_query_table_path(query)
+class FlatNoScoreReranker(BaseAugReranker):
+    """No score required: flatten all lanes in order, canonicalize, dedupe."""
+
+    def rerank(self, *, lane_rankings: Dict[str, List[str]], lane_rankings_scored: Dict[str, List[Dict[str, Any]]], top_k: int, query_canon: str) -> Tuple[List[str], Dict[str, Any]]:
+        out: List[str] = []
+        seen: set[str] = set()
+        for lane_id in sorted(lane_rankings.keys()):
+            for name in lane_rankings.get(lane_id, []):
+                key = canonical_modellake_basename(os.path.basename(name))
+                if not key or key == query_canon or key in seen:
+                    continue
+                seen.add(key)
+                out.append(key)
+                if len(out) >= top_k:
+                    return out, {"mode": "flat_noscore", "returned": len(out)}
+        return out, {"mode": "flat_noscore", "returned": len(out)}
+
+
+RERANKER_BY_MODE: Dict[str, BaseAugReranker] = {
+    "table_level": TableLevelHitCountReranker(),
+    "score_max": ScoreMaxVariantReranker(),
+    "flat_noscore": FlatNoScoreReranker(),
+}
+
+
+def search_tab2tab_aug(*, search_type: str, query: str, k: int, db_original: str, db_transposed: str, output_json: Optional[str] = None, transposed_query_csv: Optional[str] = None, query_augmentation_types: Optional[List[str]] = None, candidate_augmentation_types: Optional[List[str]] = None, rerank_mode: str = "table_level") -> List[str]:
+    del db_transposed, transposed_query_csv
     t0 = time.time()
+    query_aug_types = _normalize_aug_types(query_augmentation_types)
+    cand_aug_types = _normalize_aug_types(candidate_augmentation_types)
 
-    t_csv = transposed_query_csv or default_transposed_query_csv_path(table_path)
-    write_transposed_query_csv(table_path, t_csv)
-    query_bn = os.path.basename(table_path)
-    transposed_query_bn = os.path.basename(t_csv)
+    rerank_mode_l = str(rerank_mode).strip().lower()
+    if rerank_mode_l not in RERANKER_BY_MODE:
+        raise ValueError(f"Unsupported rerank_mode={rerank_mode!r}. Expected one of: {sorted(RERANKER_BY_MODE.keys())}")
 
-    # We no longer switch to a separate "transposed DuckDB".
-    # Instead, we filter candidate tables by `table_type` inside `db_original`
-    # using `augmentation_types` (ori/tr/str).
-    def lane_to_augmentation_types(lane_name: str) -> List[str]:
-        return ["tr", "str"] if "transposed_db" in lane_name else ["ori", "str"]
+    retriever = NineLaneRetriever(search_type=search_type, query=query, k=k, db_path=db_original, query_aug_types=query_aug_types, candidate_aug_types=cand_aug_types)
+    retrieved = retriever.run(with_scores=(rerank_mode_l == "score_max"))
 
-    runs: List[Tuple[str, str]] = [
-        (LANE_RANKING_KEYS[0], table_path),
-        (LANE_RANKING_KEYS[1], table_path),
-        (LANE_RANKING_KEYS[2], t_csv),
-        (LANE_RANKING_KEYS[3], t_csv),
-    ]
-    lane_rankings: Dict[str, List[str]] = {}
-    lane_augmentation_types: Dict[str, List[str]] = {}
-    for label, q_path in runs:
-        aug_types = lane_to_augmentation_types(label)
-        lane_augmentation_types[label] = aug_types
-        lane_rankings[label] = search_table2table(
-            search_type=search_type,
-            query=q_path,
-            k=k,
-            db_path=db_original,
-            output_json=None,
-            augmentation_types=aug_types,
-        )
-
-    final_ranking, rrf_by_basename = rrf_merge_lane_rankings(
-        lane_rankings,
-        exclude_basenames=(query_bn, transposed_query_bn),
-        top_k=k,
-        k_rrf=rrf_k(),
-    )
-
-    elapsed_s = round(time.time() - t0, 4)
-    payload: Dict[str, Any] = {
-        "version": 1,
-        "search_type": search_type,
-        "query_resolved": table_path,
-        "transposed_query_csv": os.path.abspath(t_csv),
-        "k_per_lane": k,
-        "db_original": os.path.abspath(db_original),
-        "db_transposed": os.path.abspath(db_transposed),
-        "db_transposed_ignored": True,
-        "lane_augmentation_types": lane_augmentation_types,
-        "rrf_k": rrf_k(),
-        "lane_rankings": lane_rankings,
-        "rrf_by_basename": rrf_by_basename,
-        "merged_ranking": final_ranking,
-        "elapsed_s": elapsed_s,
-    }
+    reranker = RERANKER_BY_MODE[rerank_mode_l]
+    final, stats = reranker.rerank(lane_rankings=retrieved.lane_rankings, lane_rankings_scored=retrieved.lane_rankings_scored, top_k=k, query_canon=retrieved.query_canon)
 
     if output_json:
+        payload = {"version": 3, "search_type": search_type, "query": query, "query_basenames": retrieved.query_basenames, "query_augmentation_types": query_aug_types, "candidate_augmentation_types": cand_aug_types, "rerank_mode": rerank_mode_l, "lane_rankings": retrieved.lane_rankings, "lane_rankings_scored": retrieved.lane_rankings_scored, "rerank_stats": stats, "merged_ranking": final, "elapsed_s": round(time.time() - t0, 4)}
         parent = os.path.dirname(os.path.abspath(output_json))
         if parent:
             os.makedirs(parent, exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-
-    return final_ranking
+    return final
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Four tab2tab runs (query×DB transpose grid) + RRF merge → JSON."
-    )
-    parser.add_argument(
-        "--search_type",
-        choices=["single_column", "multi_column", "keyword", "unionable"],
-        required=True,
-    )
-    parser.add_argument("--query", required=True, help="Basename (via TABLE_BASE_DIRS) or path to a CSV.")
+    parser = argparse.ArgumentParser(description="tab2tab augmentation with class-based rerankers.")
+    parser.add_argument("--search_type", required=True, choices=["single_column", "multi_column", "keyword", "unionable"])
+    parser.add_argument("--query", required=True, help="table basename or path; aug variant names are inferred from stem")
     parser.add_argument("--k", type=int, default=10)
-    parser.add_argument(
-        "--resources",
-        nargs="+",
-        default=["hugging"],
-        choices=["hugging"],
-        help="Must be hugging; uses MODELLAKE_DB_HUGGING (candidate variants via augmentation_types).",
-    )
-    parser.add_argument(
-        "--output_json",
-        default="",
-        help=f"Write full JSON. Default: {TAB2TAB_AUG_OUTPUT_JSON}",
-    )
-    parser.add_argument(
-        "--transposed_query_csv",
-        default="",
-        help="Where to write the transposed query CSV (default: hashed file under OUTPUT_DIR).",
-    )
+    parser.add_argument("--query_augmentation_types", default="ori,tr,str")
+    parser.add_argument("--candidate_augmentation_types", default="ori,tr,str")
+    parser.add_argument("--rerank_mode", choices=sorted(RERANKER_BY_MODE.keys()), default="table_level")
+    parser.add_argument("--output_json", default="", help=f"default: {TAB2TAB_AUG_OUTPUT_JSON}")
     args = parser.parse_args()
 
-    resources = [str(r).strip().lower() for r in args.resources if str(r).strip()]
     db_original = MODELLAKE_DB_HUGGING
-    # Kept only for backward-compatible signature / payload; search ignores it.
-    db_transposed = db_original
-
     out_path = args.output_json or TAB2TAB_AUG_OUTPUT_JSON
-    t_wall = time.perf_counter()
-    print(
-        "[tab2tab_aug] "
-        f"resources={resources!r} | db_original={os.path.abspath(db_original)} | "
-        f"db_transposed={os.path.abspath(db_transposed)} (ignored) | blend={os.path.abspath(BLEND_INTERNAL_REPO or '')}",
-        flush=True,
-    )
-    merged = search_tab2tab_aug(
-        search_type=args.search_type,
-        query=args.query,
-        k=args.k,
-        db_original=db_original,
-        db_transposed=db_transposed,
-        output_json=out_path,
-        transposed_query_csv=(args.transposed_query_csv or None),
-    )
-    wall = time.perf_counter() - t_wall
-    print(f"Saved: {out_path} | merged top-{args.k}: {len(merged)} | wall {wall:.4f}s", flush=True)
+    t0 = time.perf_counter()
+    print(f"[tab2tab_aug] db_original={os.path.abspath(db_original)} | blend={os.path.abspath(BLEND_INTERNAL_REPO or '')} | rerank_mode={args.rerank_mode}", flush=True)
+    merged = search_tab2tab_aug(search_type=args.search_type, query=args.query, k=args.k, db_original=db_original, db_transposed=db_original, output_json=out_path, query_augmentation_types=[x.strip().lower() for x in args.query_augmentation_types.split(",") if x.strip()], candidate_augmentation_types=[x.strip().lower() for x in args.candidate_augmentation_types.split(",") if x.strip()], rerank_mode=args.rerank_mode)
+    print(f"Saved: {out_path} | merged top-{args.k}: {len(merged)} | wall {time.perf_counter() - t0:.4f}s", flush=True)
 
 
 if __name__ == "__main__":
