@@ -190,7 +190,12 @@ ssh -L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002 chippie.cs.uwaterloo.ca
 
 mimic user for batch running
 ```bash
-python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 --preset_path config/preset_queries.json --run_integration
+python scripts/batch_run_preset_queries.py \
+  --backend_url http://localhost:5002 \
+  --preset_path config/preset_queries.json \
+  --run_integration \
+  --integration_type alite \
+  --integration_search_types single_column unionable keyword
 ```
 
 ---
@@ -208,5 +213,6 @@ python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 -
 python scripts/check_retrieval_integration_consistency.py \
   --jobs-root data_251117/jobs_251117 \
   --search-types single_column unionable keyword \
-  --preview-search-type  single_column unionable keyword
+  --per-job-md \
+  --preview-max-rows 0 --preview-max-cols 0
 ```

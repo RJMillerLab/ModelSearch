@@ -139,6 +139,61 @@ def _pick_integration_json(job_dir: str) -> Optional[str]:
     return None
 
 
+def _find_integration_jsons_by_search_type(job_dir: str) -> Dict[str, str]:
+    """
+    Return {search_type: json_path} for all integration jsons under job_dir.
+    Falls back to file candidates if no wildcard matches.
+    """
+    out: Dict[str, str] = {}
+    # best-effort glob without importing glob tool; keep it simple:
+    for fn in sorted(os.listdir(job_dir)) if os.path.isdir(job_dir) else []:
+        if not (fn.startswith("integration_table_search") and fn.endswith(".json")):
+            continue
+        p = os.path.join(job_dir, fn)
+        if not os.path.isfile(p):
+            continue
+        try:
+            obj = _load_json(p)
+        except Exception:
+            continue
+        st = str(obj.get("search_type", "")).strip()
+        if st:
+            out[st] = p
+    if out:
+        return out
+    # fallback: old fixed names (may only cover one type)
+    p = _pick_integration_json(job_dir)
+    if not p:
+        return {}
+    try:
+        obj = _load_json(p)
+    except Exception:
+        return {}
+    st = str(obj.get("search_type", "")).strip()
+    if st:
+        return {st: p}
+    return {}
+
+
+def _extract_retrieved_tables_from_search(search_results: Dict[str, Any], search_type: str) -> List[str]:
+    """
+    Return a list of retrieved table identifiers (paths or basenames) for a search_type.
+    """
+    c2t2c = search_results.get("card2tab2card_results", {})
+    block = c2t2c.get(search_type) if isinstance(c2t2c, dict) else None
+    if not isinstance(block, dict):
+        return []
+    if isinstance(block.get("searched_tables"), list) and block.get("searched_tables"):
+        return [str(x) for x in block.get("searched_tables") if str(x).strip()]
+    intermediate = block.get("intermediate")
+    if isinstance(intermediate, dict) and isinstance(intermediate.get("retrieved_table_filenames"), list):
+        return [str(x) for x in intermediate.get("retrieved_table_filenames") if str(x).strip()]
+    mappings = block.get("mappings")
+    if isinstance(mappings, dict) and isinstance(mappings.get("retrieved_table_to_related_models"), dict):
+        return [str(k) for k in mappings["retrieved_table_to_related_models"].keys()]
+    return []
+
+
 @dataclass
 class CheckResult:
     job_id: str
@@ -266,7 +321,7 @@ def _iter_job_dirs(jobs_root: str) -> List[str]:
     out: List[str] = []
     for name in sorted(os.listdir(jobs_root)):
         p = os.path.join(jobs_root, name)
-        if os.path.isdir(p) and name != "batch_runs":
+        if os.path.isdir(p) and name not in {"batch_runs", "job_md"}:
             out.append(p)
     return out
 
@@ -518,6 +573,121 @@ def _render_preview_markdown(
     return "\n".join(lines)
 
 
+def _slug_anchor(s: str) -> str:
+    s2 = re.sub(r"[^a-zA-Z0-9_ -]+", "", str(s)).strip().lower()
+    return s2.replace(" ", "-")
+
+
+def _write_job_md(
+    *,
+    job_dir: str,
+    out_path: str,
+    search_types: List[str],
+    preview_max_rows: Optional[int],
+    preview_max_cols: Optional[int],
+) -> None:
+    search_path = os.path.join(job_dir, "search_results.json")
+    if not os.path.isfile(search_path):
+        return
+    try:
+        search = _load_json(search_path)
+    except Exception:
+        return
+
+    integ_map = _find_integration_jsons_by_search_type(job_dir)
+    job_id = os.path.basename(os.path.normpath(job_dir))
+    query_text = str(search.get("query", "")).strip()
+
+    lines: List[str] = []
+    lines.append(f"# Job `{job_id}`")
+    lines.append("")
+    lines.append(f"- job_dir: `{job_dir}`")
+    lines.append(f"- search_results: `{search_path}`")
+    lines.append("")
+    lines.append("## Query (NLP)")
+    lines.append("")
+    lines.append(f"`{query_text}`" if query_text else "_(missing)_")
+    lines.append("")
+
+    # global query table (seed) per search_type may differ; show per section
+    lines.append("## Directory")
+    lines.append("")
+    for st in search_types:
+        anchor = _slug_anchor(st)
+        lines.append(f"- [{st}](#{anchor})")
+    lines.append("")
+
+    c2t2c = search.get("card2tab2card_results", {}) if isinstance(search, dict) else {}
+
+    for st in search_types:
+        anchor = _slug_anchor(st)
+        lines.append(f"## {st}")
+        lines.append("")
+
+        block = c2t2c.get(st) if isinstance(c2t2c, dict) else None
+        if not isinstance(block, dict):
+            lines.append("_(no card2tab2card results for this search type)_")
+            lines.append("")
+            continue
+
+        query_tables = block.get("query_tables", []) if isinstance(block.get("query_tables"), list) else []
+        qtb = str(query_tables[0]).strip() if query_tables else ""
+        lines.append(f"- query_table: `{qtb or '(missing)'}`")
+
+        retrieved = _extract_retrieved_tables_from_search(search, st)
+        lines.append(f"- retrieved_tables: `{len(retrieved)}`")
+
+        integ_path = integ_map.get(st)
+        if integ_path and os.path.isfile(integ_path):
+            try:
+                integ = _load_json(integ_path)
+            except Exception:
+                integ = {}
+            integrated_df = _extract_integrated_df(integ) if isinstance(integ, dict) else pd.DataFrame()
+            table_paths = integ.get("table_paths", []) if isinstance(integ, dict) else []
+            table_paths = [str(p).strip() for p in table_paths if str(p).strip()] if isinstance(table_paths, list) else []
+            lines.append(f"- integration_json: `{os.path.basename(integ_path)}`")
+            lines.append(f"- integrated_table shape: `{integrated_df.shape[0]} x {integrated_df.shape[1]}`")
+        else:
+            integ = {}
+            integrated_df = pd.DataFrame()
+            table_paths = []
+            lines.append("- integration_json: `None`")
+            lines.append("- integrated_table shape: `0 x 0`")
+        lines.append("")
+
+        lines.append("### Query table")
+        lines.append("")
+        qdf = _resolve_query_table_df(qtb) if qtb else pd.DataFrame()
+        lines.append(_df_to_markdown(qdf, max_rows=preview_max_rows, max_cols=preview_max_cols))
+        lines.append("")
+
+        lines.append("### Retrieved tables")
+        lines.append("")
+        # Prefer showing retrieved tables from search payload; if empty, fall back to integration inputs (table_paths).
+        retrieved_for_preview = retrieved if retrieved else table_paths
+        if retrieved_for_preview:
+            for i, p in enumerate(retrieved_for_preview, start=1):
+                bn = os.path.basename(str(p))
+                lines.append(f"#### {i}. `{bn}`")
+                lines.append("")
+                tdf = _resolve_query_table_df(str(p))
+                lines.append(_df_to_markdown(tdf, max_rows=preview_max_rows, max_cols=preview_max_cols))
+                lines.append("")
+        else:
+            lines.append("_(empty)_")
+            lines.append("")
+
+        lines.append("### Integrated table")
+        lines.append("")
+        lines.append(_df_to_markdown(integrated_df, max_rows=preview_max_rows, max_cols=preview_max_cols))
+        lines.append("")
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Check retrieve->integrated mapping consistency for local jobs"
@@ -555,6 +725,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--no-summary-md",
+        action="store_true",
+        help="Do not write the aggregate consistency report markdown.",
+    )
+    parser.add_argument(
         "--preview-md-out",
         type=str,
         default=None,
@@ -562,6 +737,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Write preview markdown with query/integrated table heads. "
             "Default: <jobs-root>/query_integrated_preview.md"
         ),
+    )
+    parser.add_argument(
+        "--no-preview-md",
+        action="store_true",
+        help="Do not write the aggregate preview markdown.",
     )
     parser.add_argument(
         "--preview-search-type",
@@ -592,6 +772,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=int,
         default=0,
         help="Max cols per rendered table in preview markdown; <=0 means all cols",
+    )
+    parser.add_argument(
+        "--per-job-md",
+        action="store_true",
+        help="Generate one markdown file per job (recommended).",
+    )
+    parser.add_argument(
+        "--per-job-md-dir",
+        type=str,
+        default=None,
+        help="Output directory for per-job markdown files (default: <jobs-root>/job_md)",
     )
 
     args = parser.parse_args(argv)
@@ -626,32 +817,68 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"Summary: total={total}, ok={ok}, fail={fail}, skip={skip}")
     print("=" * 60)
 
-    md_out = args.markdown_out or os.path.join(
-        args.jobs_root, "retrieval_integration_consistency_report.md"
-    )
-    md = _render_markdown_report(
-        all_results,
-        jobs_root=args.jobs_root,
-        search_types=search_types,
-    )
-    os.makedirs(os.path.dirname(os.path.abspath(md_out)), exist_ok=True)
-    with open(md_out, "w", encoding="utf-8") as f:
-        f.write(md)
-    print(f"📄 Markdown report written: {md_out}")
+    # By default, when generating per-job markdown, skip aggregate md outputs unless explicitly requested.
+    write_summary_md = not args.no_summary_md and (not args.per_job_md)
+    write_preview_md = not args.no_preview_md and (not args.per_job_md)
 
-    preview_out = args.preview_md_out or os.path.join(args.jobs_root, "query_integrated_preview.md")
-    preview_md = _render_preview_markdown(
-        job_dirs,
-        preview_search_type=str(args.preview_search_type).strip(),
-        job_limit=max(1, int(args.preview_job_limit)),
-        preview_retrieved_table_limit=int(args.preview_retrieved_table_limit),
-        preview_max_rows=(None if int(args.preview_max_rows) <= 0 else int(args.preview_max_rows)),
-        preview_max_cols=(None if int(args.preview_max_cols) <= 0 else int(args.preview_max_cols)),
-    )
-    os.makedirs(os.path.dirname(os.path.abspath(preview_out)), exist_ok=True)
-    with open(preview_out, "w", encoding="utf-8") as f:
-        f.write(preview_md)
-    print(f"📄 Preview markdown written: {preview_out}")
+    if write_summary_md:
+        md_out = args.markdown_out or os.path.join(
+            args.jobs_root, "retrieval_integration_consistency_report.md"
+        )
+        md = _render_markdown_report(
+            all_results,
+            jobs_root=args.jobs_root,
+            search_types=search_types,
+        )
+        os.makedirs(os.path.dirname(os.path.abspath(md_out)), exist_ok=True)
+        with open(md_out, "w", encoding="utf-8") as f:
+            f.write(md)
+        print(f"📄 Markdown report written: {md_out}")
+
+    if write_preview_md:
+        preview_out = args.preview_md_out or os.path.join(args.jobs_root, "query_integrated_preview.md")
+        preview_md = _render_preview_markdown(
+            job_dirs,
+            preview_search_type=str(args.preview_search_type).strip(),
+            job_limit=max(1, int(args.preview_job_limit)),
+            preview_retrieved_table_limit=int(args.preview_retrieved_table_limit),
+            preview_max_rows=(None if int(args.preview_max_rows) <= 0 else int(args.preview_max_rows)),
+            preview_max_cols=(None if int(args.preview_max_cols) <= 0 else int(args.preview_max_cols)),
+        )
+        os.makedirs(os.path.dirname(os.path.abspath(preview_out)), exist_ok=True)
+        with open(preview_out, "w", encoding="utf-8") as f:
+            f.write(preview_md)
+        print(f"📄 Preview markdown written: {preview_out}")
+
+    if args.per_job_md:
+        out_dir = args.per_job_md_dir or os.path.join(args.jobs_root, "job_md")
+        os.makedirs(out_dir, exist_ok=True)
+        index_lines: List[str] = []
+        index_lines.append("# Job Markdown Index")
+        index_lines.append("")
+        index_lines.append(f"- jobs_root: `{args.jobs_root}`")
+        index_lines.append(f"- output_dir: `{out_dir}`")
+        index_lines.append("")
+        index_lines.append("## Jobs")
+        index_lines.append("")
+
+        for jd in job_dirs:
+            jid = os.path.basename(os.path.normpath(jd))
+            out_path = os.path.join(out_dir, f"{jid}.md")
+            _write_job_md(
+                job_dir=jd,
+                out_path=out_path,
+                search_types=search_types,
+                preview_max_rows=(None if int(args.preview_max_rows) <= 0 else int(args.preview_max_rows)),
+                preview_max_cols=(None if int(args.preview_max_cols) <= 0 else int(args.preview_max_cols)),
+            )
+            rel = os.path.relpath(out_path, start=out_dir)
+            index_lines.append(f"- [`{jid}`]({rel})")
+
+        index_path = os.path.join(out_dir, "README.md")
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(index_lines))
+        print(f"📄 Per-job markdown index written: {index_path}")
 
     if args.strict and fail > 0:
         return 1

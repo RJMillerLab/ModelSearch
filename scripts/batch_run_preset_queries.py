@@ -91,7 +91,7 @@ def run_one_query(
     integration_type: str = "alite",
     integration_k: int = 10,
     integration_max_models: int = 10,
-    integration_search_type: str = "unionable",
+    integration_search_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run search (and optional integration) for a single query."""
     search_url = f"{backend_url}/api/search"
@@ -167,28 +167,38 @@ def run_one_query(
         print(f"      ✖ Model Search integration failed: {e}")
 
     # Table Search integration
-    table_payload = {
-        "job_id": job_id,
-        "search_type": integration_search_type,
-        "integration_type": integration_type,
-        "k": integration_k,
-        "max_models": integration_max_models,
-        # For batch use we stick to 'intermediate' to avoid very heavy all_from_modelcards scans.
-        "tables_source": "intermediate",
-    }
-    table_int_res: Optional[Dict[str, Any]] = None
-    try:
-        table_int_res = _post_json(table_int_url, table_payload)
-        status = table_int_res.get("status")
-        if status == "success":
-            print("      ✓ Table Search integration success")
-        else:
-            print(f"      ⚠ Table Search integration status={status} message={table_int_res.get('message')}")
-    except Exception as e:
-        print(f"      ✖ Table Search integration failed: {e}")
+    if not integration_search_types:
+        # Default: run ALITE integration for all Card2Tab2Card modes.
+        integration_search_types = ["single_column", "unionable", "keyword"]
+
+    table_int_res_by_type: Dict[str, Any] = {}
+    for st in integration_search_types:
+        table_payload = {
+            "job_id": job_id,
+            "search_type": st,
+            "integration_type": integration_type,
+            "k": integration_k,
+            "max_models": integration_max_models,
+            # For batch use we stick to 'intermediate' to avoid very heavy all_from_modelcards scans.
+            "tables_source": "intermediate",
+        }
+        try:
+            res = _post_json(table_int_url, table_payload)
+            table_int_res_by_type[st] = res
+            status = res.get("status")
+            if status == "success":
+                print(f"      ✓ Table Search integration success (search_type={st})")
+            else:
+                print(
+                    f"      ⚠ Table Search integration status={status} "
+                    f"(search_type={st}) message={res.get('message')}"
+                )
+        except Exception as e:
+            table_int_res_by_type[st] = {"status": "error", "message": str(e)}
+            print(f"      ✖ Table Search integration failed (search_type={st}): {e}")
 
     outcome["integration_model_search"] = model_int_res
-    outcome["integration_table_search"] = table_int_res
+    outcome["integration_table_search"] = table_int_res_by_type
     return outcome
 
 
@@ -253,9 +263,13 @@ def main() -> int:
         help="Max models for integration (default 10).",
     )
     parser.add_argument(
-        "--integration_search_type",
-        default="unionable",
-        help="Table search type for integration /api/integrate (default unionable).",
+        "--integration_search_types",
+        nargs="+",
+        default=[],
+        help=(
+            "Table search types to integrate via /api/integrate. "
+            "Default: single_column unionable keyword"
+        ),
     )
 
     args = parser.parse_args()
@@ -300,7 +314,7 @@ def main() -> int:
                 integration_type=args.integration_type,
                 integration_k=args.integration_k,
                 integration_max_models=args.integration_max_models,
-                integration_search_type=args.integration_search_type,
+                integration_search_types=(args.integration_search_types or None),
             )
             all_outcomes.append({"id": q_id, "query": q_text, **outcome})
         except Exception as e:
