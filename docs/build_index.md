@@ -193,53 +193,6 @@ mimic user for batch running
 python scripts/batch_run_preset_queries.py --backend_url http://localhost:5002 --preset_path config/preset_queries.json --run_integration
 ```
 
-
----
-
-# Quick reference
-
-| Part 1 | |
-|--------|---|
-| Modelcard index | card2card build-index (or baseline1 3 steps) |
-| Sparse index (card2card) | card2card build-sparse-index |
-| Blend | clone/symlink src/Blend_internal |
-| DuckDB index | create_index_duckdb --db_path data/modellake.db --data_glob ... |
-| Table classification | classification --mode batch --db_path data/modellake.db --output_json data/table_classifications.json (or --method heuristic) |
-| **Part 2** | |
-| query2modelcard | query2modelcard --query "..." --top_k 20 |
-| card2card | search --retrieval_mode dense \| sparse \| hybrid (test all 3) |
-| query2tab2card | --query + --search_type (keyword/single_column/multi_column/unionable) + --table_top_k |
-| card2tab2card (deprecated) | --model_id + --search_type + --table_top_k (mapping-only; no model_top_k/query args) |
-| tab2tab | --search_type keyword \| single_column \| multi_column \| unionable (test all 4) |
-| tab2tab_aug | `python -m src.search.tab2tab_aug` — same four search_type values; four lanes + RRF; needs ori + tr DuckDB (config hugging pair) |
-| tab2tab_by_type | same 4 search_type with --classification_json (test all 4) |
-| Generate table MD | `python -m src.postprocess.generate_table_md` (--table_ids / --model_id); `generate_md_from_logs` for logs → md/ |
-| Demo | backend + frontend → http://localhost:5001 |
-
-Scripts print Total time at exit; redirect to `logs/*.log` to keep timings.
-
----
-
-# Log timings (from `logs/*.log` — **refresh on your machine**)
-
-**Inference time:** Use the line `[timing] inference (min)` in logs. Load time (sparse index, npz, FAISS) is not counted. With **Pyserini** sparse, inference is get query text + BM25 top-k search (fast); older rank_bm25 sparse scored all docs (~630s).
-
-| Log file | Total (s) | Inference (min) | Device | Note |
-|----------|-----------|-----------------|--------|------|
-| query2modelcard.log | 10.09 | — | cuda | |
-| card2card_dense.log | 11.11 | ~7.7 | cuda | FAISS search only |
-| card2card_sparse.log | 4.04 | 0.67 | cpu | load index 3.37s, get query+truncate 0.03s, BM25 top-k 0.65s |
-| card2card_hybrid.log | 17.22 | 7.92 | cuda | sparse branch 2.75s, load npz 1.76s, FAISS 4.68s, search 7.60s |
-| tab2tab_keyword.log | 0.11 | — | cpu | |
-| tab2tab_single_column.log | 0.09 | — | cpu | |
-| tab2tab_by_type.log | 0.21 | — | — | (script may print ⏱️ Total time without device) |
-| card2tab2card_* / tab2tab_by_type_* | (see prior rows if present) | | | |
-| tab2tab_by_type_multi_column.log | — | — | | DuckDB to_bitstring; fix in Blend_internal (2.5) |
-
-**Sparse (Pyserini):** inference (min) = get query text + truncate + BM25 top-k search (~0.67s). **Hybrid:** inference (min) = sparse step + FAISS search + combine (~7.92s).
-
-Run `grep -h "Total time\|inference (min)\|\[timing\]" logs/*.log` to refresh.
-
 ---
 
 # Inference fast checklist
@@ -248,3 +201,12 @@ Run `grep -h "Total time\|inference (min)\|\[timing\]" logs/*.log` to refresh.
 2. **Do not** call `build-index` or `classification --mode batch` during serving or per-query scripts.
 3. Inference scripts only **load** prebuilt files: `emb_npz`, `faiss_index`, `jsonl`, `modellake.db`, `table_classifications.json`.
 4. For tab2know: batch classification (Part 1.4) runs tab2know **inference** per table and writes JSON; at query time we only `load_classifications(json)`. Tab2know’s own model training lives in TabKnow_internal (separate repo).
+
+## 4. Analysis
+
+```bash
+python scripts/check_retrieval_integration_consistency.py \
+  --jobs-root data_251117/jobs_251117 \
+  --search-types single_column unionable keyword \
+  --preview-search-type  single_column unionable keyword
+```
