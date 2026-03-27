@@ -2,6 +2,8 @@
 
 **Paths:** Data paths (ModelTables/data, modellake.db, processed dirs, relationship parquet) are defined in `src.config`. Override with env: `MODELTABLES_DATA` or `DATA_ROOT`, `MODELLAKE_DB`, `DATA_TAG`. Examples below use config defaults.
 
+**ModelCard IR (dense NPZ + sparse Lucene):** Use **`src.search.ir_index_builder`** to **build** indexes (`DenseCardIndexBuilder`, `SparseCardIndexBuilder`) and **`src.search.ir_searcher`** to **retrieve** (`DenseSearcher`, `SparseSearcher`). Outputs and defaults are `EMB_NPZ`, `SPARSE_INDEX`, and hugging subsets `EMB_NPZ_HUGGING`, `SPARSE_INDEX_HUGGING` in `src.config`.
+
 **Part 1** = index building (run once). **Part 2** = inference (retrieval, table search, demo). When a step has multiple modes, run all and save to separate log/json.
 # Part 1 — Must run (in order)
 
@@ -35,19 +37,30 @@ python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_i
 python -m scripts.update_model_to_tables_explode_parquet_by_db_tables --parquet_path data_251117/model_to_tables_explode_v2_251117.parquet --resources hugging --duckdb_path ../Blend_internal/database_251117/modellake_v2_251117_nomask_hugging.db > logs/update_model_to_tables_explode_parquet_by_db_tables_hugging.log 2>&1 # so it won't affect downstream getting csvs, otherwise it will get csv that don't exist in DuckDB index
 ```
 
-## 1.2 Modelcard index
+## 1.2 Modelcard index (`ir_index_builder`)
 
-```bash
-# build index for dense retrieval (FAISS) and sparse retrieval (Pyserini Lucene) from modelcard_step1.parquet
-python -m src.search.card2card build-dense-index
-python -m src.search.card2card build-sparse-index
+From `modelcard_step1` parquet (see `MODELCARD_STEP1_PARQUET`): dense = SentenceTransformer → `EMB_NPZ`; sparse = corpus JSONL + Pyserini Lucene → `SPARSE_INDEX`.
 
-# (Optional) Build dense + sparse subset for "hugging" (dense npz + sparse lucene index)
-python -m src.utils.build_card2card_subset_from_embeddings_and_ids --model_ids_txt data_251117/valid_model_ids_with_tables_hugging.txt --threads 4
-# Test numbers of filtered files
-# python -c "from pyserini.search.lucene import LuceneSearcher; s=LuceneSearcher('data_251117/card2card_sparse_index_hugging'); print('index_docs=', s.num_docs)"
+```python
+# Run from repo root (PYTHONPATH=. or `pip install -e .`)
+from src.search.ir_index_builder import DenseCardIndexBuilder, SparseCardIndexBuilder
+
+DenseCardIndexBuilder().build(batch_size=256)
+SparseCardIndexBuilder().build(threads=4)
 ```
 
+```bash
+# Same as above, via module CLI
+python -m src.search.ir_index_builder build-dense-index --batch_size 256
+python -m src.search.ir_index_builder build-sparse-index --threads 4
+```
+
+```bash
+# (Optional) Build dense + sparse subset for "hugging" only (filters NPZ + Lucene by id list)
+python -m src.utils.build_subset_from_embeddings_and_ids --model_ids_txt data_251117/valid_model_ids_with_tables_hugging.txt --threads 4
+# Test doc count on hugging Lucene index
+# python -c "from pyserini.search.lucene import LuceneSearcher; s=LuceneSearcher('data_251117/card2card_sparse_index_hugging'); print('index_docs=', s.num_docs)"
+```
 
 <details><summary>(Optional) 1.3 Table classification (optional; for by_type flows)</summary>
 
@@ -66,31 +79,41 @@ python -m src.search.classification --mode batch --output_json data/table_classi
 
 # Part 2 — Inference
 
-## 2.1 query2modelcard
+## 2.1 ModelCard retrieval (`ir_searcher`)
+
+**Text query:** dense = encode query with the same encoder as index build, then FAISS inner product; sparse = BM25 on the Lucene index. Use `EMB_NPZ` / `SPARSE_INDEX` for full corpus, or `EMB_NPZ_HUGGING` / `SPARSE_INDEX_HUGGING` for the hugging subset.
+
+```python
+from src.config import EMB_NPZ_HUGGING, SPARSE_INDEX_HUGGING
+from src.search.ir_searcher import DenseSearcher, SparseSearcher
+
+q = "transformer model for code generation"
+top_k = 20
+
+dense = DenseSearcher(EMB_NPZ_HUGGING)
+model_ids, scores = dense.search(q, top_k=top_k)
+
+sparse = SparseSearcher(SPARSE_INDEX_HUGGING)
+model_ids, scores = sparse.search(q, top_k=top_k)
+```
+
+**Neighbor search by seed `model_id`:** dense uses the **stored embedding row** as the query vector; sparse uses that doc’s **indexed text** as the BM25 query (not an embedding).
+
+```python
+seed = "google-bert/bert-base-uncased"
+n_dense, s_dense = dense.search_by_model_id(seed, top_k=20)
+n_sparse, s_sparse = sparse.search_by_model_id(seed, top_k=20)
+```
+
+**Hybrid** (sparse candidates → dense rerank) is not a single call on `DenseSearcher`; use `Query2ModelCardSearch` with hybrid mode or `src.search.card2card_batch.search_hybrid_neighbors_queries` if you need the legacy pipeline.
+
+Alternative: `query2modelcard` CLI
 
 ```bash
 python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode dense --resources hugging --output_json data_251117/query2modelcard_dense_hugging.json > logs/query2modelcard_dense_hugging.log 2>&1
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode sparse --resources hugging --output_json data_251117/query2modelcard_sparse_hugging.json > logs/query2modelcard_sparse_hugging.log 2>&1 # tested
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode sparse --resources hugging --output_json data_251117/query2modelcard_sparse_hugging.json > logs/query2modelcard_sparse_hugging.log 2>&1
 python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode hybrid --resources hugging --output_json data_251117/query2modelcard_hybrid_hugging.json > logs/query2modelcard_hybrid_hugging.log 2>&1
 ```
-
-<details><summary>(Deprecated)</summary>
-## 2.2 card2card (dense, sparse, hybrid)
-
-**Train vs inference:** Part 1 (1.1, 1.1b) = train: build modelcard index and sparse Lucene index. Part 2 = inference: only load those artifacts and run retrieval. Sparse uses Pyserini (same as ModelTables baseline2).
-
-```bash
-# model ids file (single query also works)
-echo "google-bert/bert-base-uncased" > data_251117/card2card_model_ids.txt
-# dense (FAISS only)
-# python -m src.search.card2card search --model_id ... is deprecated; use --model_ids_file instead
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode dense --resources hugging --output_json data_251117/card2card_dense_hugging.json > logs/card2card_dense_hugging.log 2>&1
-# sparse (Pyserini Lucene index from 1.1b)
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode sparse --resources hugging --output_json data_251117/card2card_sparse_hugging.json > logs/card2card_sparse_hugging.log 2>&1 # tested
-# hybrid (sparse + FAISS)
-python -m src.search.card2card search --model_ids_file data_251117/card2card_model_ids.txt --top_k 20 --retrieval_mode hybrid --resources hugging --output_json data_251117/card2card_hybrid_hugging.json > logs/card2card_hybrid_hugging.log 2>&1
-```
-</details>
 
 ## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable) (aug mode: ori, tr, str)
 
@@ -136,7 +159,7 @@ python -m src.search.query2tab2card --resources hugging --query "bert base uncas
 python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type unionable --table_top_k 3 --output_json tmp/query2tab2card_unionable_hugging.json > logs/query2tab2card_unionable_hugging.log 2>&1
 
 # Optional controls for query2tab2card:
-#   --model_top_k 5 --q2m_table_candidate_k 9
+#   --model_top_k 5
 #   --q2m_top_k 20 --seed_rank_index 0 --disable_query_rerank
 ```
 
@@ -168,6 +191,7 @@ python -m src.utils.generate_md_from_logs --log_file logs/card2tab2card_by_type.
 **Outputs:** `logs/` (input); `md/<log_basename>.md` (one per log); `md/<log_basename>_materials/csv_integrated/integrated.csv` when integration finds CSVs. **Generated** = md file written for that log; **Failed** = no result JSON path in log (run that search with `--output_json` to fix). Pipeline: model-search = models first, then tables; table-search = tables only.
 
 </details>
+
 
 ## 2.7 Demo (evaluation, QA, integration)
 
@@ -202,10 +226,10 @@ python scripts/batch_run_preset_queries.py \
 
 # Inference fast checklist
 
-1. **Run Part 1 once** (modelcard index, Blend, DuckDB index; table classification only if you use by_type).
-2. **Do not** call `build-index` or `classification --mode batch` during serving or per-query scripts.
-3. Inference scripts only **load** prebuilt files: `emb_npz`, `faiss_index`, `jsonl`, `modellake.db`, `table_classifications.json`.
-4. For tab2know: batch classification (Part 1.4) runs tab2know **inference** per table and writes JSON; at query time we only `load_classifications(json)`. Tab2know’s own model training lives in TabKnow_internal (separate repo).
+1. **Run Part 1 once** (modelcard indexes via **`ir_index_builder`**, Blend DuckDB, optional table classification for by_type).
+2. **Do not** re-run index builders or `classification --mode batch` during serving or per-query scripts.
+3. Inference **loads** artifacts only: card2card **`EMB_NPZ` + Lucene `SPARSE_INDEX`** (or hugging subsets), `modellake.db`, optional `table_classifications.json`. Use **`ir_searcher`** (`DenseSearcher` / `SparseSearcher`) for modelcard retrieval.
+4. For tab2know: batch classification (optional 1.3) runs tab2know **inference** per table and writes JSON; at query time we only `load_classifications(json)`. Tab2know’s own model training lives in TabKnow_internal (separate repo).
 
 ## 4. Analysis
 

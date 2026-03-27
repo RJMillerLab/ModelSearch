@@ -34,6 +34,7 @@ def init_search_runtime() -> None:
     if _search_runtime is not None:
         return
     table_resources = ["hugging"]
+    # Returns (emb_npz, sparse_lucene_dir, duckdb_path); full-corpus sparse index for query2modelcard sparse/hybrid.
     _, sparse_index_full, _ = _paths_for_resource_set(["hugging", "github", "arxiv"])
     _, _, table_db_path = _paths_for_resource_set(["hugging"])
     db_key = os.path.abspath(str(table_db_path))
@@ -372,7 +373,6 @@ def run_search_pipeline(
     top_k: int = 20,
     model_id: Optional[str] = None,
     table_search_k: Optional[int] = None,
-    query2modelcard_retrieval_mode: str = "dense",
     use_by_type: bool = False,
     model_top_k: int = 5,
     table_resource_allowlist: Optional[List[str]] = None,
@@ -393,20 +393,8 @@ def run_search_pipeline(
         d["run_log_path"] = os.path.join(job_dir, "pipeline_run.log")
         logger.set_results(d)
 
-    _run_pipeline_body(
-        logger,
-        job_id,
-        job_dir,
-        start_time,
-        query,
-        top_k,
-        model_id,
-        table_search_k,
-        query2modelcard_retrieval_mode,
-        use_by_type,
-        model_top_k=model_top_k,
-        table_resource_allowlist=table_resource_allowlist,
-    )
+    _run_pipeline_body(logger,job_id,job_dir,start_time,query,top_k,model_id,table_search_k,use_by_type,model_top_k=model_top_k,table_resource_allowlist=table_resource_allowlist)
+
 
 def _run_pipeline_body(
     logger: "JobLogger",
@@ -417,7 +405,6 @@ def _run_pipeline_body(
     top_k: int,
     model_id: Optional[str],
     table_search_k: Optional[int],
-    query2modelcard_retrieval_mode: str,
     use_by_type: bool = False,
     *,
     model_top_k: int = 5,
@@ -446,8 +433,6 @@ def _run_pipeline_body(
 
     q2m_full_path = os.path.join(job_dir, "query2modelcard.json")
     q2m_top_k_here = min(200, 5 * int(top_k))
-
-    mode = "dense"
 
     q2m = Query2ModelCardSearch(query=query, top_k=q2m_top_k_here)
     q2m.search_dense(top_k=q2m_top_k_here, dense=rt["dense_full"])
@@ -516,13 +501,29 @@ def _run_pipeline_body(
                 f"{RELATIONSHIP_PARQUET} or has no csv_basename. "
                 "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
             )
-    
-    # preparing saving jobs
-    q2m_neighbors_by_mode: Dict[str, List[str]] = {m: [] for m in QUERY2MODELCARD_RETRIEVAL_MODES}
-    mode_primary = mode
-    if q2m_ordered_model_ids:
-        neighbor_list = [m for m in q2m_ordered_model_ids if m != seed_s][:q2m_neighbor_top_k]
-        q2m_neighbors_by_mode[mode_primary] = list(neighbor_list)
+
+    def _neighbor_ids_for_mode(result_key: str) -> List[str]:
+        raw = q2m.results.get(result_key)
+        if not isinstance(raw, list):
+            return []
+        out: List[str] = []
+        for x in raw:
+            if isinstance(x, dict):
+                s = str(x.get("model_id") or x.get("id") or x).strip()
+            else:
+                s = str(x).strip()
+            if not s or s == seed_s:
+                continue
+            out.append(s)
+            if len(out) >= q2m_neighbor_top_k:
+                break
+        return out
+
+    q2m_neighbors_by_mode: Dict[str, List[str]] = {
+        "dense": _neighbor_ids_for_mode("dense"),
+        "sparse": _neighbor_ids_for_mode("sparse"),
+        "hybrid": _neighbor_ids_for_mode("hybrid"),
+    }
 
     right_max_models = 0
     for _st, payload in card2tab2card_all.items():

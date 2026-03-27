@@ -9,8 +9,6 @@ Outputs:
   - a filtered embeddings npz (dense retrieval subset)
   - a filtered Pyserini Lucene index (sparse retrieval subset)
 
-This lets you run `src.search.card2card search` on a smaller candidate space
-by passing:
   - --embeddings_npz_path=<subset_dense_npz>
   - --sparse_index_path=<subset_sparse_index_dir>
 """

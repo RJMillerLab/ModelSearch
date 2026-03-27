@@ -24,8 +24,6 @@ V2_SUFFIX = "_v2"
 # --- modellake.db ---
 MODELLAKE_DB = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_nomask_251117.db") # because there is no condition on Title, we don't need to use the mask file
 MODELLAKE_DB_HUGGING = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117_nomask_hugging.db")
-# Paired DuckDB built from the same corpus with tables row/col transposed (build + import separately; path is conventional).
-MODELLAKE_DB_HUGGING_TRANSPOSED = os.path.join(ROOT_DIR, "Blend_internal", "database_251117", "modellake_v2_251117_nomask_hugging_tr.db")
 INDEX_TABLE = "modellake_index"
 
 DEDUPED_HUGGING_CSVS =  os.path.join(PROCESSED_DIR, f"deduped_hugging_csvs{V2_SUFFIX}{DATA_TAG}")
@@ -97,12 +95,6 @@ BLEND_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "Blend_internal")
 TAB2KNOW_REPO = os.path.join(REPO_ROOT, "others", "tab2know")
 QUERY2MODELCARD_RETRIEVAL_MODES = ["dense", "sparse", "hybrid"]
 CARD2TAB2CARD_TYPES = ["keyword", "single_column", "unionable"]
-
-# Model Search (left column / query2modelcard_* fields in job JSON):
-# - False (default): neighbors come from in-process query2modelcard (no separate search CLI per mode).
-#   Set USE_CARD2CARD_CLI=1 or True to always invoke `python -m src.search.card2card search` (slower).
-# Use False or 0 only — strings like "no" are truthy and wrongly enable the CLI.
-USE_CARD2CARD_CLI = False
 
 # Table search / Card2Tab2Card post-filtering by table filename source.
 # "github", "arxiv", "hugging"
