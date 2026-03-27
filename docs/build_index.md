@@ -152,8 +152,6 @@ python -m src.search.tab2tab_by_type --query 3690 --classification_json data/tab
 python -m src.search.tab2tab_by_type --query 3690 --classification_json data/table_classifications.json --search_type unionable --k 10 --output_json data/tab2tab_by_type_unionable_results.json > logs/tab2tab_by_type_unionable.log 2>&1 
 ```
 
-</details>
-
 If **multi_column** fails with `Scalar Function with name to_bitstring does not exist`: DuckDB version mismatch. In **Blend_internal** edit `src/Blend_internal/src/Operators/Seekers/MultiColumnOverlap.py` and replace `TO_BITSTRING(super_key)` with `to_binary(super_key)` (or the bitstring function your DuckDB provides). Then re-run.
 
 ## 2.6 Generate table comparison markdown (src/postprocess)
@@ -168,6 +166,8 @@ python -m src.utils.generate_md_from_logs --log_file logs/card2tab2card_by_type.
 ```
 
 **Outputs:** `logs/` (input); `md/<log_basename>.md` (one per log); `md/<log_basename>_materials/csv_integrated/integrated.csv` when integration finds CSVs. **Generated** = md file written for that log; **Failed** = no result JSON path in log (run that search with `--output_json` to fix). Pipeline: model-search = models first, then tables; table-search = tables only.
+
+</details>
 
 ## 2.7 Demo (evaluation, QA, integration)
 

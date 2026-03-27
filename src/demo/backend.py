@@ -235,7 +235,7 @@ def warmup_persistent_duckdb_conns_for_backend(log: Optional[Any] = None) -> Non
     Mirrors dense-runtime warmup behavior: initialize once, reuse during requests.
     """
     logger_fn = log if callable(log) else (lambda _m: None)
-    db_paths = [MODELLAKE_DB_HUGGING, MODELLAKE_DB]
+    db_paths = [MODELLAKE_DB_HUGGING]
     seen: set[str] = set()
     for raw in db_paths:
         p = os.path.abspath(str(raw))
