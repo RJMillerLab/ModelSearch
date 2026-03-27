@@ -117,7 +117,7 @@ python -m src.search.tab2tab_aug --search_type multi_column --query "../ModelTab
 python -m src.search.tab2tab_aug --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_unionable.json > logs/tab2tab_aug_unionable.log 2>&1
 ```
 
-## 2.4 query2tab2card (recommended) + card2tab2card (deprecated mapping-only)
+## 2.4 query2tab2card
 
 ```bash
 python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type keyword --table_top_k 3 --output_json tmp/card2tab2card_keyword_hugging.json > logs/card2tab2card_keyword_hugging.log 2>&1
@@ -209,6 +209,7 @@ python scripts/batch_run_preset_queries.py \
 
 ## 4. Analysis
 
+generate markdown for query table and retrieved tables and integrated tables
 ```bash
 python scripts/check_retrieval_integration_consistency.py \
   --jobs-root data_251117/jobs_251117 \

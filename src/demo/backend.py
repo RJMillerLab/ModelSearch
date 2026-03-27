@@ -9,17 +9,134 @@ Minimal imports for fast startup.
 import os, sys, json, random, string, threading, time, math, re, html, shutil, atexit
 import numpy as np
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 from flask import Flask, request, jsonify, Response, stream_with_context, render_template_string, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, QUERY2MODELCARD_RETRIEVAL_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
-from src.utils import get_device, preview_from_local, preview_from_duckdb
+from src.utils import preview_from_local, preview_from_duckdb, _paths_for_resource_set
 #from src.utils import filter_results_by_classify_results
+from src.search.query2tab2card import Query2Tab2CardSearch
+from src.search.query2modelcard import Query2ModelCardSearch
+from src.search.ir_searcher import DenseSearcher, SparseSearcher
+
 
 import duckdb
+
+# --- Search runtime (Dense/Sparse + paths). Initialized once in init_search_runtime() from ``if __name__``.
+_search_runtime: Optional[Dict[str, Any]] = None
+
+
+def init_search_runtime() -> None:
+    """Load indexes once: full-corpus dense + table dense + full sparse; read-only DuckDB (hugging table lake)."""
+    global _search_runtime
+    if _search_runtime is not None:
+        return
+    table_resources = ["hugging"]
+    _, sparse_index_full, _ = _paths_for_resource_set(["hugging", "github", "arxiv"])
+    _, _, table_db_path = _paths_for_resource_set(["hugging"])
+    db_key = os.path.abspath(str(table_db_path))
+    con_data = duckdb.connect(db_key, read_only=True)
+    _search_runtime = {
+        "table_resources": table_resources,
+        "con_data": con_data,
+        "dense_full": DenseSearcher(emb_npz_path=EMB_NPZ),
+        "dense_wtable": DenseSearcher(emb_npz_path=EMB_NPZ_HUGGING),
+        "sparse_full": SparseSearcher(index_path=sparse_index_full),
+    }
+
+
+def _atexit_close_search_duckdb() -> None:
+    global _search_runtime
+    if not _search_runtime:
+        return
+    conn = _search_runtime.get("con_data")
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+atexit.register(_atexit_close_search_duckdb)
+
+
+def _ensure_search_runtime() -> Dict[str, Any]:
+    if _search_runtime is None:
+        init_search_runtime()
+    assert _search_runtime is not None
+    return _search_runtime
+
+
+def _card2tab2card_payload_from_full_map(full_map: Dict[str, Any], query: str) -> Dict[str, Any]:
+    """
+    ``Query2Tab2CardSearch.get_full_map()`` / ``save_full_json`` shape → same keys as legacy table-search JSON
+    (model_ids, query_tables, mappings, intermediate, pipeline_trace) for integration / preview.
+    """
+    q = str(query).strip()
+    q2m_ids = (full_map.get("query2card_map") or {}).get(q)
+    if q2m_ids is None:
+        q2m_ids = []
+    if isinstance(q2m_ids, str):
+        q2m_ids = [q2m_ids]
+    final_ids = list(full_map.get("model_rerank_map") or [])
+    card2tab = full_map.get("card2tab_map") or {}
+    tab2tab = full_map.get("tab2tab_map") or {}
+    tab2card = full_map.get("tab2card_map") or {}
+
+    query_tables: List[str] = []
+    for _mid, paths in card2tab.items():
+        if isinstance(paths, list):
+            query_tables.extend(str(p) for p in paths)
+    query_tables = list(dict.fromkeys(query_tables))
+
+    searched_tables: List[str] = []
+    for _qt, names in tab2tab.items():
+        if isinstance(names, list):
+            searched_tables.extend(str(n) for n in names)
+    searched_tables = list(dict.fromkeys(searched_tables))
+
+    seed = str(q2m_ids[0]).strip() if q2m_ids else ""
+    card_to_related = {str(k): list(v) for k, v in card2tab.items() if isinstance(v, list)}
+    qt_to_rt = dict(tab2tab) if isinstance(tab2tab, dict) else {}
+    rt_to_models = dict(tab2card) if isinstance(tab2card, dict) else {}
+    mid_to_tables = {str(mid): list(tabs) for mid, tabs in card_to_related.items()}
+    pool = list(set(sum(tab2card.values(), []))) if tab2card else []
+
+    return {
+        "query": q,
+        "query_seed_model_id": seed,
+        "query2modelcard_model_ids": list(q2m_ids),
+        "query2tab2card_model_ids": final_ids,
+        "query_tables": query_tables,
+        "searched_tables": searched_tables,
+        "model_ids": final_ids,
+        "mappings": {
+            "card_to_related_tables": card_to_related,
+            "query_table_to_retrieved_tables": qt_to_rt,
+            "retrieved_table_to_related_models": rt_to_models,
+            "model_id_to_related_tables": mid_to_tables,
+            "tab2tab_retrieved_table_to_related_models": dict(rt_to_models),
+        },
+        "intermediate": {
+            "table_to_models": rt_to_models,
+            "retrieved_table_filenames": searched_tables,
+            "query_table_to_retrieved_tables": qt_to_rt,
+            "table_id_to_filename": {},
+        },
+        "pipeline_trace": {
+            "query2modelcard": {"model_ids": list(q2m_ids)},
+            "card2tab2card": {},
+            "query_dense_rerank": {
+                "applied": True,
+                "model_ids_top_k": final_ids,
+                "model_ids_before_dense_rerank": pool,
+                "model_ids_after_dense_rerank": final_ids,
+            },
+        },
+    }
+
 
 def _append_pipeline_log(job_dir: str, message: str) -> None:
     """Append one line to job_dir/pipeline_run.log (e.g. integration timing after /api/search)."""
@@ -55,40 +172,10 @@ def _model_search_key(integration_type: str, query2modelcard_retrieval_mode: str
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
 
 
-def _resolve_backend_resource_bundle(raw_resources: Optional[List[str]]) -> Dict[str, Any]:
-    """
-    Normalize table resources once and derive all related backend artifacts.
-    Returns precomputed values so downstream code does not branch repeatedly.
-    """
-    table_resources = [r for r in list(raw_resources or TABLE_RESOURCE_ALLOWLIST) if r in ("hugging", "github", "arxiv")]
-    if not table_resources:
-        table_resources = list(TABLE_RESOURCE_ALLOWLIST)
-
-    rset = {str(r).strip().lower() for r in table_resources if str(r).strip()}
-    if rset == {"hugging"}:
-        table_db_path = MODELLAKE_DB_HUGGING
-        table_emb_npz = EMB_NPZ_HUGGING
-    elif rset == {"hugging", "github", "arxiv"}:
-        table_db_path = MODELLAKE_DB
-        table_emb_npz = EMB_NPZ
-    else:
-        raise NotImplementedError(f"Unsupported table_resources={sorted(rset)!r}")
-
-    # Query2ModelCard full-corpus remains fixed to full artifacts.
-    return {
-        "table_resources": table_resources,
-        "table_db_path": table_db_path,
-        "table_emb_npz": table_emb_npz,
-        "model_resources_full": ["hugging", "github", "arxiv"],
-        "full_emb_npz": EMB_NPZ,
-    }
-
-
 def _table_search_key(integration_type: str, search_type: str, tables_source: str = "intermediate") -> str:
     """Slug for Table Search: e.g. alite_single_column_intermediate."""
     parts = [integration_type or "union", search_type or "single_column", (tables_source or "intermediate").replace("-", "_")]
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
-
 
 def _sanitize_for_js_template(obj: Any) -> Any:
     """Replace chars that break JS template literals (\\ ` $ { }) so LLM output cannot cause SyntaxError."""
@@ -101,7 +188,6 @@ def _sanitize_for_js_template(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_sanitize_for_js_template(v) for v in obj]
     return obj
-
 
 def _api_error(message: str, status: int = 500):
     """Uniform API error response."""
@@ -198,53 +284,6 @@ CORS(app)
 
 jobs: Dict[str, "JobLogger"] = {}
 
-_DUCKDB_CONN_LOCK = threading.Lock()
-_DUCKDB_CONN_BY_PATH: Dict[str, duckdb.DuckDBPyConnection] = {}
-
-
-def _get_persistent_duckdb_conn(db_path: str) -> duckdb.DuckDBPyConnection:
-    """
-    Process-level cached read-only DuckDB connection by absolute db_path.
-    Reused across jobs; closed only on process shutdown.
-    """
-    key = os.path.abspath(str(db_path))
-    with _DUCKDB_CONN_LOCK:
-        conn = _DUCKDB_CONN_BY_PATH.get(key)
-        if conn is None:
-            conn = duckdb.connect(key, read_only=True)
-            _DUCKDB_CONN_BY_PATH[key] = conn
-        return conn
-
-
-def _close_persistent_duckdb_conns() -> None:
-    with _DUCKDB_CONN_LOCK:
-        for conn in _DUCKDB_CONN_BY_PATH.values():
-            try:
-                conn.close()
-            except Exception:
-                pass
-        _DUCKDB_CONN_BY_PATH.clear()
-
-
-atexit.register(_close_persistent_duckdb_conns)
-
-
-def warmup_persistent_duckdb_conns_for_backend(log: Optional[Any] = None) -> None:
-    """
-    Startup warmup for read-only DuckDB connections used by table-search pipelines.
-    Mirrors dense-runtime warmup behavior: initialize once, reuse during requests.
-    """
-    logger_fn = log if callable(log) else (lambda _m: None)
-    db_paths = [MODELLAKE_DB_HUGGING]
-    seen: set[str] = set()
-    for raw in db_paths:
-        p = os.path.abspath(str(raw))
-        if not p or p in seen:
-            continue
-        seen.add(p)
-        t0 = time.time()
-        _get_persistent_duckdb_conn(p)
-        logger_fn(f"[warmup] DuckDB ready: {p} ({time.time() - t0:.2f}s)")
 
 class JobLogger:
     """Thread-safe logger for job progress. When log_file is set, also writes to file."""
@@ -292,11 +331,9 @@ def _read_json(path: str) -> Optional[Dict]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def _read_json_job(job_id: str, filename:str) -> Optional[Dict]:
     """Read JSON file from job directory."""
     return _read_json(os.path.join(JOBS_DIR, job_id, filename))
-
 
 def _resolve_eval_qa_query(data: Dict[str, Any], sr: Optional[Dict]) -> Optional[str]:
     """Non-empty query: JSON body `query` if set, else `search_results.json` field `query`."""
@@ -313,29 +350,20 @@ def _resolve_eval_qa_query(data: Dict[str, Any], sr: Optional[Dict]) -> Optional
     s = str(raw).strip()
     return s if s else None
 
-
 def _write_json_job(job_id: str, filename: str, data: Dict):
     """Write JSON data to job directory."""
     with open(os.path.join(JOBS_DIR, job_id, filename), "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def _ordered_model_ids_from_q2m_results(results_list: Any) -> List[str]:
-    """Stable de-dupe preserving query2modelcard rank order (str ids)."""
-    if not isinstance(results_list, list):
-        return []
-    out: List[str] = []
-    seen: set = set()
-    for r in results_list:
-        mid = r if isinstance(r, str) else (r.get("model_id") if isinstance(r, dict) else str(r))
-        if not mid:
-            continue
-        mid_s = str(mid).strip()
-        if not mid_s or mid_s in seen:
-            continue
-        seen.add(mid_s)
-        out.append(mid_s)
-    return out
+def _save_search_results_json(job_id: str, data: Dict) -> None:
+    """Persist search pipeline output as ``search_results.json`` (integration, mimic, saved-searches, QA)."""
+    _write_json_job(job_id, "search_results.json", data)
+
+
+def _read_search_results_json(job_id: str) -> Optional[Dict]:
+    """Load ``search_results.json`` for a job if present."""
+    return _read_json_job(job_id, "search_results.json")
 
 
 def run_search_pipeline(
@@ -393,21 +421,14 @@ def _run_pipeline_body(
     use_by_type: bool = False,
     *,
     model_top_k: int = 5,
-    table_resource_allowlist: Optional[List[str]] = ['hugging'],
+    table_resource_allowlist: Optional[List[str]] = None,
 ):
-    # Write all logs to job_dir/pipeline_run.log for debugging
     run_log_path = os.path.join(job_dir, "pipeline_run.log")
     logger.set_log_file(run_log_path)
-    logger.log("=" * 60)
-    logger.log(f"Job directory (all outputs saved here): {os.path.abspath(job_dir)}")
-    logger.log(f"Run log file: {os.path.abspath(run_log_path)}")
-    logger.log("=" * 60)
-    logger.log("Starting search pipeline (CLI)...")
-    logger.log("Mode: Query → ModelCard → Search")
     if not query or not str(query).strip():
-        logger.log("query is required (model-id-only pipeline removed)")
         logger.set_status("error")
-        logger.set_results({
+        logger.set_results(
+            {
                 "error": "query required",
                 "model_id": None,
                 "query2modelcard_results": [],
@@ -418,310 +439,93 @@ def _run_pipeline_body(
         )
         return
     query = str(query).strip()
-    logger.log(f"Query: {query}")
-    logger.log(
-        f"Run settings: top_k={top_k}, model_top_k={model_top_k}, per_table_search_k={table_search_k or 1}, "
-        f"query2modelcard_retrieval={query2modelcard_retrieval_mode}, "
-        f"table type classification (by_type)={'ON' if use_by_type else 'OFF'}"
-    )
-    # Print runtime device once per pipeline run for easier debugging/profiling.
-    dev = get_device()
-    if dev == "cuda":
-        import torch
-        gpu_count = int(torch.cuda.device_count())
-        gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
-        logger.log(f"Runtime device: {dev} (gpu_count={gpu_count}, gpu0={gpu_name})")
-    else:
-        logger.log(f"Runtime device: {dev}")
     logger.set_status("running")
+    rt = _ensure_search_runtime()
+    table_resources = list(rt["table_resources"])
+    con_data = rt["con_data"]
 
-    # Normalize resource selection once and reuse in in-process calls.
-    resource_bundle = _resolve_backend_resource_bundle(table_resource_allowlist)
-    table_resources = resource_bundle["table_resources"]
-    table_db_path = resource_bundle["table_db_path"]
-    model_resources_full = resource_bundle["model_resources_full"]
-    full_emb_npz = resource_bundle["full_emb_npz"]
-    table_emb_npz = resource_bundle["table_emb_npz"]
-    # Table-search seed uses hugging-only embeddings by current table_resources default.
-    logger.log(f"Resources: Query2ModelCard (full index)={model_resources_full}, table CLI={table_resources}")
+    q2m_full_path = os.path.join(job_dir, "query2modelcard.json")
+    q2m_top_k_here = min(200, 5 * int(top_k))
 
-    from src.search.query2modelcard import get_query2modelcard_dense_runtime
-    logger.log(f"[Query2ModelCard-FULL] Preload dense runtime from npz: {full_emb_npz}")
-    t_preload_full = time.time()
-    dense_runtime_full = get_query2modelcard_dense_runtime(emb_npz_path=full_emb_npz)
-    logger.log(f"[Query2ModelCard-FULL] Dense runtime ready in {time.time() - t_preload_full:.2f}s")
+    mode = "dense"
 
-    logger.log(f"[Query2Tab2Card] Preload dense runtime from npz: {table_emb_npz}")
-    t_preload = time.time()
-    dense_runtime_table = get_query2modelcard_dense_runtime(emb_npz_path=table_emb_npz)
-    logger.log(f"[Query2Tab2Card] Dense runtime ready in {time.time() - t_preload:.2f}s")
+    q2m = Query2ModelCardSearch(query=query, top_k=q2m_top_k_here)
+    q2m.search_dense(top_k=q2m_top_k_here, dense=rt["dense_full"])
+    q2m.search_sparse(top_k=q2m_top_k_here, sparse=rt["sparse_full"])
+    q2m.search_hybrid(top_k=q2m_top_k_here, sparse=rt["sparse_full"], dense=rt["dense_full"], candidate_factor=10)
+    q2m.save_to_json(q2m_full_path)
 
-    # Table search: query -> query2modelcard -> card2tab2card -> query-rerank (query2tab2card).
-
-    q2m_ordered_model_ids: Optional[List[str]] = None
-
-    logger.log("Step 1a: query2modelcard (full embeddings / full sparse for hybrid, INPROC)...")
-    logger.log(f"query2modelcard input query: {query!r}")
-    q2m_full_path = os.path.join(job_dir, "query2modelcard_full.json")
-    legacy_q2m_path = os.path.join(job_dir, "query2modelcard.json")
-
-    q2m_top_k_relaxed = min(200, 5 * top_k)
-    q2m_top_k_here = q2m_top_k_relaxed
-    logger.log(
-        f"query2modelcard FULL: top_k={q2m_top_k_here}, resources={model_resources_full} → {os.path.basename(q2m_full_path)}"
-    )
-    t0 = time.time()
-    from src.search.query2modelcard import search_query2modelcard
-    logger.log(
-        f"[query2modelcard_full] INPROC: search_query2modelcard("
-        f"query={query!r}, top_k={q2m_top_k_here}, retrieval_mode={query2modelcard_retrieval_mode!r}, "
-        f"sparse_index_path={SPARSE_INDEX!r})"
-    )
-    _ = search_query2modelcard(
-        query=query,
-        top_k=q2m_top_k_here,
-        output_json=q2m_full_path,
-        retrieval_mode=query2modelcard_retrieval_mode,
-        candidate_factor=10,
-        emb_npz_path=EMB_NPZ,
-        sparse_index_path=SPARSE_INDEX,
-        dense_runtime=dense_runtime_full,
-    )
-    elapsed = time.time() - t0
-    logger.log(f"[query2modelcard_full] SAVED: {q2m_full_path}")
-    logger.log(f"[query2modelcard_full] ELAPSED: {elapsed:.2f}s")
-    logger.log("[query2modelcard_full] EXIT: 0")
-    data = _read_json(q2m_full_path)
-    if not data or "results" not in data or not data["results"]:
-        logger.log("query2modelcard (full) returned no results")
+    results_list = list(q2m.results['dense'])
+    if not results_list:
         logger.set_status("error")
-        logger.set_results({"error": "No model from query", "model_id": None, "query2modelcard_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        logger.set_results(
+            {
+                "error": "No model from query",
+                "model_id": None,
+                "query2modelcard_results": [],
+                "card2tab2card_results": {},
+                "folder_path": job_dir,
+                "run_log_path": run_log_path,
+            }
+        )
         return
-    shutil.copyfile(q2m_full_path, legacy_q2m_path)
-    results_list = data["results"]
-    stored_query = data.get("query", "")
 
     first = results_list[0]
     raw_top = first if isinstance(first, str) else (first.get("model_id") if isinstance(first, dict) else str(first))
     query_seed_model_id = str(raw_top).strip() if raw_top else ""
     if not query_seed_model_id:
-        logger.log("query2modelcard (full) returned empty top-1 model_id")
         logger.set_status("error")
-        logger.set_results({"error": "Empty model_id from query", "model_id": None, "query2modelcard_results": [], "card2tab2card_results": {}, "folder_path": job_dir, "run_log_path": run_log_path})
+        logger.set_results(
+            {
+                "error": "Empty model_id from query",
+                "model_id": None,
+                "query2modelcard_results": [],
+                "card2tab2card_results": {},
+                "folder_path": job_dir,
+                "run_log_path": run_log_path,
+            }
+        )
         return
-    logger.log(
-        f"Query2Card seed (full index, top-1): {query_seed_model_id!r} "
-        f"(query in JSON: {stored_query!r})"
-    )
 
-    table_search_seed_model_id = query_seed_model_id
-    logger.log(
-        "Step 1b removed: backend no longer selects table seed with query2modelcard_w_table; "
-        "query2tab2card handles seed selection internally."
-    )
-
-    model_id = query_seed_model_id  # API / UI: primary seed from full q2m
-    table_search_seed_model_id = str(table_search_seed_model_id).strip()
-    logger.log(f"Seeds: Query2Card (full)={query_seed_model_id!r}, Query2Tab2Card=(internal to query2tab2card)")
-
-    q2m_ordered_model_ids = _ordered_model_ids_from_q2m_results(results_list)
-    # NOTE: This repo snapshot may not include legacy `scripts/check_model_in_index.py`.
-    # We let downstream scripts produce empty results if the model id is missing.
-
-    # Table Search: user `table_search_k` is the per-table top-k passed into tab2tab.
-    # (card2tab2card does its own merging/dedup/capping downstream.)
-    table_search_k_input = max(1, int(table_search_k))
-    # IMPORTANT: keep true per-query-table top-k for Tab2Tab (no hidden multiplier).
-    k_table = table_search_k_input
-
-    # Query2ModelCard neighbors (model-search column): cap list length for JSON/UI.
+    model_id_res = query_seed_model_id
+    table_search_seed_model_id = str(query_seed_model_id).strip()
+    q2m_ordered_model_ids: List[str] = [str(x).strip() for x in results_list if str(x).strip()]
+    seed_s = str(query_seed_model_id).strip()
     q2m_neighbor_top_k = max(100, int(model_top_k) * 20)
 
-    def _normalize_card2tab2card_payload(payload: Any) -> Dict[str, Any]:
-        """
-        Expects the current ``search_query2tab2card`` JSON object only (dict with ``model_ids`` list
-        plus ``mappings``, ``intermediate``, ``pipeline_trace``, etc.). No legacy list/batch shapes.
-        """
-        if not isinstance(payload, dict):
-            raise ValueError(f"card2tab2card payload must be a dict, got {type(payload).__name__}")
-        if "model_ids" not in payload:
-            raise ValueError("card2tab2card payload missing required key 'model_ids'")
-        if not isinstance(payload["model_ids"], list):
-            raise ValueError("card2tab2card payload 'model_ids' must be a list")
+    table_search_k_input = max(1, int(table_search_k or 1))
+    k_table = table_search_k_input
 
-        d = payload
-        model_ids = d["model_ids"]
-        query_tables = d.get("query_tables", [])
-        if not isinstance(query_tables, list):
-            raise ValueError("card2tab2card payload 'query_tables' must be a list when present")
-        searched_tables = d.get("searched_tables", [])
-        if not isinstance(searched_tables, list):
-            raise ValueError("card2tab2card payload 'searched_tables' must be a list when present")
-
-        mappings = d.get("mappings", {})
-        if not isinstance(mappings, dict):
-            raise ValueError("card2tab2card payload 'mappings' must be a dict")
-        m_card_to_related = mappings.get("card_to_related_tables", {})
-        if not isinstance(m_card_to_related, dict):
-            raise ValueError("mappings.card_to_related_tables must be a dict")
-        m_qt_to_rt = mappings.get("query_table_to_retrieved_tables", {})
-        if not isinstance(m_qt_to_rt, dict):
-            raise ValueError("mappings.query_table_to_retrieved_tables must be a dict")
-        m_rt_to_models = mappings.get("retrieved_table_to_related_models", {})
-        if not isinstance(m_rt_to_models, dict):
-            raise ValueError("mappings.retrieved_table_to_related_models must be a dict")
-        m_mid_to_tables = mappings.get("model_id_to_related_tables", {})
-        if not isinstance(m_mid_to_tables, dict):
-            raise ValueError("mappings.model_id_to_related_tables must be a dict")
-        m_tab2tab_rt_to_models = mappings.get("tab2tab_retrieved_table_to_related_models", {})
-        if not isinstance(m_tab2tab_rt_to_models, dict):
-            raise ValueError("mappings.tab2tab_retrieved_table_to_related_models must be a dict")
-
-        inter = d.get("intermediate", {})
-        if not isinstance(inter, dict):
-            raise ValueError("card2tab2card payload 'intermediate' must be a dict")
-        inter_table_to_models = inter.get("table_to_models", m_rt_to_models)
-        if not isinstance(inter_table_to_models, dict):
-            raise ValueError("intermediate.table_to_models must be a dict")
-        inter_retrieved = inter.get("retrieved_table_filenames", searched_tables)
-        if not isinstance(inter_retrieved, list):
-            raise ValueError("intermediate.retrieved_table_filenames must be a list")
-        inter_qt_to_rt = inter.get("query_table_to_retrieved_tables", m_qt_to_rt)
-        if not isinstance(inter_qt_to_rt, dict):
-            raise ValueError("intermediate.query_table_to_retrieved_tables must be a dict")
-
-        inter = dict(inter)
-        inter["table_to_models"] = inter_table_to_models
-        inter["retrieved_table_filenames"] = inter_retrieved
-        inter["query_table_to_retrieved_tables"] = inter_qt_to_rt
-        tif = inter.get("table_id_to_filename", {})
-        if not isinstance(tif, dict):
-            raise ValueError("intermediate.table_id_to_filename must be a dict")
-        inter["table_id_to_filename"] = tif
-
-        if "pipeline_trace" not in d:
-            raise ValueError("card2tab2card payload missing required key 'pipeline_trace'")
-        pt = d["pipeline_trace"]
-        if not isinstance(pt, dict):
-            raise ValueError("card2tab2card payload 'pipeline_trace' must be a dict")
-
-        out = dict(d)
-        out["model_ids"] = model_ids
-        out["query_tables"] = query_tables
-        out["searched_tables"] = searched_tables
-        out["mappings"] = {
-            "card_to_related_tables": m_card_to_related,
-            "query_table_to_retrieved_tables": m_qt_to_rt,
-            "retrieved_table_to_related_models": m_rt_to_models if m_rt_to_models else inter_table_to_models,
-            "model_id_to_related_tables": m_mid_to_tables,
-            "tab2tab_retrieved_table_to_related_models": m_tab2tab_rt_to_models,
-        }
-        out["intermediate"] = inter
-        out["pipeline_trace"] = pt
-        return out
-
-    logger.log("Step 2: Query2ModelCard neighbor list + Card2Tab2Card (serialized workers)...")
-
-    def run_card2tab2card(st: str) -> tuple:
-        out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
-        # In-process call avoids Python subprocess startup/import overhead.
-        logger.log(
-            f"[Card2Tab2Card-{st}] INPROC: search_query2tab2card("
-            f"query={query!r}, search_type={st!r}, table_top_k={k_table}, "
-            f"model_top_k={int(model_top_k)}, q2m_table_candidate_k=9, resources={table_resources})"
-        )
-        t0 = time.time()
-        from src.search.query2tab2card import search_query2tab2card
-        con_data = _get_persistent_duckdb_conn(table_db_path)
-        payload = search_query2tab2card(
-            query=query,
-            con_data=con_data,
-            search_type=st,
-            output_json=out_path,
-            table_top_k=k_table,
-            table_resources=table_resources,
-            use_tab2tab_aug=bool(USE_TAB2TAB_AUG),
-            apply_query_rerank=True,
-            model_top_k=int(model_top_k),
-            q2m_table_candidate_k=9,
-            dense_runtime=dense_runtime_table,
-        )
-        elapsed = time.time() - t0
-        logger.log(f"[Card2Tab2Card-{st}] SAVED: {out_path}")
-        logger.log(f"[Card2Tab2Card-{st}] ELAPSED: {elapsed:.2f}s")
-        logger.log(f"[Card2Tab2Card-{st}] EXIT: 0")
-        return (st, 0, out_path, payload, "", elapsed)
-
-    # Add by_type if run on sub-lake (use_by_type currently only echoed in results; no extra CLI).
-    card2tab2card_types = list(CARD2TAB2CARD_TYPES)
-    futures = {}
-    # NOTE:
-    # query2tab2card now runs in-process. Running multiple search_type workers concurrently
-    # can race during SentenceTransformer/PyTorch model initialization on CUDA and throw:
-    # "Cannot copy out of meta tensor; no data!".
-    # Keep card2tab2card workers serialized for stability.
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        for st in card2tab2card_types:
-            futures[ex.submit(run_card2tab2card, st)] = ("card2tab2card", st)
-
-    card2tab2card_all = {}
+    card2tab2card_all: Dict[str, Any] = {}
     table_search_empty_reason: Optional[str] = None
 
-    for fut in as_completed(futures):
-        kind, name = futures[fut]
-        res = fut.result()
-        if kind == "card2tab2card":
-            st, rc, out_path, payload_raw, err, elapsed = res
-            logger.log(f"[Card2Tab2Card-{st}] Done in {elapsed:.2f}s")
-            data = payload_raw if isinstance(payload_raw, dict) else _read_json(out_path)
-            if data is not None:
-                payload = _normalize_card2tab2card_payload(data)
-                card2tab2card_all[st] = payload
-                mid = payload.get("model_ids", [])
-                lst = list(mid) if isinstance(mid, (list, np.ndarray)) else []
-                qty = len(payload.get("query_tables", []))
-                logger.log(f"[Card2Tab2Card-{st}] Read {len(lst)} model_ids, {qty} query_tables for seed model")
-                if rc != 0:
-                    logger.log(f"[Card2Tab2Card-{st}] Used JSON despite exit code {rc}")
-                if len(lst) == 0 and qty == 0:
-                    logger.log(f"[Card2Tab2Card-{st}] Seed model has no tables in relationship_parquet (model_id not in parquet or no csv_basename). Check {RELATIONSHIP_PARQUET} has column modelId and rows for this model.")
-                    if table_search_empty_reason is None:
-                        table_search_empty_reason = (
-                            f"Table-search seed «{table_search_seed_model_id}» has no tables in the dataset: it is not in "
-                            f"{RELATIONSHIP_PARQUET} or has no csv_basename. "
-                            "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
-                        )
-            else:
-                if rc != 0:
-                    logger.log(f"[Card2Tab2Card-{st}] Error (exit {rc}): {err}")
-                # No valid JSON on disk: save empty so frontend can handle it
-                card2tab2card_all[st] = {"model_ids": [], "intermediate": {}}
-                logger.log(f"[Card2Tab2Card-{st}] No JSON at {out_path}")
-
-    seed_s = str(query_seed_model_id).strip()
-    # search_results.json: query2modelcard_results / query2modelcard_all_modes from one full-corpus query2modelcard pass.
+    q2t2c = Query2Tab2CardSearch()
+    for st in CARD2TAB2CARD_TYPES:
+        out_path = os.path.join(job_dir, f"card2tab2card_{st}.json")
+        q2t2c.pipeline_w_query_reranker(query, con_data, rt["dense_full"], rt["dense_wtable"], search_type=st, table_top_k=k_table, table_resources=table_resources, use_tab2tab_aug=bool(USE_TAB2TAB_AUG), apply_query_rerank=True, model_top_k=int(model_top_k), q2m_top_k=1)
+        q2t2c.save_full_json(out_path)
+        fm = q2t2c.get_full_map()
+        payload = _card2tab2card_payload_from_full_map(fm, query)
+        card2tab2card_all[st] = payload
+        mids = payload.get("model_ids", [])
+        lst = list(mids) if isinstance(mids, (list, np.ndarray)) else []
+        qty = len(payload.get("query_tables", []))
+        if len(lst) == 0 and qty == 0 and table_search_empty_reason is None:
+            table_search_empty_reason = (
+                f"Table-search seed «{table_search_seed_model_id}» has no tables in the dataset: it is not in "
+                f"{RELATIONSHIP_PARQUET} or has no csv_basename. "
+                "Try another query whose top result has linked tables, or check the parquet has column modelId and rows for this model."
+            )
+    
+    # preparing saving jobs
     q2m_neighbors_by_mode: Dict[str, List[str]] = {m: [] for m in QUERY2MODELCARD_RETRIEVAL_MODES}
-    mode_primary = str(query2modelcard_retrieval_mode).strip().lower()
-    if mode_primary not in QUERY2MODELCARD_RETRIEVAL_MODES:
-        logger.log(
-            f"[Query2ModelCard] Unknown retrieval_mode {query2modelcard_retrieval_mode!r}; "
-            f"valid={QUERY2MODELCARD_RETRIEVAL_MODES}. Using 'dense' for neighbor list bucket."
-        )
-        mode_primary = "dense"
-
+    mode_primary = mode
     if q2m_ordered_model_ids:
         neighbor_list = [m for m in q2m_ordered_model_ids if m != seed_s][:q2m_neighbor_top_k]
         q2m_neighbors_by_mode[mode_primary] = list(neighbor_list)
-        logger.log(
-            f"[Query2ModelCard] {len(neighbor_list)} neighbor ids for retrieval_mode={mode_primary!r} "
-            f"(other entries in query2modelcard_all_modes stay empty — not run in this pipeline)."
-        )
-    else:
-        logger.log("[Query2ModelCard] Missing query2modelcard ordering list; model-search neighbor lists empty.")
 
-    # --- Cap for UI: min(requested model_top_k, max Card2Tab2Card list length) ---
     right_max_models = 0
-    for st, payload in card2tab2card_all.items():
+    for _st, payload in card2tab2card_all.items():
         if not isinstance(payload, dict):
             continue
         mids = payload.get("model_ids", [])
@@ -731,32 +535,21 @@ def _run_pipeline_body(
     effective_model_top_k = min(int(model_top_k), int(right_max_models)) if isinstance(model_top_k, int) else right_max_models
     if effective_model_top_k < 0:
         effective_model_top_k = 0
-    logger.log(f"effective_model_top_k: input={model_top_k}, right_max_models={right_max_models} => cap={effective_model_top_k}")
 
-    # Cap model-search neighbor lists (query2modelcard_all_modes).
-    for mode in QUERY2MODELCARD_RETRIEVAL_MODES:
-        val = q2m_neighbors_by_mode.get(mode)
+    for m in QUERY2MODELCARD_RETRIEVAL_MODES:
+        val = q2m_neighbors_by_mode.get(m)
         if isinstance(val, list) and len(val) > effective_model_top_k:
-            q2m_neighbors_by_mode[mode] = val[:effective_model_top_k]
-            logger.log(
-                f"[Query2ModelCard-{mode.upper()}] Truncated to effective_model_top_k={effective_model_top_k}"
-            )
+            q2m_neighbors_by_mode[m] = val[:effective_model_top_k]
 
     primary = q2m_neighbors_by_mode.get(mode_primary) or []
     if not isinstance(primary, list):
         primary = []
 
     elapsed_total = time.time() - start_time
-    logger.log(
-        f"Step 3: Done. Total time: {elapsed_total:.2f}s "
-        "(search pipeline only: preload + query2modelcard + Card2Tab2Card×3 + neighbor list prep; "
-        "NOT /api/integrate or /api/integrate-model-search — those are separate requests.)"
-    )
-
     results_data = {
         "job_id": job_id,
         "query": query,
-        "model_id": model_id,
+        "model_id": model_id_res,
         "table_search_seed_model_id": table_search_seed_model_id,
         "top_k": top_k,
         "model_top_k": model_top_k,
@@ -778,12 +571,9 @@ def _run_pipeline_body(
     if table_search_empty_reason:
         results_data["table_search_reason"] = table_search_empty_reason
 
-    _write_json_job(job_id, "search_results.json", results_data)
-    logger.log(f"Results saved to {os.path.join(job_dir, 'search_results.json')}")
-    logger.log(f"[FINAL] Job directory: {os.path.abspath(job_dir)} | Run log: {os.path.abspath(run_log_path)} | Total: {elapsed_total:.2f}s")
+    _save_search_results_json(job_id, results_data)
     logger.set_results(results_data)
     logger.set_status("completed")
-    logger.log("Pipeline completed.")
 
 
 @app.route("/api/health", methods=["GET"])
@@ -841,7 +631,7 @@ def search():
             return jsonify({"status": "error", "message": "job_id required for mimic"}), 400
         if job_id == "template":
             return jsonify({"status": "error", "message": "No past searching, please search!"}), 400
-        saved = _read_json_job(job_id, "search_results.json")
+        saved = _read_search_results_json(job_id)
         if saved is None:
             return jsonify({"status": "error", "message": f"Saved results not found: {job_id}"}), 404
 
@@ -1055,7 +845,7 @@ def table_search_preview():
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
 
-    sr = _read_json_job(job_id, "search_results.json")
+    sr = _read_search_results_json(job_id)
     if not isinstance(sr, dict):
         return _api_error(f"search_results.json not found for job {job_id}", 404)
     from src.integration.pipeline_preview import prepare_query2tab2card_preview
@@ -1100,7 +890,7 @@ def model_search_preview():
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
 
-    sr = _read_json_job(job_id, "search_results.json")
+    sr = _read_search_results_json(job_id)
     if not isinstance(sr, dict):
         return _api_error(f"search_results.json not found for job {job_id}", 404)
 
@@ -1443,7 +1233,7 @@ def evaluate():
     if table2_df is None or table2_df.empty:
         return jsonify({"status": "error", "message": "Model Search integration not found. Please run Model Search integration first."}), 400
 
-    sr = _read_json_job(job_id, "search_results.json")
+    sr = _read_search_results_json(job_id)
     query = _resolve_eval_qa_query(data, sr)
     if not query:
         return jsonify(
@@ -1495,7 +1285,7 @@ def qa():
     if table_df is None:
         table_df = pd.DataFrame()
 
-    sr = _read_json_job(job_id, "search_results.json")
+    sr = _read_search_results_json(job_id)
     query = _resolve_eval_qa_query(data, sr)
     if not query:
         return jsonify(
@@ -1586,38 +1376,11 @@ def save_qa():
 
 if __name__ == "__main__":
     import argparse as _argparse
+
     parser = _argparse.ArgumentParser(description="ModelSearch Demo Backend")
     parser.add_argument("--port", type=int, default=None, help="Port (default: env PORT or 5002)")
-    parser.add_argument(
-        "--no-warmup",
-        action="store_true",
-        help="Skip loading NPZ + encoder at startup (first job pays cold start).",
-    )
     args, _ = parser.parse_known_args()
 
-    print("Backend (in-process) starting...", flush=True)
-    if USE_TAB2TAB_AUG:
-        print(
-            "  USE_TAB2TAB_AUG: Card2Tab2Card uses search_tab2tab_aug when table_resources are hugging-only "
-            "(set BACKEND_USE_TAB2TAB_AUG=0 for classic tab2tab).",
-            flush=True,
-        )
-    else:
-        print("  USE_TAB2TAB_AUG=0: Card2Tab2Card uses classic search_table2table only.", flush=True)
-    if USE_BY_TYPE:
-        print(f"  USE_BY_TYPE=1: card2tab2card by_type enabled", flush=True)
-    if not args.no_warmup and os.environ.get("BACKEND_SKIP_WARMUP", "").strip().lower() not in ("1", "true", "yes"):
-        print(
-            "[startup] Warmup enabled: expect [warmup] / [load] lines (NPZ, FAISS, SentenceTransformer). "
-            "Set BACKEND_SKIP_WARMUP=1 or --no-warmup to skip; BACKEND_LOAD_QUIET=1 to silence [load] details.",
-            flush=True,
-        )
-        from src.search.query2modelcard import warmup_dense_runtimes_for_backend
-
-        warmup_dense_runtimes_for_backend(log=lambda m: print(m, flush=True))
-        warmup_persistent_duckdb_conns_for_backend(log=lambda m: print(m, flush=True))
-        print("[startup] Warmup finished. Binding HTTP server...", flush=True)
-    else:
-        print("[startup] Warmup skipped (--no-warmup or BACKEND_SKIP_WARMUP=1).", flush=True)
+    init_search_runtime()
     port = args.port if args.port is not None else int(os.environ.get("PORT", "5002"))
     app.run(host="0.0.0.0", port=port, debug=False)
