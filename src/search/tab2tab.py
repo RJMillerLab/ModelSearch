@@ -68,7 +68,16 @@ def _ensure_blend_exists() -> None:
         raise FileNotFoundError(f"Blend_internal not found. Please clone it into `others/Blend_internal` (expected at: {BLEND_INTERNAL_REPO}).")
 
 
-def search_table2table(*, search_type: str, query: Any, k: int, db_path: Optional[str] = None, augmentation_types: Optional[List[str]] = None, output_json: Optional[str] = None, parse_payload: bool = True) -> List[str]:
+def search_table2table(
+    *,
+    search_type: str,
+    query: Any,
+    k: int,
+    con_data: Any,
+    augmentation_types: List[str],
+    output_json: Optional[str] = None,
+    parse_payload: bool = True,
+) -> List[str]:
     """
     Run Blend_internal table_searcher in-process and return CSV **basenames** only.
 
@@ -84,27 +93,28 @@ def search_table2table(*, search_type: str, query: Any, k: int, db_path: Optiona
     if not table_path:
         raise ValueError(f"No existing or indexed table found for query: {query!r}")
 
-    if augmentation_types is None:
-        augmentation_types = ["ori"]
-    aug_types = augmentation_types
-
     query_bn = os.path.basename(table_path)
     search_type_l = str(search_type).strip().lower()
 
     with _blend_internal_src_isolation():
-        from others.Blend_internal.scripts.table_searcher import (TableKeywordSearcher, TableSingleColJoinableSearcher, TableUnionableSearcher, TableMultiColJoinableSearcher)
+        from others.Blend_internal.scripts.table_searcher import (
+            TableKeywordSearcher,
+            TableSingleColJoinableSearcher,
+            TableUnionableSearcher,
+            TableMultiColJoinableSearcher,
+        )
 
         if search_type_l == "keyword":
-            searcher = TableKeywordSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, db_path=db_path)
+            searcher = TableKeywordSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, con_data=con_data)
         elif search_type_l == "single_column":
             # Match original semantics: "cell values only" (no header tokens).
-            searcher = TableSingleColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+            searcher = TableSingleColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, mode="with_header", con_data=con_data)
         elif search_type_l == "unionable":
             # Match original semantics: per-column overlap over "cell values".
-            searcher = TableUnionableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+            searcher = TableUnionableSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, mode="with_header", con_data=con_data)
         elif search_type_l == "multi_column":
             # Match original semantics: MultiColumnOverlap uses cell values only.
-            searcher = TableMultiColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+            searcher = TableMultiColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, mode="with_header", con_data=con_data)
         else:
             raise ValueError(f"Unknown search_type: {search_type!r}. Expected one of: keyword/single_column/unionable/multi_column.")
 
@@ -125,7 +135,15 @@ def search_table2table(*, search_type: str, query: Any, k: int, db_path: Optiona
     return filenames
 
 
-def search_table2table_with_scores(*, search_type: str, query: Any, k: int, db_path: Optional[str] = None, augmentation_types: Optional[List[str]] = None, output_json: Optional[str] = None) -> List[Dict[str, Any]]:
+def search_table2table_with_scores(
+    *,
+    search_type: str,
+    query: Any,
+    k: int,
+    con_data: Any,
+    augmentation_types: List[str],
+    output_json: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
     Run Blend_internal table_searcher in-process and return scored ranked results.
 
@@ -146,23 +164,24 @@ def search_table2table_with_scores(*, search_type: str, query: Any, k: int, db_p
         raise ValueError(f"No existing or indexed table found for query: {query!r}")
 
     _ensure_blend_exists()
-    db_path = db_path or MODELLAKE_DB
-    aug_types = augmentation_types or ["ori", "tr", "str"]
 
     search_type_l = str(search_type).strip().lower()
     with _blend_internal_src_isolation():
-        from collections import defaultdict
-
-        from others.Blend_internal.scripts.table_searcher import (TableKeywordSearcher, TableSingleColJoinableSearcher, TableUnionableSearcher, TableMultiColJoinableSearcher)
+        from others.Blend_internal.scripts.table_searcher import (
+            TableKeywordSearcher,
+            TableSingleColJoinableSearcher,
+            TableUnionableSearcher,
+            TableMultiColJoinableSearcher,
+        )
 
         if search_type_l == "keyword":
-            searcher = TableKeywordSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, db_path=db_path)
+            searcher = TableKeywordSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, con_data=con_data)
         elif search_type_l == "single_column":
-            searcher = TableSingleColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+            searcher = TableSingleColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, mode="with_header", con_data=con_data)
         elif search_type_l == "unionable":
-            searcher = TableUnionableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+            searcher = TableUnionableSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, mode="with_header", con_data=con_data)
         elif search_type_l == "multi_column":
-            searcher = TableMultiColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=aug_types, mode="with_header", db_path=db_path)
+            searcher = TableMultiColJoinableSearcher(index_table=INDEX_TABLE, augmentation_types=augmentation_types, mode="with_header", con_data=con_data)
         else:
             raise ValueError(f"Unknown search_type: {search_type!r}. Expected one of: keyword/single_column/unionable/multi_column.")
 
@@ -227,7 +246,10 @@ def main() -> None:
     bad = [x for x in augmentation_types if x not in allowed]
     if bad:
         raise ValueError(f"Invalid augmentation_types={bad!r}. Allowed: {sorted(allowed)}")
-    results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, db_path=db_path, output_json=args.output_json, augmentation_types=augmentation_types)
+    import duckdb
+    con_data = duckdb.connect(db_path, read_only=True)
+    results = search_table2table(search_type=args.search_type, query=args.query, k=args.k, output_json=args.output_json, con_data=con_data, augmentation_types=augmentation_types)
+    con_data.close()
     if args.output_json:
         print(f"Saved json: {args.output_json}")
     else:

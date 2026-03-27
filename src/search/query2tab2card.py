@@ -15,6 +15,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import duckdb
+
 from src.config import *
 from src.search.card2tab2card import search_card2tab2card
 from src.search.query2modelcard import (
@@ -79,11 +81,13 @@ def _expand_models_to_parquet_tables(
 
 def search_query2tab2card(
     query: str,
+    con_data: duckdb.DuckDBPyConnection,
     *,
     search_type: str = "keyword",
     output_json: str = "",
     table_top_k: int = 10,
     table_resources: Optional[List[str]] = None,
+    use_tab2tab_aug: bool = False,
     q2m_top_k: int = 20,
     seed_rank_index: int = 0,
     apply_query_rerank: bool = True,
@@ -96,17 +100,10 @@ def search_query2tab2card(
     if not q:
         raise ValueError("query is required")
     resources = [str(r).strip().lower() for r in (table_resources or ["hugging"]) if str(r).strip()]
-    db_path, emb_npz_path = _resource_paths(resources)
+    _, emb_npz_path = _resource_paths(resources)
 
     t_q2m_start = time.time()
-    q2m_ids = search_query2modelcard(
-        query=q,
-        top_k=max(1, int(q2m_top_k)),
-        output_json=None,
-        retrieval_mode="dense",
-        emb_npz_path=emb_npz_path,
-        dense_runtime=dense_runtime,
-    )
+    q2m_ids = search_query2modelcard(query=q, top_k=max(1, int(q2m_top_k)), output_json=None, retrieval_mode="dense", emb_npz_path=emb_npz_path, dense_runtime=dense_runtime)
     t_q2m_elapsed = time.time() - t_q2m_start
     print(f"[q2t2c-timing] query2modelcard: {t_q2m_elapsed:.2f}s", flush=True)
     if not q2m_ids:
@@ -158,14 +155,7 @@ def search_query2tab2card(
     seed_idx = max(0, min(int(seed_rank_index), len(q2m_ids) - 1))
     seed_model = str(q2m_ids[seed_idx]).strip()
     t_c2t2c_start = time.time()
-    card_payload = search_card2tab2card(
-        model_id=seed_model,
-        search_type=search_type,
-        output_json="",
-        db_path=db_path,
-        table_top_k=table_top_k,
-        table_resources=resources,
-    )
+    card_payload = search_card2tab2card(model_id=seed_model, con_data=con_data, search_type=search_type, table_top_k=table_top_k, table_resources=resources, use_tab2tab_aug=use_tab2tab_aug, output_json="")
     t_c2t2c_elapsed = time.time() - t_c2t2c_start
     print(f"[q2t2c-timing] card2tab2card: {t_c2t2c_elapsed:.2f}s", flush=True)
     base_ids = list(card_payload.get("model_ids", [])) if isinstance(card_payload, dict) else []
@@ -184,12 +174,7 @@ def search_query2tab2card(
     rerank_applied = False
     ranked = list(candidate_pool)
     if apply_query_rerank and candidate_pool:
-        ranked = dense_rerank_model_ids_by_query(
-            q,
-            candidate_pool,
-            emb_npz_path=emb_npz_path,
-            dense_runtime=dense_runtime,
-        )
+        ranked = dense_rerank_model_ids_by_query(q, candidate_pool, emb_npz_path=emb_npz_path, dense_runtime=dense_runtime)
         rerank_applied = True
 
     mtk = int(model_top_k)
@@ -198,9 +183,7 @@ def search_query2tab2card(
     else:
         final_ids = list(ranked)
 
-    searched_expanded, table_to_models_expanded, model_id_to_related = _expand_models_to_parquet_tables(
-        final_ids, table_resources=resources
-    )
+    searched_expanded, table_to_models_expanded, model_id_to_related = _expand_models_to_parquet_tables(final_ids, table_resources=resources)
     t_rerank_expand_elapsed = time.time() - t_rerank_expand_start
     t_total_elapsed = time.time() - t_pipeline_start
     print(f"[q2t2c-timing] query_dense_rerank_and_expand: {t_rerank_expand_elapsed:.2f}s", flush=True)
@@ -227,9 +210,7 @@ def search_query2tab2card(
             "query_table_to_retrieved_tables": card_mappings.get("query_table_to_retrieved_tables", {}),
             "retrieved_table_to_related_models": table_to_models_expanded,
             "model_id_to_related_tables": model_id_to_related,
-            "tab2tab_retrieved_table_to_related_models": card_mappings.get(
-                "retrieved_table_to_related_models", {}
-            ),
+            "tab2tab_retrieved_table_to_related_models": card_mappings.get("retrieved_table_to_related_models", {}),
         },
         "intermediate": inter_out,
         "pipeline_trace": {
@@ -273,34 +254,36 @@ def main() -> None:
     parser.add_argument("--resources", nargs="+", default=["hugging"], choices=["hugging", "github", "arxiv"], help="Table resource filter.")
     parser.add_argument("--table_top_k", type=int, default=10, help="Top-k retrieved tables per query table.")
     parser.add_argument("--q2m_top_k", type=int, default=20, help="Top-k candidates from query2modelcard for choosing seed model.")
-    parser.add_argument(
-        "--q2m_table_candidate_k",
-        type=int,
-        default=9,
-        help="Only tab2tab-hit models that also appear in query2modelcard top-k prefix enter rerank pool.",
-    )
+    parser.add_argument("--q2m_table_candidate_k", type=int, default=9, help="Only tab2tab-hit models that also appear in query2modelcard top-k prefix enter rerank pool.")
+    parser.add_argument("--use_tab2tab_aug", action="store_true", help="Use tab2tab augmentation.")
     parser.add_argument("--model_top_k", type=int, default=5, help="Final number of models after query rerank (0 = no cap).")
     parser.add_argument("--seed_rank_index", type=int, default=0, help="Pick seed model from query2modelcard ranking by index.")
     parser.add_argument("--disable_query_rerank", action="store_true", help="Disable query dense rerank on final model ids.")
     args = parser.parse_args()
 
     t0 = time.time()
-    cli_resources = [str(r).strip().lower() for r in (args.resources or ["hugging"]) if str(r).strip()]
-    _db_path_cli, emb_npz_path_cli = _resource_paths(cli_resources)
-    dense_runtime_cli = get_query2modelcard_dense_runtime(emb_npz_path=emb_npz_path_cli)
-    payload = search_query2tab2card(
-        query=args.query,
-        search_type=args.search_type,
-        output_json=args.output_json,
-        table_top_k=args.table_top_k,
-        table_resources=args.resources,
-        q2m_top_k=args.q2m_top_k,
-        seed_rank_index=args.seed_rank_index,
-        apply_query_rerank=not bool(args.disable_query_rerank),
-        model_top_k=args.model_top_k,
-        q2m_table_candidate_k=args.q2m_table_candidate_k,
-        dense_runtime=dense_runtime_cli,
-    )
+    resources = [str(r).strip().lower() for r in (args.resources or ["hugging"]) if str(r).strip()]
+    db_path, emb_npz_path = _resource_paths(resources)
+    dense_runtime = get_query2modelcard_dense_runtime(emb_npz_path=emb_npz_path)
+    con_data = duckdb.connect(db_path, read_only=True)
+    try:
+        payload = search_query2tab2card(
+            query=args.query,
+            con_data=con_data,
+            search_type=args.search_type,
+            output_json=args.output_json,
+            table_top_k=args.table_top_k,
+            table_resources=args.resources,
+            use_tab2tab_aug=args.use_tab2tab_aug,
+            q2m_top_k=args.q2m_top_k,
+            seed_rank_index=args.seed_rank_index,
+            apply_query_rerank=not bool(args.disable_query_rerank),
+            model_top_k=args.model_top_k,
+            q2m_table_candidate_k=args.q2m_table_candidate_k,
+            dense_runtime=dense_runtime,
+        )
+    finally:
+        con_data.close()
     mids = payload.get("model_ids", []) if isinstance(payload, dict) else []
     print(f"Found {len(mids)} model ids for query: {args.query!r}")
     for i, mid in enumerate(mids[:20], 1):

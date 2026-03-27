@@ -85,7 +85,7 @@ def _env_bool(name: str, default: bool) -> bool:
 # Card2Tab2Card / query2tab2card: when table resources are hugging-only, call ``search_tab2tab_aug``
 # (4-lane + RRF; canonical ``*.csv`` basenames) instead of single ``search_table2table``.
 # ``BACKEND_USE_TAB2TAB_AUG=0`` forces classic one-lane tab2tab.
-USE_TAB2TAB_AUG = _env_bool("BACKEND_USE_TAB2TAB_AUG", True)
+USE_TAB2TAB_AUG = _env_bool("BACKEND_USE_TAB2TAB_AUG", False)
 
 USE_BY_TYPE = False
 JOBS_DIR = os.path.join(OUTPUT_DIR, f"jobs{DATA_TAG}")

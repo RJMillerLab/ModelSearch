@@ -8,9 +8,17 @@ import numpy as np
 from functools import lru_cache
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
-from src.config import RAW_DIR, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS, MODEL_TO_TABLES_EXPLODE_PARQUET, INDEX_TABLE
+from src.config import (
+    RAW_DIR,
+    RELATIONSHIP_PARQUET,
+    TABLE_BASE_DIRS,
+    MODEL_TO_TABLES_EXPLODE_PARQUET,
+    INDEX_TABLE,
+    MODELLAKE_DB_HUGGING,
+    MODELLAKE_DB,
+)
 
-__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "classify_results", "filter_results_by_classify_results", "load_modelid_to_csvlist", "load_csvs_to_modelids", "model_id_has_resolvable_local_tables", "list_model_ids_with_tables_from_explode", "list_model_ids_with_tables_from_explode_filtered_by_modellake_db", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db",
+__all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path", "classify_resource", "classify_results", "filter_results_by_classify_results", "load_modelid_to_csvlist", "load_csvs_to_modelids", "model_id_has_resolvable_local_tables", "list_model_ids_with_tables_from_explode", "list_model_ids_with_tables_from_explode_filtered_by_modellake_db", "_load_modelid_to_csv_expand", "_get_models_to_tables_batch_sql", "_get_tables_per_model", "_get_tables_to_models_batch_sql", "_sample_model_ids", "_sample_csv_basenames", "get_tables_from_modellake_db", "preview_from_local", "preview_from_duckdb",
     "is_model_search_log",
     "is_table_search_log",
     "get_repo_root",
@@ -542,6 +550,85 @@ def load_table(csv_path: str) -> Optional[pd.DataFrame]:
     return None
 
 
+def preview_from_local(raw_path: str, *, max_rows: int, max_cols: int) -> Tuple[Optional[pd.DataFrame], str, str]:
+    """
+    Preview table by reading local CSV only. Same path resolution as ``load_table`` / ``resolve_table_path``.
+    Returns (df_or_none, source_label, basename).
+    """
+    s = str(raw_path or "").strip()
+    bn = os.path.basename(s) if s else ""
+    if not s:
+        return None, "local", bn
+
+    resolved = resolve_table_path(s)
+    if not resolved or not os.path.isfile(resolved):
+        return None, "local", bn
+
+    df = pd.read_csv(resolved, nrows=max(1, int(max_rows)))
+    if int(max_cols) > 0 and df.shape[1] > int(max_cols):
+        df = df.iloc[:, : int(max_cols)]
+    return df, f"csv:{resolved}", os.path.basename(resolved)
+
+
+def preview_from_duckdb(raw_path: str, *, con_data: duckdb.DuckDBPyConnection, max_rows: int, max_cols: int) -> Tuple[Optional[pd.DataFrame], str, str]:
+    """
+    Preview table reconstructed from DuckDB token index only (no local CSV resolve).
+    Returns (df_or_none, source_label, basename).
+    """
+    s = str(raw_path or "").strip()
+    bn = os.path.basename(s) if s else ""
+    if not bn:
+        return None, "duckdb", ""
+
+    row_upper = max(1, int(max_rows))
+    col_upper = max(1, int(max_cols))
+    sql = f"""
+        SELECT
+            rowid,
+            colid,
+            string_agg(tokenized, ' ' ORDER BY tokenized) AS cell_text
+        FROM {INDEX_TABLE}
+        WHERE filename = ?
+          AND colid >= 0
+          AND colid < ?
+          AND rowid >= -1
+          AND rowid < ?
+        GROUP BY rowid, colid
+        ORDER BY rowid, colid
+    """
+    rows = con_data.execute(sql, [bn, col_upper, row_upper]).fetchall()
+    if not rows:
+        return None, f"duckdb:{bn}", bn
+
+    token_df = pd.DataFrame(rows, columns=["rowid", "colid", "cell_text"])
+    if token_df.empty:
+        return None, f"duckdb:{bn}", bn
+    token_df["rowid"] = token_df["rowid"].astype(int)
+    token_df["colid"] = token_df["colid"].astype(int)
+    token_df["cell_text"] = token_df["cell_text"].fillna("").astype(str).str.strip()
+
+    col_ids = sorted(token_df["colid"].unique().tolist())
+    if not col_ids:
+        return None, f"duckdb:{bn}", bn
+
+    header_df = token_df[token_df["rowid"] == -1]
+    header_by_col = {int(r.colid): (str(r.cell_text).strip() or f"col_{int(r.colid)}") for r in header_df.itertuples()}
+    col_names = [header_by_col.get(cid) or f"col_{cid}" for cid in col_ids]
+
+    data_df = token_df[token_df["rowid"] >= 0]
+    if data_df.empty:
+        return pd.DataFrame(columns=col_names), f"duckdb:{bn}", bn
+
+    wide = (
+        data_df.pivot(index="rowid", columns="colid", values="cell_text")
+        .reindex(columns=col_ids)
+        .sort_index()
+        .head(row_upper)
+        .fillna("")
+    )
+    wide.columns = col_names
+    df = wide.reset_index(drop=True)
+    return df, f"duckdb:{bn}", bn
 
 
 def get_tables_from_modellake_db(limit: Optional[int] = None) -> List[Dict[str, Any]]:

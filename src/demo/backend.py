@@ -6,7 +6,7 @@ All job outputs (search results, integration, evaluation, QA) go under JOBS_DIR 
 Minimal imports for fast startup.
 """
 
-import os, sys, json, random, string, threading, time, math, re, html, shutil
+import os, sys, json, random, string, threading, time, math, re, html, shutil, atexit
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,8 +16,10 @@ from flask_cors import CORS
 from datetime import datetime
 #from src.config import REPO_ROOT, JOBS_DIR, CARD2TAB2CARD_TIMEOUT, USE_BY_TYPE, QUERY2MODELCARD_RETRIEVAL_MODES, CARD2TAB2CARD_TYPES, CARD2TAB2CARD_OUTPUT_JSON, VALID_MODEL_IDS_TXT, CLASSIFICATION_JSON, TABLE_RESOURCE_ALLOWLIST, RELATIONSHIP_PARQUET, PRESET_QUERIES_PATH
 from src.config import *
-from src.utils import resolve_table_path, get_device
+from src.utils import get_device, preview_from_local, preview_from_duckdb
 #from src.utils import filter_results_by_classify_results
+
+import duckdb
 
 def _append_pipeline_log(job_dir: str, message: str) -> None:
     """Append one line to job_dir/pipeline_run.log (e.g. integration timing after /api/search)."""
@@ -51,6 +53,35 @@ def _model_search_key(integration_type: str, query2modelcard_retrieval_mode: str
     """Slug for Model Search only: e.g. alite_dense (integration_type + query2modelcard retrieval_mode)."""
     parts = [integration_type or "union", query2modelcard_retrieval_mode or "dense"]
     return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
+
+
+def _resolve_backend_resource_bundle(raw_resources: Optional[List[str]]) -> Dict[str, Any]:
+    """
+    Normalize table resources once and derive all related backend artifacts.
+    Returns precomputed values so downstream code does not branch repeatedly.
+    """
+    table_resources = [r for r in list(raw_resources or TABLE_RESOURCE_ALLOWLIST) if r in ("hugging", "github", "arxiv")]
+    if not table_resources:
+        table_resources = list(TABLE_RESOURCE_ALLOWLIST)
+
+    rset = {str(r).strip().lower() for r in table_resources if str(r).strip()}
+    if rset == {"hugging"}:
+        table_db_path = MODELLAKE_DB_HUGGING
+        table_emb_npz = EMB_NPZ_HUGGING
+    elif rset == {"hugging", "github", "arxiv"}:
+        table_db_path = MODELLAKE_DB
+        table_emb_npz = EMB_NPZ
+    else:
+        raise NotImplementedError(f"Unsupported table_resources={sorted(rset)!r}")
+
+    # Query2ModelCard full-corpus remains fixed to full artifacts.
+    return {
+        "table_resources": table_resources,
+        "table_db_path": table_db_path,
+        "table_emb_npz": table_emb_npz,
+        "model_resources_full": ["hugging", "github", "arxiv"],
+        "full_emb_npz": EMB_NPZ,
+    }
 
 
 def _table_search_key(integration_type: str, search_type: str, tables_source: str = "intermediate") -> str:
@@ -106,74 +137,6 @@ def _require_job_dir(job_id: str) -> tuple:
 def _integration_saved_path_for_api(job_id: str, csv_name: str) -> str:
     """Repo-relative path for API/UI display only (fixed prefix; files still written under JOBS_DIR)."""
     return f"data_251117/jobs_251117/{job_id}/{csv_name}"
-
-
-def _allowed_csv_roots() -> List[str]:
-    """Only the three processed table index dirs (config) and job output dir — no wider ModelTables/data."""
-    roots: List[str] = []
-    for d in list(TABLE_BASE_DIRS) + [JOBS_DIR]:
-        if not d:
-            continue
-        if os.path.isdir(d):
-            roots.append(os.path.realpath(d))
-    return roots
-
-
-def _path_is_under_roots(candidate: str, roots: List[str]) -> bool:
-    cr = os.path.realpath(candidate)
-    for r in roots:
-        if cr == r or cr.startswith(r + os.sep):
-            return True
-    return False
-
-
-def _real_file_candidates(raw_path: str) -> List[str]:
-    """Absolute realpaths to try for a path string from search results (may contain ../)."""
-    if not raw_path or not isinstance(raw_path, str):
-        return []
-    s = raw_path.strip()
-    if not s:
-        return []
-    seen = set()
-    out: List[str] = []
-
-    def push(p: str) -> None:
-        rp = os.path.realpath(p)
-        if os.path.isfile(rp) and rp not in seen:
-            seen.add(rp)
-            out.append(rp)
-
-    if os.path.isabs(s):
-        push(s)
-    else:
-        # Paths like ../Repo/ModelTables/data/processed/... are stored relative to job CWD
-        # or repo root; anchoring to REPO_ROOT collapses .. correctly.
-        push(os.path.join(str(REPO_ROOT), s))
-    return out
-
-
-def _resolve_table_file_for_preview(raw_path: str) -> Optional[str]:
-    """Resolve a CSV path only under TABLE_BASE_DIRS (three processed dirs) or JOBS_DIR."""
-    roots = _allowed_csv_roots()
-    for cand in _real_file_candidates(raw_path):
-        if roots and _path_is_under_roots(cand, roots):
-            return cand
-    s = (raw_path or "").strip()
-    if not s:
-        return None
-    if not roots:
-        return None
-    r = resolve_table_path(s)
-    if r and os.path.isfile(r):
-        cand = os.path.realpath(r)
-        if _path_is_under_roots(cand, roots):
-            return cand
-    rel = os.path.normpath(os.path.join(str(REPO_ROOT), s.lstrip("/\\")))
-    if os.path.isfile(rel):
-        cand = os.path.realpath(rel)
-        if _path_is_under_roots(cand, roots):
-            return cand
-    return None
 
 
 def _html_table_cell(v: Any) -> str:
@@ -234,6 +197,54 @@ app = Flask(__name__)
 CORS(app)
 
 jobs: Dict[str, "JobLogger"] = {}
+
+_DUCKDB_CONN_LOCK = threading.Lock()
+_DUCKDB_CONN_BY_PATH: Dict[str, duckdb.DuckDBPyConnection] = {}
+
+
+def _get_persistent_duckdb_conn(db_path: str) -> duckdb.DuckDBPyConnection:
+    """
+    Process-level cached read-only DuckDB connection by absolute db_path.
+    Reused across jobs; closed only on process shutdown.
+    """
+    key = os.path.abspath(str(db_path))
+    with _DUCKDB_CONN_LOCK:
+        conn = _DUCKDB_CONN_BY_PATH.get(key)
+        if conn is None:
+            conn = duckdb.connect(key, read_only=True)
+            _DUCKDB_CONN_BY_PATH[key] = conn
+        return conn
+
+
+def _close_persistent_duckdb_conns() -> None:
+    with _DUCKDB_CONN_LOCK:
+        for conn in _DUCKDB_CONN_BY_PATH.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _DUCKDB_CONN_BY_PATH.clear()
+
+
+atexit.register(_close_persistent_duckdb_conns)
+
+
+def warmup_persistent_duckdb_conns_for_backend(log: Optional[Any] = None) -> None:
+    """
+    Startup warmup for read-only DuckDB connections used by table-search pipelines.
+    Mirrors dense-runtime warmup behavior: initialize once, reuse during requests.
+    """
+    logger_fn = log if callable(log) else (lambda _m: None)
+    db_paths = [MODELLAKE_DB_HUGGING, MODELLAKE_DB]
+    seen: set[str] = set()
+    for raw in db_paths:
+        p = os.path.abspath(str(raw))
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        t0 = time.time()
+        _get_persistent_duckdb_conn(p)
+        logger_fn(f"[warmup] DuckDB ready: {p} ({time.time() - t0:.2f}s)")
 
 class JobLogger:
     """Thread-safe logger for job progress. When log_file is set, also writes to file."""
@@ -396,8 +407,7 @@ def _run_pipeline_body(
     if not query or not str(query).strip():
         logger.log("query is required (model-id-only pipeline removed)")
         logger.set_status("error")
-        logger.set_results(
-            {
+        logger.set_results({
                 "error": "query required",
                 "model_id": None,
                 "query2modelcard_results": [],
@@ -426,32 +436,21 @@ def _run_pipeline_body(
     logger.set_status("running")
 
     # Normalize resource selection once and reuse in in-process calls.
-    raw_resources = list(table_resource_allowlist or TABLE_RESOURCE_ALLOWLIST)
-    table_resources = [r for r in raw_resources if r in ("hugging", "github", "arxiv")]
-    if not table_resources:
-        table_resources = list(TABLE_RESOURCE_ALLOWLIST)
-    # Query2ModelCard full-corpus step (EMB_NPZ + sparse when retrieval_mode is sparse/hybrid).
-    model_resources_full = ["hugging", "github", "arxiv"]
+    resource_bundle = _resolve_backend_resource_bundle(table_resource_allowlist)
+    table_resources = resource_bundle["table_resources"]
+    table_db_path = resource_bundle["table_db_path"]
+    model_resources_full = resource_bundle["model_resources_full"]
+    full_emb_npz = resource_bundle["full_emb_npz"]
+    table_emb_npz = resource_bundle["table_emb_npz"]
     # Table-search seed uses hugging-only embeddings by current table_resources default.
     logger.log(f"Resources: Query2ModelCard (full index)={model_resources_full}, table CLI={table_resources}")
 
-    def _table_emb_npz_for_resources(resources: List[str]) -> str:
-        rset = set(str(r).strip().lower() for r in (resources or []) if str(r).strip())
-        if rset == {"hugging"}:
-            return EMB_NPZ_HUGGING
-        if rset == {"hugging", "github", "arxiv"}:
-            return EMB_NPZ
-        # Keep same behavior as query2tab2card._resource_paths fallback constraints.
-        return EMB_NPZ_HUGGING
-
     from src.search.query2modelcard import get_query2modelcard_dense_runtime
-    full_emb_npz = _table_emb_npz_for_resources(model_resources_full)
     logger.log(f"[Query2ModelCard-FULL] Preload dense runtime from npz: {full_emb_npz}")
     t_preload_full = time.time()
     dense_runtime_full = get_query2modelcard_dense_runtime(emb_npz_path=full_emb_npz)
     logger.log(f"[Query2ModelCard-FULL] Dense runtime ready in {time.time() - t_preload_full:.2f}s")
 
-    table_emb_npz = _table_emb_npz_for_resources(table_resources)
     logger.log(f"[Query2Tab2Card] Preload dense runtime from npz: {table_emb_npz}")
     t_preload = time.time()
     dense_runtime_table = get_query2modelcard_dense_runtime(emb_npz_path=table_emb_npz)
@@ -633,12 +632,15 @@ def _run_pipeline_body(
         )
         t0 = time.time()
         from src.search.query2tab2card import search_query2tab2card
+        con_data = _get_persistent_duckdb_conn(table_db_path)
         payload = search_query2tab2card(
             query=query,
+            con_data=con_data,
             search_type=st,
             output_json=out_path,
             table_top_k=k_table,
             table_resources=table_resources,
+            use_tab2tab_aug=bool(USE_TAB2TAB_AUG),
             apply_query_rerank=True,
             model_top_k=int(model_top_k),
             q2m_table_candidate_k=9,
@@ -993,10 +995,9 @@ def get_table_preview():
     path_q = (request.args.get("path") or "").strip()
     if not path_q:
         return jsonify({"status": "error", "message": "path query parameter required"}), 400
-    resolved = _resolve_table_file_for_preview(path_q)
-    if not resolved:
-        return jsonify({"status": "error", "message": "Table file not found or access denied"}), 404
-    df = pd.read_csv(resolved, nrows=MAX_TABLE_PREVIEW_JSON_ROWS)
+    df, source, bn = preview_from_local(path_q, max_rows=MAX_TABLE_PREVIEW_JSON_ROWS, max_cols=MAX_TABLE_PREVIEW_JSON_COLS)
+    if df is None:
+        return jsonify({"status": "error", "message": "Table file not found in local CSV roots"}), 404
     ncols = int(df.shape[1])
     if ncols > MAX_TABLE_PREVIEW_JSON_COLS:
         df = df.iloc[:, :MAX_TABLE_PREVIEW_JSON_COLS]
@@ -1007,6 +1008,8 @@ def get_table_preview():
             "html": _dataframe_to_html_table(preview),
             "rows": int(len(df)),
             "columns": int(df.shape[1]),
+            "source": source,
+            "table": bn or "",
         }
     )
 
@@ -1016,22 +1019,9 @@ def make_table_page_response(path_q: str) -> Response:
     path_q = (path_q or "").strip()
     if not path_q:
         return Response("Missing path", status=400, mimetype="text/plain; charset=utf-8")
-    resolved = _resolve_table_file_for_preview(path_q)
-    if not resolved:
-        return Response(
-            "<!DOCTYPE html><html><body><p>Table file not found or access denied.</p></body></html>",
-            status=404,
-            mimetype="text/html; charset=utf-8",
-        )
-    try:
-        df = pd.read_csv(resolved, nrows=MAX_TABLE_PAGE_ROWS)
-    except Exception as e:
-        msg = html.escape(str(e))
-        return Response(
-            f"<!DOCTYPE html><html><body><p>Failed to read CSV: {msg}</p></body></html>",
-            status=500,
-            mimetype="text/html; charset=utf-8",
-        )
+    df, source, bn = preview_from_local(path_q, max_rows=MAX_TABLE_PAGE_ROWS, max_cols=MAX_TABLE_PAGE_COLS)
+    if df is None:
+        return Response("<!DOCTYPE html><html><body><p>Table file not found in local CSV roots.</p></body></html>", status=404, mimetype="text/html; charset=utf-8")
     total_cols = int(df.shape[1])
     col_note = ""
     if total_cols > MAX_TABLE_PAGE_COLS:
@@ -1041,14 +1031,9 @@ def make_table_page_response(path_q: str) -> Response:
     if len(df) >= MAX_TABLE_PAGE_ROWS:
         row_note = f" Showing first {MAX_TABLE_PAGE_ROWS} rows (file may contain more)."
     note = (row_note + col_note).strip()
-    title = os.path.basename(resolved)
-    body = render_template_string(
-        TABLE_PAGE_HTML,
-        title=title,
-        path_display=resolved,
-        note=note,
-        table_html=_dataframe_to_html_table(df),
-    )
+    title = bn or os.path.basename(str(path_q))
+    display_path = source or str(path_q)
+    body = render_template_string(TABLE_PAGE_HTML, title=title, path_display=display_path, note=note, table_html=_dataframe_to_html_table(df))
     return Response(body, mimetype="text/html; charset=utf-8")
 
 
@@ -1395,6 +1380,44 @@ def _load_tables_from_integration_run(job_dir: str, run_key: str):
     return (df1 if not df1.empty else None), (df2 if not df2.empty else None)
 
 
+def _upsert_integration_run_result(
+    *,
+    job_dir: str,
+    run_key: str,
+    integration_type: Optional[str],
+    search_type: Optional[str] = None,
+    query2modelcard_retrieval_mode: Optional[str] = None,
+    table_result: Optional[Dict[str, Any]] = None,
+    model_result: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Persist current-format integration run JSON only."""
+    safe_key = re.sub(r"[^a-z0-9_]", "_", (run_key or "").lower().strip()) or "run"
+    path = os.path.join(job_dir, f"integration_run_{safe_key}.json")
+    existing: Dict[str, Any] = {}
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                existing = loaded
+
+    run_payload = dict(existing)
+    run_payload["key"] = safe_key
+    run_payload["integration_type"] = integration_type
+    if search_type is not None:
+        run_payload["search_type"] = search_type
+    if query2modelcard_retrieval_mode is not None:
+        run_payload["query2modelcard_retrieval_mode"] = query2modelcard_retrieval_mode
+    if table_result is not None:
+        run_payload["table_result"] = table_result
+    if model_result is not None:
+        run_payload["model_result"] = model_result
+    run_payload["updated_at"] = datetime.now().isoformat()
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(run_payload, f, ensure_ascii=False, indent=0)
+    return path
+
+
 @app.route("/api/evaluate", methods=["POST"])
 def evaluate():
     """Evaluate quality (relevance, coverage, diversity) between Table Search and Model Search integrated tables using LLM."""
@@ -1592,6 +1615,7 @@ if __name__ == "__main__":
         from src.search.query2modelcard import warmup_dense_runtimes_for_backend
 
         warmup_dense_runtimes_for_backend(log=lambda m: print(m, flush=True))
+        warmup_persistent_duckdb_conns_for_backend(log=lambda m: print(m, flush=True))
         print("[startup] Warmup finished. Binding HTTP server...", flush=True)
     else:
         print("[startup] Warmup skipped (--no-warmup or BACKEND_SKIP_WARMUP=1).", flush=True)

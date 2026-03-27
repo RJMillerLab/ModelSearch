@@ -74,11 +74,20 @@ class NineLaneRetriever:
     query_aug (ori/tr/str) x candidate_aug (ori/tr/str).
     """
 
-    def __init__(self, *, search_type: str, query: str, k: int, db_path: str, query_aug_types: Sequence[str], candidate_aug_types: Sequence[str]) -> None:
+    def __init__(
+        self,
+        *,
+        search_type: str,
+        query: str,
+        k: int,
+        con_data: Any,
+        query_aug_types: Sequence[str],
+        candidate_aug_types: Sequence[str],
+    ) -> None:
         self.search_type = search_type
         self.query = query
         self.k = k
-        self.db_path = db_path
+        self.con_data = con_data
         self.query_aug_types = list(query_aug_types)
         self.candidate_aug_types = list(candidate_aug_types)
         self.query_basenames = _query_variant_basenames(query, self.query_aug_types)
@@ -93,9 +102,21 @@ class NineLaneRetriever:
             for c_aug in self.candidate_aug_types:
                 lane_id = f"q_{q_aug}__cand_{c_aug}"
                 if with_scores:
-                    lane_rankings_scored[lane_id] = search_table2table_with_scores(search_type=self.search_type, query=q_name, k=self.k, db_path=self.db_path, augmentation_types=[c_aug])
+                    lane_rankings_scored[lane_id] = search_table2table_with_scores(
+                        search_type=self.search_type,
+                        query=q_name,
+                        k=self.k,
+                        con_data=self.con_data,
+                        augmentation_types=[c_aug],
+                    )
                 else:
-                    lane_rankings[lane_id] = search_table2table(search_type=self.search_type, query=q_name, k=self.k, db_path=self.db_path, augmentation_types=[c_aug])
+                    lane_rankings[lane_id] = search_table2table(
+                        search_type=self.search_type,
+                        query=q_name,
+                        k=self.k,
+                        con_data=self.con_data,
+                        augmentation_types=[c_aug],
+                    )
 
         return AugRetrievalOutput(lane_rankings=lane_rankings, lane_rankings_scored=lane_rankings_scored, query_basenames=self.query_basenames, query_canon=self.query_canon)
 
@@ -187,24 +208,26 @@ RERANKER_BY_MODE: Dict[str, BaseAugReranker] = {
 }
 
 
-def search_tab2tab_aug(*, search_type: str, query: str, k: int, db_original: str, db_transposed: str, output_json: Optional[str] = None, transposed_query_csv: Optional[str] = None, query_augmentation_types: Optional[List[str]] = None, candidate_augmentation_types: Optional[List[str]] = None, rerank_mode: str = "table_level") -> List[str]:
-    del db_transposed, transposed_query_csv
+def search_tab2tab_aug(
+    *,
+    search_type: str,
+    query: str,
+    k: int,
+    con_data: Any,
+    rerank_mode: str = "score_max",
+    query_augmentation_types: List[str],
+    candidate_augmentation_types: List[str],
+    output_json: Optional[str] = None,
+) -> List[str]:
     t0 = time.time()
-    query_aug_types = _normalize_aug_types(query_augmentation_types)
-    cand_aug_types = _normalize_aug_types(candidate_augmentation_types)
+    retriever = NineLaneRetriever(search_type=search_type, query=query, k=k, con_data=con_data, query_aug_types=query_augmentation_types, candidate_aug_types=candidate_augmentation_types)
+    retrieved = retriever.run(with_scores=(rerank_mode == "score_max"))
 
-    rerank_mode_l = str(rerank_mode).strip().lower()
-    if rerank_mode_l not in RERANKER_BY_MODE:
-        raise ValueError(f"Unsupported rerank_mode={rerank_mode!r}. Expected one of: {sorted(RERANKER_BY_MODE.keys())}")
-
-    retriever = NineLaneRetriever(search_type=search_type, query=query, k=k, db_path=db_original, query_aug_types=query_aug_types, candidate_aug_types=cand_aug_types)
-    retrieved = retriever.run(with_scores=(rerank_mode_l == "score_max"))
-
-    reranker = RERANKER_BY_MODE[rerank_mode_l]
+    reranker = RERANKER_BY_MODE[rerank_mode]
     final, stats = reranker.rerank(lane_rankings=retrieved.lane_rankings, lane_rankings_scored=retrieved.lane_rankings_scored, top_k=k, query_canon=retrieved.query_canon)
 
     if output_json:
-        payload = {"version": 3, "search_type": search_type, "query": query, "query_basenames": retrieved.query_basenames, "query_augmentation_types": query_aug_types, "candidate_augmentation_types": cand_aug_types, "rerank_mode": rerank_mode_l, "lane_rankings": retrieved.lane_rankings, "lane_rankings_scored": retrieved.lane_rankings_scored, "rerank_stats": stats, "merged_ranking": final, "elapsed_s": round(time.time() - t0, 4)}
+        payload = {"version": 3, "search_type": search_type, "query": query, "query_basenames": retrieved.query_basenames, "query_augmentation_types": query_augmentation_types, "candidate_augmentation_types": candidate_augmentation_types, "rerank_mode": rerank_mode, "lane_rankings": retrieved.lane_rankings, "lane_rankings_scored": retrieved.lane_rankings_scored, "rerank_stats": stats, "merged_ranking": final, "elapsed_s": round(time.time() - t0, 4)}
         parent = os.path.dirname(os.path.abspath(output_json))
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -224,11 +247,14 @@ def main() -> None:
     parser.add_argument("--output_json", default="", help=f"default: {TAB2TAB_AUG_OUTPUT_JSON}")
     args = parser.parse_args()
 
-    db_original = MODELLAKE_DB_HUGGING
+    db_path = MODELLAKE_DB_HUGGING
     out_path = args.output_json or TAB2TAB_AUG_OUTPUT_JSON
     t0 = time.perf_counter()
-    print(f"[tab2tab_aug] db_original={os.path.abspath(db_original)} | blend={os.path.abspath(BLEND_INTERNAL_REPO or '')} | rerank_mode={args.rerank_mode}", flush=True)
-    merged = search_tab2tab_aug(search_type=args.search_type, query=args.query, k=args.k, db_original=db_original, db_transposed=db_original, output_json=out_path, query_augmentation_types=[x.strip().lower() for x in args.query_augmentation_types.split(",") if x.strip()], candidate_augmentation_types=[x.strip().lower() for x in args.candidate_augmentation_types.split(",") if x.strip()], rerank_mode=args.rerank_mode)
+    import duckdb
+    con_data = duckdb.connect(db_path, read_only=True)
+    print(f"[tab2tab_aug] db_path={os.path.abspath(db_path)} | blend={os.path.abspath(BLEND_INTERNAL_REPO or '')} | rerank_mode={args.rerank_mode}", flush=True)
+    merged = search_tab2tab_aug(search_type=args.search_type, query=args.query, k=args.k, output_json=out_path, con_data=con_data, query_augmentation_types=[x.strip().lower() for x in args.query_augmentation_types.split(",") if x.strip()], candidate_augmentation_types=[x.strip().lower() for x in args.candidate_augmentation_types.split(",") if x.strip()], rerank_mode=args.rerank_mode)
+    con_data.close()
     print(f"Saved: {out_path} | merged top-{args.k}: {len(merged)} | wall {time.perf_counter() - t0:.4f}s", flush=True)
 
 
