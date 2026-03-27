@@ -222,17 +222,6 @@ python scripts/batch_run_preset_queries.py \
   --integration_search_types single_column unionable keyword
 ```
 
----
-
-# Inference fast checklist
-
-1. **Run Part 1 once** (modelcard indexes via **`ir_index_builder`**, Blend DuckDB, optional table classification for by_type).
-2. **Do not** re-run index builders or `classification --mode batch` during serving or per-query scripts.
-3. Inference **loads** artifacts only: card2card **`EMB_NPZ` + Lucene `SPARSE_INDEX`** (or hugging subsets), `modellake.db`, optional `table_classifications.json`. Use **`ir_searcher`** (`DenseSearcher` / `SparseSearcher`) for modelcard retrieval.
-4. For tab2know: batch classification (optional 1.3) runs tab2know **inference** per table and writes JSON; at query time we only `load_classifications(json)`. Tab2know’s own model training lives in TabKnow_internal (separate repo).
-
-## 4. Analysis
-
 generate markdown for query table and retrieved tables and integrated tables
 ```bash
 python scripts/check_retrieval_integration_consistency.py \
@@ -241,3 +230,12 @@ python scripts/check_retrieval_integration_consistency.py \
   --per-job-md \
   --preview-max-rows 0 --preview-max-cols 0
 ```
+
+---
+
+# Inference fast checklist
+
+1. **Run Part 1 once** (modelcard indexes via **`ir_index_builder`**, Blend DuckDB, optional table classification for by_type).
+2. **Do not** re-run index builders or `classification --mode batch` during serving or per-query scripts.
+3. Inference **loads** artifacts only: card2card **`EMB_NPZ` + Lucene `SPARSE_INDEX`** (or hugging subsets), `modellake.db`, optional `table_classifications.json`. Use **`ir_searcher`** (`DenseSearcher` / `SparseSearcher`) for modelcard retrieval.
+4. For tab2know: batch classification (optional 1.3) runs tab2know **inference** per table and writes JSON; at query time we only `load_classifications(json)`. Tab2know’s own model training lives in TabKnow_internal (separate repo).

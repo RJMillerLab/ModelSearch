@@ -827,11 +827,12 @@ def get_model_tables_from_db(model_id: str, db_path: str) -> List[Dict[str, Any]
         return [_row_to_table_metadata(row) for row in rows]
 
 
-def _paths_for_resource_set(resources: List[str]) -> Tuple[str, str]:
+def _paths_for_resource_set(resources: List[str]) -> Tuple[str, str, str]:
     """
     Same resource→artifact selection as demo backend / query2tab2card._resource_paths,
     returning both dense npz path and sparse index path.
     """
+    from src.config import EMB_NPZ_HUGGING, SPARSE_INDEX_HUGGING, MODELLAKE_DB_HUGGING, EMB_NPZ, SPARSE_INDEX, MODELLAKE_DB
     rset = {str(r).strip().lower() for r in (resources or []) if str(r).strip()}
     if rset == {"hugging"}:
         return str(EMB_NPZ_HUGGING), str(SPARSE_INDEX_HUGGING), str(MODELLAKE_DB_HUGGING)
