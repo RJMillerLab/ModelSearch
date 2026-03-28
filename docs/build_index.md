@@ -29,12 +29,12 @@ Extract model_id that have tables (non-empty `csv_basename` in relationship parq
 
 ```bash
 # explode parquet, get model-csv pair relationship from modelcard_step3_dedup_v2_251117.parquet (data from ModelTables)
-python scripts/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet ../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet
+python src/utils/build_model_to_tables_explode_parquet.py --output_parquet data_251117/model_to_tables_explode_v2_251117.parquet --relationship_parquet ../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet
 
 # valid model ids which table exist in DuckDB index
 python -m src.utils.build_valid_model_ids_txt --output data_251117/valid_model_ids_with_tables_hugging.txt --resources hugging --duckdb_path ../Blend_internal/database_251117/modellake_v2_251117_nomask_hugging.db --explode_parquet data_251117/model_to_tables_explode_v2_251117.parquet
 # update explode parquet in-place by DuckDB table list (filter hugging rows only)
-python -m scripts.update_model_to_tables_explode_parquet_by_db_tables --parquet_path data_251117/model_to_tables_explode_v2_251117.parquet --resources hugging --duckdb_path ../Blend_internal/database_251117/modellake_v2_251117_nomask_hugging.db > logs/update_model_to_tables_explode_parquet_by_db_tables_hugging.log 2>&1 # so it won't affect downstream getting csvs, otherwise it will get csv that don't exist in DuckDB index
+python -m src.utils.update_model_to_tables_explode_parquet_by_db_tables --parquet_path data_251117/model_to_tables_explode_v2_251117.parquet --resources hugging --duckdb_path ../Blend_internal/database_251117/modellake_v2_251117_nomask_hugging.db > logs/update_model_to_tables_explode_parquet_by_db_tables_hugging.log 2>&1 # so it won't affect downstream getting csvs, otherwise it will get csv that don't exist in DuckDB index
 ```
 
 ## 1.2 Modelcard index (`ir_index_builder`)
@@ -68,9 +68,9 @@ Train vs inference = explicit arg only, no fallback. Train = run below with `--m
 
 ```bash
 # train (full datalake)
-python -m src.search.classification --mode batch --output_json data/table_classifications.json
+python -m src.classification.classification --mode batch --output_json data/table_classifications.json
 # heuristic if tab2know fails
-python -m src.search.classification --mode batch --output_json data/table_classifications.json --method heuristic
+python -m src.classification.classification --mode batch --output_json data/table_classifications.json --method heuristic
 ```
 
 </details>
@@ -214,7 +214,7 @@ ssh -L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002 chippie.cs.uwaterloo.ca
 
 mimic user for batch running
 ```bash
-python scripts/batch_run_preset_queries.py \
+python src/utils/batch_run_preset_queries.py \
   --backend_url http://localhost:5002 \
   --preset_path config/preset_queries.json \
   --run_integration \
@@ -224,7 +224,7 @@ python scripts/batch_run_preset_queries.py \
 
 generate markdown for query table and retrieved tables and integrated tables
 ```bash
-python scripts/check_retrieval_integration_consistency.py \
+python src/utils/check_retrieval_integration_consistency.py \
   --jobs-root data_251117/jobs_251117 \
   --search-types single_column unionable keyword \
   --per-job-md \
