@@ -102,6 +102,30 @@ def generate_job_id() -> str:
     return f"{ts}_{suffix}"
 
 
+def _job_paths(job_id: str) -> JobPaths:
+    return JobPaths(JOBS_DIR, job_id)
+
+
+def _job_exists_on_disk(job_id: str) -> bool:
+    paths = _job_paths(job_id)
+    return os.path.isdir(paths.job_dir) and os.path.isfile(paths.job_meta_path)
+
+
+def _read_pipeline_log_items(job_id: str) -> List[Dict[str, Any]]:
+    paths = _job_paths(job_id)
+    log_path = os.path.join(paths.job_dir, "pipeline_run.log")
+    if not os.path.isfile(log_path):
+        return []
+    items: List[Dict[str, Any]] = []
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            msg = line.rstrip("\n")
+            if not msg:
+                continue
+            items.append({"timestamp": None, "message": msg})
+    return items
+
+
 def ordered_unique(items: List[Any]) -> List[str]:
     return list(dict.fromkeys(str(x).strip() for x in items if str(x).strip()))
 
@@ -200,14 +224,20 @@ def search():
 
 @app.route("/api/status/<job_id>", methods=["GET"])
 def status(job_id: str):
-    return jsonify({"job_id": job_id, "status": jobs[job_id]["status"], "logs": jobs[job_id]["logs"]})
+    if job_id in jobs:
+        return jsonify({"job_id": job_id, "status": jobs[job_id]["status"], "logs": jobs[job_id]["logs"]})
+    if _job_exists_on_disk(job_id):
+        return jsonify({"job_id": job_id, "status": "completed", "logs": _read_pipeline_log_items(job_id)})
+    return api_error(f"Unknown job_id: {job_id}", 404)
 
 
 @app.route("/api/results/<job_id>", methods=["GET"])
 def results(job_id: str):
-    if jobs[job_id]["status"] != "completed":
+    if job_id in jobs and jobs[job_id]["status"] != "completed":
         return jsonify({"status": jobs[job_id]["status"]}), 202
-    paths = JobPaths(JOBS_DIR, job_id)
+    paths = _job_paths(job_id)
+    if not os.path.isfile(paths.job_meta_path):
+        return api_error(f"Unknown job_id: {job_id}", 404)
     meta = JobMeta.load(paths.job_meta_path)
     return jsonify({"status": "success", "job_id": job_id, "results": {**meta.to_dict(), "folder_path": paths.job_dir, "run_log_path": os.path.join(paths.job_dir, "pipeline_run.log")}})
 
@@ -215,6 +245,11 @@ def results(job_id: str):
 @app.route("/api/logs/<job_id>", methods=["GET"])
 def logs(job_id: str):
     def generate():
+        if job_id not in jobs:
+            for item in _read_pipeline_log_items(job_id):
+                yield f"data: {json.dumps(item)}\n\n"
+            yield f"data: {json.dumps({'status': 'completed'})}\n\n"
+            return
         last = 0
         while jobs[job_id]["status"] in ("pending", "running"):
             items = jobs[job_id]["logs"]

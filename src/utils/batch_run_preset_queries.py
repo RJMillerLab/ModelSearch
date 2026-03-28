@@ -16,7 +16,7 @@ Usage (from repo root):
 
 Note:
   - Requires the backend server (src/demo/backend.py) to be running.
-  - Jobs and outputs are stored under data/jobs/<job_id> by the backend.
+  - Jobs and outputs are stored under jobs_251117/<job_id> by the backend.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 import requests
+
+from src.config import JOBS_DIR
 
 
 def _load_preset_queries(preset_path: str) -> List[Dict[str, Any]]:
@@ -325,10 +327,9 @@ def main() -> int:
             all_outcomes.append({"id": q_id, "query": q_text, "error": str(e)})
         print("")
 
-    # Optionally dump a summary JSON under data/jobs/batch_runs for inspection.
+    # Optionally dump a summary JSON under jobs_251117/batch_runs for inspection.
     try:
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        summary_dir = os.path.join(repo_root, "data_251117", "jobs_251117", "batch_runs")
+        summary_dir = os.path.join(JOBS_DIR, "batch_runs")
         os.makedirs(summary_dir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         summary_path = os.path.join(summary_dir, f"batch_preset_queries_{ts}.json")
