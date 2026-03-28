@@ -18,15 +18,6 @@ _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from src.search.classification import (
-    classify_table,
-    classify_table_from_db,
-    classify_datalake_batch,
-    load_classifications,
-    get_known_classes,
-    infer_classification_method,
-)
-
 # Lazy symbols: (module path, attribute name). Keeps package import light (no Blend/FAISS at import).
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     # tab2tab
@@ -55,11 +46,4 @@ __all__ = [
     "Query2ModelCardSearch",
     "Card2Tab2CardSearch",
     "Query2Tab2CardSearch",
-    # classification
-    "classify_table",
-    "classify_table_from_db",
-    "classify_datalake_batch",
-    "load_classifications",
-    "get_known_classes",
-    "infer_classification_method",
 ]
