@@ -169,10 +169,10 @@ def _generate_job_id() -> str:
     return f"{ts}_{suffix}"
 
 
-def _model_search_key(integration_type: str, query2modelcard_retrieval_mode: str) -> str:
-    """Slug for Model Search only: e.g. alite_dense (integration_type + query2modelcard retrieval_mode)."""
-    parts = [integration_type or "union", query2modelcard_retrieval_mode or "dense"]
-    return "_".join(re.sub(r"[^a-z0-9_]", "_", (p or "").lower().strip()) for p in parts)
+def _model_search_key(integration_type: str) -> str:
+    """Slug for Model Search artifacts: integration method only (neighbors always from query2modelcard_results / dense)."""
+    p = integration_type or "union"
+    return re.sub(r"[^a-z0-9_]", "_", str(p).lower().strip())
 
 
 def _table_search_key(integration_type: str, search_type: str, tables_source: str = "intermediate") -> str:
@@ -367,6 +367,23 @@ def _save_search_results_json(job_id: str, data: Dict) -> None:
 def _read_search_results_json(job_id: str) -> Optional[Dict]:
     """Load ``search_results.json`` for a job if present."""
     return _read_json_job(job_id, "search_results.json")
+
+
+def _table_resources_from_search_results(search_results: Dict[str, Any]) -> Optional[List[str]]:
+    """Parquet column scope for model→table batch SQL (align with search pipeline ``table_resources``)."""
+    if "table_resources" not in search_results:
+        return None
+    tr = search_results.get("table_resources")
+    if isinstance(tr, list) and tr:
+        out = [
+            str(x).strip().lower()
+            for x in tr
+            if str(x).strip() and str(x).strip().lower() in ("hugging", "github", "arxiv", "llm")
+        ]
+        if out:
+            return out
+    fallback = [r for r in TABLE_RESOURCE_ALLOWLIST if r in ("hugging", "github", "arxiv", "llm")]
+    return fallback
 
 
 def run_search_pipeline(
@@ -734,7 +751,7 @@ def _load_job_extras(job_id: str) -> dict:
                 run = json.load(f)
             m, t = run.get("model_result"), run.get("table_result")
             if m and m.get("status") == "success":
-                mk = _model_search_key(run.get("integration_type"), run.get("query2modelcard_retrieval_mode"))
+                mk = _model_search_key(run.get("integration_type"))
                 if not any(r["key"] == mk for r in model_runs):
                     model_runs.append({"key": mk, **m})
             if t and t.get("status") == "success":
@@ -745,7 +762,7 @@ def _load_job_extras(job_id: str) -> dict:
         out["model_search_runs"] = model_runs
     elif out.get("integration_model_search") and out["integration_model_search"].get("status") == "success":
         m = out["integration_model_search"]
-        out["model_search_runs"] = [{"key": _model_search_key(m.get("integration_type"), m.get("query2modelcard_retrieval_mode")), **m}]
+        out["model_search_runs"] = [{"key": _model_search_key(m.get("integration_type")), **m}]
     if table_runs:
         out["table_search_runs"] = table_runs
     elif out.get("integration_table_search") and out["integration_table_search"].get("status") == "success":
@@ -867,21 +884,62 @@ def table_search_preview():
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
 
+    job_dir, jd_err = _require_job_dir(job_id)
+    if jd_err is not None:
+        return jd_err
+
     sr = _read_search_results_json(job_id)
-    if not isinstance(sr, dict):
-        return _api_error(f"search_results.json not found for job {job_id}", 404)
-    from src.integration.pipeline_preview import prepare_query2tab2card_preview
-    preview, prep_err = prepare_query2tab2card_preview(
-        search_results=sr,
+    tr_res = tr_list if isinstance(tr_list, list) and tr_list else None
+    if tr_res is None and isinstance(sr, dict):
+        tr_res = _table_resources_from_search_results(sr)
+    if not tr_res:
+        tr_res = [r for r in TABLE_RESOURCE_ALLOWLIST if r in ("hugging", "github", "arxiv", "llm")]
+
+    map_path = os.path.join(job_dir, f"card2tab2card_{search_type}.json")
+    from src.integration.pipeline_preview import Query2Tab2CardFullMap
+    from src.integration.table_integration import load_query2tab2card_full_map_for_job
+
+    preview_obj = None
+    load_err: Optional[str] = None
+    try:
+        if os.path.isfile(map_path):
+            preview_obj = Query2Tab2CardFullMap(map_path, table_resources=tr_res)
+        elif isinstance(sr, dict):
+            fm, load_err = load_query2tab2card_full_map_for_job(sr, search_type, job_dir)
+            if fm is not None and not load_err:
+                preview_obj = Query2Tab2CardFullMap.from_full_map(fm, table_resources=tr_res)
+    except Exception as exc:
+        load_err = str(exc)
+        preview_obj = None
+
+    if preview_obj is None:
+        return jsonify(
+            {
+                "status": "no_result",
+                "message": load_err
+                "search_type": search_type,
+                "tables_source": tables_source,
+            }
+        )
+
+    preview = preview_obj.build_ui_preview(
+        table_resources=tr_res,
         search_type=search_type,
         tables_source=tables_source,
-        table_resources=tr_list,
     )
-    if prep_err:
-        return jsonify({"status": "no_result", "message": prep_err, "search_type": search_type, "tables_source": tables_source})
+    pm = preview.get("preview_meta") if isinstance(preview.get("preview_meta"), dict) else {}
+    q = str(sr.get("query") or "").strip() if isinstance(sr, dict) else ""
+    if not q:
+        q = str(pm.get("query") or "").strip()
+    seed = None
+    if isinstance(sr, dict):
+        seed = sr.get("table_search_seed_model_id") or sr.get("model_id")
+    if not seed and getattr(preview_obj, "seed_models", None):
+        seed = preview_obj.seed_models[0]
     return jsonify(
         {
             "status": "success",
+            "preview_format_version": 1,
             "search_type": search_type,
             "tables_source": tables_source,
             "query_tables": preview.get("query_tables", []),
@@ -892,6 +950,11 @@ def table_search_preview():
             "tab2tab_trace_rows": preview.get("tab2tab_trace_rows", []),
             "after_model_cap_trace_rows": preview.get("after_model_cap_trace_rows", []),
             "retrieved_table_model_rows": preview.get("after_model_cap_trace_rows", []),
+            "preview_meta": pm,
+            "job_context": {
+                "query": q,
+                "table_search_seed_model_id": seed,
+            },
             "stats": {
                 "total_unique_tables": len(preview.get("table_paths", [])),
                 "models_with_tables": len(preview.get("models_with_tables_list", [])),
@@ -903,14 +966,18 @@ def table_search_preview():
 
 @app.route("/api/model-search-preview", methods=["POST"])
 def model_search_preview():
-    """Prepare query2card relationship preview without running integration."""
+    """Prepare query2card relationship preview without running integration.
+
+    Neighbor list:
+    - Omit ``query2modelcard_retrieval_mode`` or send ``\"integration\"`` / empty → ``query2modelcard_results``
+      (same IDs as ``POST /api/integrate-model-search``).
+    - ``dense`` / ``sparse`` / ``hybrid`` → slice ``query2modelcard_all_modes[mode]`` for comparison.
+    """
     data = request.get_json() or {}
     job_id, err = _require_job_id(data)
     if err is not None:
         return err
-    q2m_mode = str(data.get("query2modelcard_retrieval_mode") or "dense").strip().lower()
-    if q2m_mode not in QUERY2MODELCARD_RETRIEVAL_MODES:
-        q2m_mode = "dense"
+
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
 
@@ -919,28 +986,48 @@ def model_search_preview():
         return _api_error(f"search_results.json not found for job {job_id}", 404)
 
     modes = sr.get("query2modelcard_all_modes") if isinstance(sr.get("query2modelcard_all_modes"), dict) else {}
-    mids_raw = modes.get(q2m_mode, [])
+    raw_mode = data.get("query2modelcard_retrieval_mode")
+    raw_s = str(raw_mode).strip().lower() if raw_mode is not None else ""
+    use_integration_list = raw_mode is None or raw_s in ("", "integration", "saved", "default")
+
+    if use_integration_list:
+        mids_raw = sr.get("query2modelcard_results")
+        neighbor_source = "query2modelcard_results"
+        mode_label = None
+    else:
+        q2m_mode = raw_s if raw_s in QUERY2MODELCARD_RETRIEVAL_MODES else "dense"
+        mids_raw = modes.get(q2m_mode)
+        neighbor_source = f"query2modelcard_all_modes.{q2m_mode}"
+        mode_label = q2m_mode
+
     model_ids = [str(x).strip() for x in (mids_raw if isinstance(mids_raw, list) else []) if str(x).strip()]
     if not model_ids:
         return jsonify(
             {
                 "status": "no_result",
-                "message": f"No model ids for retrieval mode {q2m_mode!r}",
-                "query2modelcard_retrieval_mode": q2m_mode,
+                "message": f"No model ids for neighbor source {neighbor_source!r}",
+                "neighbor_source": neighbor_source,
+                "query2modelcard_retrieval_mode": mode_label,
             }
         )
-
-    from src.integration.pipeline_preview import _resolve_table_paths_for_model_ids, _table_resources_for_integration
-
-    resources = tr_list if isinstance(tr_list, list) and tr_list else _table_resources_for_integration(sr)
-    table_paths, model_to_table_paths = _resolve_table_paths_for_model_ids(model_ids, resources=resources)
+    
+    from src.utils import load_modelid_to_csvlist
+    resources = tr_list if isinstance(tr_list, list) and tr_list else _table_resources_from_search_results(sr)
+    model_to_table_paths = {mid: load_modelid_to_csvlist(mid, resources=resources) for mid in model_ids}
+    table_paths = list(set(x for v in model_to_table_paths.values() for x in v))
     return jsonify(
         {
             "status": "success",
-            "query2modelcard_retrieval_mode": q2m_mode,
+            "preview_format_version": 1,
+            "neighbor_source": neighbor_source,
+            "query2modelcard_retrieval_mode": mode_label,
             "models_with_tables": model_ids,
             "table_paths": table_paths,
             "model_to_table_paths": model_to_table_paths,
+            "job_context": {
+                "query": sr.get("query"),
+                "table_search_seed_model_id": sr.get("table_search_seed_model_id") or sr.get("model_id"),
+            },
             "stats": {
                 "models_with_tables": len(model_ids),
                 "total_unique_tables": len(table_paths),
@@ -961,7 +1048,7 @@ def list_saved_searches():
     searches = []
     for name, path, _ in candidates[:50]:
         json_path = os.path.join(path, "search_results.json")
-        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "model_top_k": None, "use_by_type": False, "query2modelcard_retrieval_mode": None, "table_search_k": None}
+        entry = {"folder_name": name, "path": path, "query": None, "model_id": None, "timestamp_str": "", "top_k": None, "model_top_k": None, "use_by_type": False, "table_search_k": None}
         with open(json_path, "r", encoding="utf-8") as f:
             saved = json.load(f)
         entry["query"] = saved.get("query") or ""
@@ -973,7 +1060,6 @@ def list_saved_searches():
         entry["top_k"] = saved.get("top_k")
         entry["model_top_k"] = saved.get("model_top_k")
         entry["use_by_type"] = bool(saved.get("use_by_type", False))
-        entry["query2modelcard_retrieval_mode"] = saved.get("query2modelcard_retrieval_mode")
         entry["table_search_k"] = saved.get("table_search_k")
         searches.append(entry)
     return jsonify({"status": "success", "searches": searches})
@@ -1090,7 +1176,6 @@ def integrate_model_search():
     integration_type = data.get("integration_type", "alite")
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
-    query2modelcard_retrieval_mode = data.get("query2modelcard_retrieval_mode") or None
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
     from src.integration.table_integration import integrate_tables_from_query2modelcard
@@ -1100,18 +1185,15 @@ def integrate_model_search():
         integration_type=integration_type,
         k=k,
         max_models=max_models,
-        query2modelcard_retrieval_mode=query2modelcard_retrieval_mode,
         table_resources=tr_list,
     )
-    run_key = _model_search_key(integration_type, query2modelcard_retrieval_mode or "dense")
-    mode_s = query2modelcard_retrieval_mode or "dense"
+    run_key = _model_search_key(integration_type)
 
     elapsed_s = round(time.time() - t_integrate, 4)
     if not result.get("success", False):
         save_payload = {
             "status": "no_result",
             "integration_type": integration_type,
-            "query2modelcard_retrieval_mode": mode_s,
             "k": k,
             "max_models": max_models,
             "integration_elapsed_s": elapsed_s,
@@ -1143,7 +1225,6 @@ def integrate_model_search():
     save_payload = {
         "status": "success",
         "integration_type": integration_type,
-        "query2modelcard_retrieval_mode": mode_s,
         "k": k,
         "max_models": max_models,
         "integration_elapsed_s": elapsed_s,
@@ -1154,7 +1235,7 @@ def integrate_model_search():
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
     with open(os.path.join(job_dir, "integration_model_search.json"), "w", encoding="utf-8") as f:
         json.dump(save_payload, f, ensure_ascii=False, indent=0)
-    line = f"Integration (model search) OK in {elapsed_s:.2f}s (type={integration_type}, query2modelcard_retrieval_mode={mode_s})"
+    line = f"Integration (model search) OK in {elapsed_s:.2f}s (type={integration_type})"
     print(f"[integrate-model-search] job_id={job_id} {line}", flush=True)
     _append_pipeline_log(job_dir, line)
     return jsonify({"status": "success", "integration_elapsed_s": elapsed_s, **result})
@@ -1200,7 +1281,6 @@ def _upsert_integration_run_result(
     run_key: str,
     integration_type: Optional[str],
     search_type: Optional[str] = None,
-    query2modelcard_retrieval_mode: Optional[str] = None,
     table_result: Optional[Dict[str, Any]] = None,
     model_result: Optional[Dict[str, Any]] = None,
 ) -> str:
@@ -1219,8 +1299,6 @@ def _upsert_integration_run_result(
     run_payload["integration_type"] = integration_type
     if search_type is not None:
         run_payload["search_type"] = search_type
-    if query2modelcard_retrieval_mode is not None:
-        run_payload["query2modelcard_retrieval_mode"] = query2modelcard_retrieval_mode
     if table_result is not None:
         run_payload["table_result"] = table_result
     if model_result is not None:
@@ -1322,14 +1400,13 @@ def qa():
     search_results_data = sr if isinstance(sr, dict) else None
     model_ids_to_rank = None
     if isinstance(sr, dict) and not use_table_search:
-        modes = sr.get("query2modelcard_all_modes")
-        rmode = str(sr.get("query2modelcard_retrieval_mode") or "dense").strip().lower()
-        if rmode not in QUERY2MODELCARD_RETRIEVAL_MODES:
-            rmode = "dense"
-        if isinstance(modes, dict):
-            mids = modes.get(rmode)
-            if isinstance(mids, list) and mids:
-                model_ids_to_rank = list(mids)[:50]
+        mids = sr.get("query2modelcard_results")
+        if not isinstance(mids, list) or not mids:
+            modes = sr.get("query2modelcard_all_modes")
+            if isinstance(modes, dict):
+                mids = modes.get("dense")
+        if isinstance(mids, list) and mids:
+            model_ids_to_rank = list(mids)[:50]
 
     sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
     from evaluation.llm_qa import answer_question_with_llm

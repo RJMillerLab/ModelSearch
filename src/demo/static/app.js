@@ -362,7 +362,7 @@
                                 ? [search.timestamp_str || '', qShort].filter(Boolean).join(' ').trim()
                                 : [search.timestamp_str || '', search.model_id || ''].filter(Boolean).join(' ').trim();
                             const folder = (search.folder_name || search.id || '').replace(/'/g, "\\'").replace(/\\/g, '\\\\');
-                            const titleText = [search.query || search.model_id || '', 'top_k: ' + (search.top_k || '-'), 'q2m_retrieval: ' + (search.query2modelcard_retrieval_mode || '-')].join(' | ');
+                            const titleText = [search.query || search.model_id || '', 'top_k: ' + (search.top_k || '-')].join(' | ');
                             const titleSafe = escapeHtml(titleText.substring(0, 200));
                             const oneLineSafe = escapeHtml(oneLine);
                             html += `
@@ -442,7 +442,6 @@
             };
             if (modelRes) {
                 setSelect('integration_type', modelRes.integration_type);
-                setSelect('integration_query2modelcard_retrieval_mode', modelRes.query2modelcard_retrieval_mode);
                 setInput('integration_k', modelRes.k);
                 setInput('integration_max_models', modelRes.max_models);
             }
@@ -487,7 +486,7 @@
                 container.style.display = 'block';
                 if (hasModel) {
                     const m = data.integration_model_search;
-                    const key = getModelSearchKey(m.integration_type, m.query2modelcard_retrieval_mode);
+                    const key = getModelSearchKey(m.integration_type);
                     window.__modelSearchRuns = [{ key, ...m }];
                 }
                 if (hasTable) {
@@ -624,9 +623,6 @@
             const modelTopK = parseInt((document.getElementById('model_top_k') || {}).value, 10) || 5;
             // Table retrieval: always run search (no load-from-JSON option)
             const tab2tabMode = 'search';
-            // One-click: always run all; primary display uses dense
-            const query2modelcardRetrievalMode = 'dense';
-            
             // Validate input for current search flow
             if (!query) {
                 showError('Please enter a query');
@@ -649,7 +645,6 @@
                     tab2tab_mode: 'search',
                     table_search_k: tableSearchK,
                     model_top_k: modelTopK,
-                    query2modelcard_retrieval_mode: query2modelcardRetrievalMode,
                     query: query,
                 };
                 
@@ -1077,13 +1072,6 @@
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
                         <div style="margin-bottom: 16px; padding: 10px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #007bff;">
                             <h4 style="${intH4Flex} color: #004085;">${INT_TITLE_C2C_HTML}</h4>
-                            <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
-                                <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">retrieval mode:</label><select id="integration_query2modelcard_retrieval_mode" class="form-control" onchange="syncModelSearchDisplay()" style="width: 90px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
-                                    <option value="dense">Dense</option>
-                                    <option value="sparse">Sparse</option>
-                                    <option value="hybrid">Hybrid</option>
-                                </select></div>
-                            </div>
                             <div id="integrationModelSearchResults"></div>
                         </div>
                         <div style="padding: 10px; background: #d4edda; border-radius: 6px; border-left: 4px solid #28a745;">
@@ -1193,6 +1181,23 @@
             syncBothIntegrationDisplays();
         }
 
+        function normalizeModelSearchRunKey(key) {
+            return String(key || '').toLowerCase().replace(/_(dense|sparse|hybrid)$/, '');
+        }
+        function getModelSearchKey(integrationType) {
+            return String(integrationType || 'union').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+        }
+        function modelRunMatchesKey(run, wantKey) {
+            const raw = run.key != null && String(run.key) !== ''
+                ? String(run.key)
+                : getModelSearchKey(run.integration_type);
+            return normalizeModelSearchRunKey(raw) === normalizeModelSearchRunKey(wantKey);
+        }
+        function getTableSearchKey(integrationType, searchType, tablesSource) {
+            const src = (tablesSource || 'intermediate').toLowerCase().replace(/-/g, '_').replace(/[^a-z0-9_]/g, '_');
+            return [(integrationType || 'union'), (searchType || 'single_column'), src].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
+        }
+
         function refreshQAIntegratedPaths() {
             const target = document.getElementById('qaIntegratedPaths');
             if (!target) return;
@@ -1200,11 +1205,10 @@
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
-            const q2mRetrievalMode = (document.getElementById('integration_query2modelcard_retrieval_mode') || {}).value || 'dense';
             const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
-            const modelKey = getModelSearchKey(integrationType, q2mRetrievalMode);
+            const modelKey = getModelSearchKey(integrationType);
             const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
-            const modelRun = (window.__modelSearchRuns || []).find(r => (r.key || getModelSearchKey(r.integration_type, r.query2modelcard_retrieval_mode)) === modelKey);
+            const modelRun = (window.__modelSearchRuns || []).find(r => modelRunMatchesKey(r, modelKey));
             const tablePath = (tableRun && tableRun.saved_path) ? tableRun.saved_path : '';
             const modelPath = (modelRun && modelRun.saved_path) ? modelRun.saved_path : '';
             const tableHtml = tablePath ? integrationSavedPathLink(tablePath) : '<span style="color:#999;">N/A</span>';
@@ -1215,14 +1219,6 @@
                     <div>1 Query2Card Results CSV: ${modelHtml}</div>
                 </div>
             `;
-        }
-        
-        function getModelSearchKey(integrationType, q2mRetrievalMode) {
-            return [(integrationType || 'union'), (q2mRetrievalMode || 'dense')].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
-        }
-        function getTableSearchKey(integrationType, searchType, tablesSource) {
-            const src = (tablesSource || 'intermediate').toLowerCase().replace(/-/g, '_').replace(/[^a-z0-9_]/g, '_');
-            return [(integrationType || 'union'), (searchType || 'single_column'), src].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
         }
         
         function syncBothIntegrationDisplays() {
@@ -1236,10 +1232,9 @@
             if (!leftDiv || !container) return;
             container.style.display = 'block';
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
-            const q2mRetrievalMode = (document.getElementById('integration_query2modelcard_retrieval_mode') || {}).value || 'dense';
-            const key = getModelSearchKey(integrationType, q2mRetrievalMode);
+            const key = getModelSearchKey(integrationType);
             const runs = window.__modelSearchRuns || [];
-            const run = runs.find(r => (r.key || getModelSearchKey(r.integration_type, r.query2modelcard_retrieval_mode)) === key);
+            const run = runs.find(r => modelRunMatchesKey(r, key));
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
             const noResultMsg = placeholder;
             if (run && run.status === 'success' && run.integrated_table) {
@@ -1275,18 +1270,17 @@
                         const resp = await fetch('{{BACKEND_URL}}/api/model-search-preview', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ job_id: jobId, query2modelcard_retrieval_mode: q2mRetrievalMode })
+                            body: JSON.stringify({ job_id: jobId })
                         });
                         const preview = await resp.json();
                         if (preview && preview.status === 'success') {
                             const previewRun = {
                                 key,
                                 integration_type: integrationType,
-                                query2modelcard_retrieval_mode: q2mRetrievalMode,
                                 ...preview
                             };
                             let runsMutable = window.__modelSearchRuns || [];
-                            const idx = runsMutable.findIndex(r => (r.key || getModelSearchKey(r.integration_type, r.query2modelcard_retrieval_mode)) === key);
+                            const idx = runsMutable.findIndex(r => modelRunMatchesKey(r, key));
                             if (idx >= 0) runsMutable[idx] = { ...runsMutable[idx], ...previewRun };
                             else runsMutable.push(previewRun);
                             window.__modelSearchRuns = runsMutable;
@@ -1328,11 +1322,10 @@
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
-            const q2mRetrievalMode = (document.getElementById('integration_query2modelcard_retrieval_mode') || {}).value || 'dense';
             const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
-            const modelKey = getModelSearchKey(integrationType, q2mRetrievalMode);
+            const modelKey = getModelSearchKey(integrationType);
             const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
-            const modelRun = (window.__modelSearchRuns || []).find(r => (r.key || getModelSearchKey(r.integration_type, r.query2modelcard_retrieval_mode)) === modelKey);
+            const modelRun = (window.__modelSearchRuns || []).find(r => modelRunMatchesKey(r, modelKey));
             const tableT = tableRun && tableRun.integrated_table;
             const modelT = modelRun && modelRun.integrated_table;
             if (!tableT || !modelT || !tableT.columns || !modelT.columns) {
@@ -1528,8 +1521,13 @@
                                 tab2tabTraceRows: preview.tab2tab_trace_rows,
                                 afterModelCapTraceRows: preview.after_model_cap_trace_rows,
                             });
+                            const pm = preview.preview_meta || {};
+                            const traceSourceNote = pm.tab2tab_trace_rows_source
+                                ? `<div style="font-size:10px;color:#888;margin-bottom:6px;">Tab2Tab row list: <code style="font-size:10px;">${String(pm.tab2tab_trace_rows_source).replace(/</g, '')}</code></div>`
+                                : '';
                             rightDiv.innerHTML = `<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px;">
                                 <div style="font-size: 13px; color: #6c757d; margin-bottom: 8px;">Preloaded retrieval relationship info. Click <strong>Integrated</strong> to run table integration.</div>
+                                ${traceSourceNote}
                                 <details open style="margin: 0;">
                                     <summary style="cursor: pointer; list-style: none; outline: none;">
                                         <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
@@ -1791,7 +1789,6 @@
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
-            const modelSearchMode = (document.getElementById('integration_query2modelcard_retrieval_mode') || {}).value || 'dense';
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             
             const btn = document.getElementById('integrationRunBothBtn');
@@ -1811,7 +1808,7 @@
                 const modelReq = fetch('{{BACKEND_URL}}/api/integrate-model-search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels, query2modelcard_retrieval_mode: modelSearchMode })
+                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels })
                 }).then(r => r.json());
                 const tableReq = fetch('{{BACKEND_URL}}/api/integrate', {
                     method: 'POST',
@@ -1931,15 +1928,15 @@
                     </div>`;
                 }
                 initTablePanZoom(rightDiv);
-                const modelKey = getModelSearchKey(integrationType, modelSearchMode);
+                const modelKey = getModelSearchKey(integrationType);
                 const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
                 const hasModelRun = modelRes.status === 'success' || modelRes.status === 'no_result';
                 const hasTableRun = tableRes.status === 'success' || tableRes.status === 'no_result';
                 if (hasModelRun || hasTableRun) {
                     if (hasModelRun) {
                         let runs = window.__modelSearchRuns || [];
-                        const mPayload = { key: modelKey, integration_type: integrationType, query2modelcard_retrieval_mode: modelSearchMode, k, max_models: maxModels, ...modelRes };
-                        const idx = runs.findIndex(r => (r.key || getModelSearchKey(r.integration_type, r.query2modelcard_retrieval_mode)) === modelKey);
+                        const mPayload = { key: modelKey, integration_type: integrationType, k, max_models: maxModels, ...modelRes };
+                        const idx = runs.findIndex(r => modelRunMatchesKey(r, modelKey));
                         if (idx >= 0) runs[idx] = mPayload; else runs = [...runs, mPayload];
                         window.__modelSearchRuns = runs;
                     }
@@ -1969,22 +1966,19 @@
             const btn = document.getElementById('integrationRunAllTableBtn');
             if (!btn) return;
             const integrationTypes = ['alite', 'union', 'intersection', 'outer_join'];
-            const modelModes = ['dense', 'sparse', 'hybrid'];
             const tableSearchTypes = ['single_column','keyword','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'];
             btn.disabled = true;
             const originalText = btn.textContent;
             btn.textContent = '⏳ Running all...';
             try {
                 const tasks = [];
-                // All Model Search integrations: all integrationTypes × modelModes
+                // All Model Search integrations: one per integration type (neighbors = dense from search_results)
                 for (const it of integrationTypes) {
-                    for (const mode of modelModes) {
-                        tasks.push(fetch('{{BACKEND_URL}}/api/integrate-model-search', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ job_id: jobId, integration_type: it, k, max_models: maxModels, query2modelcard_retrieval_mode: mode })
-                        }).then(r => r.json()).catch(() => null));
-                    }
+                    tasks.push(fetch('{{BACKEND_URL}}/api/integrate-model-search', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ job_id: jobId, integration_type: it, k, max_models: maxModels })
+                    }).then(r => r.json()).catch(() => null));
                 }
                 // All Table Search integrations: all integrationTypes × tableSearchTypes, tablesSource fixed
                 for (const it of integrationTypes) {
@@ -2074,7 +2068,6 @@
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
-            const modelSearchMode = (document.getElementById('integration_query2modelcard_retrieval_mode') || {}).value || 'dense';
             const resultsDiv = document.getElementById('integrationModelSearchResults');
             if (!resultsDiv) return;
             resultsDiv.style.display = 'block';
@@ -2083,7 +2076,7 @@
                 const response = await fetch('{{BACKEND_URL}}/api/integrate-model-search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels, query2modelcard_retrieval_mode: modelSearchMode })
+                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels })
                 });
                 const data = await response.json();
                 if (data.status === 'success') {
