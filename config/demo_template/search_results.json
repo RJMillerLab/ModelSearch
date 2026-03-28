@@ -3,7 +3,6 @@
   "model_id": "senseable/33x-coder",
   "timestamp": "2025-01-01T00:00:00",
   "top_k": 50,
-  "query2modelcard_retrieval_mode": "dense",
   "query2modelcard_all_modes": {
     "dense": [],
     "sparse": [],

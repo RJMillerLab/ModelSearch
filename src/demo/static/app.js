@@ -865,7 +865,6 @@
                 { key: 'sparse', label: 'Sparse', desc: 'Sparse retrieval via Pyserini Lucene BM25' },
                 { key: 'hybrid', label: 'Hybrid', desc: 'Pyserini sparse + FAISS dense, then combine' }
             ];
-            const currentMode = results.query2modelcard_retrieval_mode || 'dense';
             
             let retrievalHtml = `
                 ${errorBlock}
@@ -881,17 +880,16 @@
                             const isError = modeResults.error !== undefined;
                             const resultList = isError ? [] : (Array.isArray(modeResults) ? modeResults : []);
                             const sectionId = `q2m-${modeKey}-${Date.now()}-${idx}`;
-                            const isCurrentMode = modeKey === currentMode;
                             
                             return `
-                                <div class="search-type-section" style="margin-bottom: 15px; ${isCurrentMode ? 'border: 2px solid #007bff;' : ''}">
-                                    <div class="search-type-header ${isCurrentMode ? 'expanded' : ''}" onclick="toggleSearchType('${sectionId}', this)" style="${isCurrentMode ? 'background: #e7f3ff;' : ''}">
+                                <div class="search-type-section" style="margin-bottom: 15px;">
+                                    <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${modeInfo.label}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">${isError ? 'Error' : resultList.length + ' models'}</span>
                                         </h4>
                                     </div>
-                                    <div class="collapsible-content ${isCurrentMode ? 'expanded' : ''}" id="${sectionId}">
+                                    <div class="collapsible-content" id="${sectionId}">
                                         ${isError ? `
                                             <div style="padding: 10px; color: #dc3545; background: #f8d7da; border-radius: 4px; margin: 10px 0;">
                                                 ❌ Error: ${modeResults.error || 'Unknown error'}

@@ -395,7 +395,19 @@ def run_search_pipeline(
         d["run_log_path"] = os.path.join(job_dir, "pipeline_run.log")
         logger.set_results(d)
 
-    _run_pipeline_body(logger,job_id,job_dir,start_time,query,top_k,model_id,table_search_k,use_by_type,model_top_k=model_top_k,table_resource_allowlist=table_resource_allowlist)
+    _run_pipeline_body(
+        logger,
+        job_id,
+        job_dir,
+        start_time,
+        query,
+        top_k,
+        model_id,
+        table_search_k,
+        use_by_type,
+        model_top_k=model_top_k,
+        table_resource_allowlist=table_resource_allowlist,
+    )
 
 
 def _run_pipeline_body(
@@ -544,9 +556,10 @@ def _run_pipeline_body(
         if isinstance(val, list) and len(val) > effective_model_top_k:
             q2m_neighbors_by_mode[m] = val[:effective_model_top_k]
 
-    primary = q2m_neighbors_by_mode.get('dense') or []
-    if not isinstance(primary, list):
-        primary = []
+    # Legacy / no-mode integration: dense neighbors (same ranking family as table-search seed).
+    q2m_dense_neighbors = q2m_neighbors_by_mode.get("dense")
+    if not isinstance(q2m_dense_neighbors, list):
+        q2m_dense_neighbors = []
 
     elapsed_total = time.time() - start_time
     results_data = {
@@ -560,9 +573,8 @@ def _run_pipeline_body(
         "right_max_models": right_max_models,
         "table_search_k": table_search_k_input,
         "table_resources": table_resources,
-        "query2modelcard_retrieval_mode": query2modelcard_retrieval_mode,
         "use_by_type": use_by_type,
-        "query2modelcard_results": primary,
+        "query2modelcard_results": list(q2m_dense_neighbors),
         "query2modelcard_all_modes": q2m_neighbors_by_mode,
         "card2tab2card_results": card2tab2card_all,
         "timestamp": datetime.fromtimestamp(start_time).isoformat(),
@@ -656,7 +668,6 @@ def search():
     top_k = int(data.get("top_k", 20))
     table_search_k = data.get("table_search_k")
     model_top_k = int(data.get("model_top_k", 5))
-    query2modelcard_retrieval_mode = data.get("query2modelcard_retrieval_mode", "dense")
     use_by_type = bool(data.get("use_by_type", False))
 
     query = (data.get("query") or "").strip()
@@ -668,7 +679,15 @@ def search():
 
     thread = threading.Thread(
         target=run_search_pipeline,
-        args=(job_id, query, top_k, None, table_search_k, query2modelcard_retrieval_mode, use_by_type, model_top_k),
+        kwargs={
+            "job_id": job_id,
+            "query": query,
+            "top_k": top_k,
+            "model_id": None,
+            "table_search_k": table_search_k,
+            "use_by_type": use_by_type,
+            "model_top_k": model_top_k,
+        },
     )
     thread.daemon = True
     thread.start()
@@ -890,6 +909,8 @@ def model_search_preview():
     if err is not None:
         return err
     q2m_mode = str(data.get("query2modelcard_retrieval_mode") or "dense").strip().lower()
+    if q2m_mode not in QUERY2MODELCARD_RETRIEVAL_MODES:
+        q2m_mode = "dense"
     tr_override = data.get("table_resources")
     tr_list = tr_override if isinstance(tr_override, list) else None
 
@@ -1302,8 +1323,10 @@ def qa():
     model_ids_to_rank = None
     if isinstance(sr, dict) and not use_table_search:
         modes = sr.get("query2modelcard_all_modes")
-        rmode = sr.get("query2modelcard_retrieval_mode")
-        if isinstance(modes, dict) and isinstance(rmode, str):
+        rmode = str(sr.get("query2modelcard_retrieval_mode") or "dense").strip().lower()
+        if rmode not in QUERY2MODELCARD_RETRIEVAL_MODES:
+            rmode = "dense"
+        if isinstance(modes, dict):
             mids = modes.get(rmode)
             if isinstance(mids, list) and mids:
                 model_ids_to_rank = list(mids)[:50]
