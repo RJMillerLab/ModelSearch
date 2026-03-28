@@ -110,19 +110,19 @@ n_sparse, s_sparse = sparse.search_by_model_id(seed, top_k=20)
 Alternative: `query2modelcard` CLI
 
 ```bash
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode dense --resources hugging --output_json data_251117/query2modelcard_dense_hugging.json > logs/query2modelcard_dense_hugging.log 2>&1
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode sparse --resources hugging --output_json data_251117/query2modelcard_sparse_hugging.json > logs/query2modelcard_sparse_hugging.log 2>&1
-python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode hybrid --resources hugging --output_json data_251117/query2modelcard_hybrid_hugging.json > logs/query2modelcard_hybrid_hugging.log 2>&1
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode dense --resources hugging --output_json tmp/query2modelcard_dense_hugging.json
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode sparse --resources hugging --output_json tmp/query2modelcard_sparse_hugging.json
+python -m src.search.query2modelcard --query "transformer model for code generation" --top_k 20 --retrieval_mode hybrid --resources hugging --output_json tmp/query2modelcard_hybrid_hugging.json
 ```
 
 ## 2.3 tab2tab (test all modes: keyword, single_column, multi_column, unionable) (aug mode: ori, tr, str)
 
 ```bash
 # unified input as table query
-python -m src.search.tab2tab --resources hugging --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_keyword.json --augmentation_types ori > logs/tab2tab_keyword.log 2>&1
-python -m src.search.tab2tab --resources hugging --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_single_column.json --augmentation_types ori > logs/tab2tab_single_column.log 2>&1
-python -m src.search.tab2tab --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_multi_column.json --augmentation_types ori > logs/tab2tab_multi_column.log 2>&1
-python -m src.search.tab2tab --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json results/tab2tab_unionable.json --augmentation_types ori > logs/tab2tab_unionable.log 2>&1
+python -m src.search.tab2tab --resources hugging --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json tmp/tab2tab_keyword.json --augmentation_types ori
+python -m src.search.tab2tab --resources hugging --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json tmp/tab2tab_single_column.json --augmentation_types ori
+python -m src.search.tab2tab --resources hugging --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json tmp/tab2tab_multi_column.json --augmentation_types ori
+python -m src.search.tab2tab --resources hugging --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 10 --output_json tmp/tab2tab_unionable.json --augmentation_types ori
 ```
 
 ## 2.3b Augmented tab2tab reranker based on scores from ori/tr/str -> ori/tr/str search (`tab2tab_aug`)
@@ -134,29 +134,29 @@ mode for search type: keyword, single_column, multi_column, unionable
 
 ```bash
 # Module: src.search.tab2tab_aug (run from repo root with PYTHONPATH or `python -m` from env that has the package)
-python -m src.search.tab2tab_aug --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_keyword.json > logs/tab2tab_aug_keyword.log 2>&1
-python -m src.search.tab2tab_aug --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_single_column.json > logs/tab2tab_aug_single_column.log 2>&1
-python -m src.search.tab2tab_aug --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_multi_column.json > logs/tab2tab_aug_multi_column.log 2>&1
-python -m src.search.tab2tab_aug --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_unionable.json > logs/tab2tab_aug_unionable.log 2>&1
+python -m src.search.tab2tab_aug --search_type keyword --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_keyword.json
+python -m src.search.tab2tab_aug --search_type single_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_single_column.json
+python -m src.search.tab2tab_aug --search_type multi_column --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_multi_column.json
+python -m src.search.tab2tab_aug --search_type unionable --query "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/00007f0e43_table1.csv" --k 3 --query_augmentation_types ori,tr,str --candidate_augmentation_types ori,tr,str --rerank_mode score_max --output_json tmp/tab2tab_aug_unionable.json
 ```
 
 ## 2.4 query2tab2card
 
 ```bash
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type keyword --table_top_k 3 --output_json tmp/card2tab2card_keyword_hugging.json > logs/card2tab2card_keyword_hugging.log 2>&1
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type single_column --table_top_k 3 --output_json tmp/card2tab2card_single_column_hugging.json > logs/card2tab2card_single_column_hugging.log 2>&1
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type multi_column --table_top_k 3 --output_json tmp/card2tab2card_multi_column_hugging.json > logs/card2tab2card_multi_column_hugging.log 2>&1
-python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type unionable --table_top_k 3 --output_json tmp/card2tab2card_unionable_hugging.json > logs/card2tab2card_unionable_hugging.log 2>&1
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type keyword --table_top_k 3 --output_json tmp/card2tab2card_keyword_hugging.json
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type single_column --table_top_k 3 --output_json tmp/card2tab2card_single_column_hugging.json
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type multi_column --table_top_k 3 --output_json tmp/card2tab2card_multi_column_hugging.json
+python -m src.search.card2tab2card --resources hugging --model_id google-bert/bert-base-uncased --search_type unionable --table_top_k 3 --output_json tmp/card2tab2card_unionable_hugging.json
 ```
 
 is wrapped in below script.
 
 ```bash
 # query2tab2card (new default): query -> seed card -> tab2tab -> related models
-python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type keyword --table_top_k 3 --output_json tmp/query2tab2card_keyword_hugging.json > logs/query2tab2card_keyword_hugging.log 2>&1
-python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type single_column --table_top_k 3 --output_json tmp/query2tab2card_single_column_hugging.json > logs/query2tab2card_single_column_hugging.log 2>&1
-python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type multi_column --table_top_k 3 --output_json tmp/query2tab2card_multi_column_hugging.json > logs/query2tab2card_multi_column_hugging.log 2>&1
-python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type unionable --table_top_k 3 --output_json tmp/query2tab2card_unionable_hugging.json > logs/query2tab2card_unionable_hugging.log 2>&1
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type keyword --table_top_k 3 --output_json tmp/query2tab2card_keyword_hugging.json
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type single_column --table_top_k 3 --output_json tmp/query2tab2card_single_column_hugging.json
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type multi_column --table_top_k 3 --output_json tmp/query2tab2card_multi_column_hugging.json
+python -m src.search.query2tab2card --resources hugging --query "bert base uncased" --search_type unionable --table_top_k 3 --output_json tmp/query2tab2card_unionable_hugging.json
 
 # Optional controls for query2tab2card:
 #   --model_top_k 5

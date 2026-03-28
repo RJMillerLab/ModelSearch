@@ -20,8 +20,7 @@ from src.utils import preview_from_local, preview_from_duckdb, _paths_for_resour
 from src.search.query2tab2card import Query2Tab2CardSearch
 from src.search.query2modelcard import Query2ModelCardSearch
 from src.search.ir_searcher import DenseSearcher, SparseSearcher
-
-
+import time
 import duckdb
 
 # --- Search runtime (Dense/Sparse + paths). Initialized once in init_search_runtime() from ``if __name__``.
@@ -29,6 +28,8 @@ _search_runtime: Optional[Dict[str, Any]] = None
 
 
 def init_search_runtime() -> None:
+    t1 = time.time()
+    print(f"Initializing search runtime at {t1}")
     """Load indexes once: full-corpus dense + table dense + full sparse; read-only DuckDB (hugging table lake)."""
     global _search_runtime
     if _search_runtime is not None:
@@ -46,6 +47,7 @@ def init_search_runtime() -> None:
         "dense_wtable": DenseSearcher(emb_npz_path=EMB_NPZ_HUGGING),
         "sparse_full": SparseSearcher(index_path=sparse_index_full),
     }
+    print(f"Search runtime initialized at {time.time() - t1}")
 
 
 def _atexit_close_search_duckdb() -> None:
@@ -542,7 +544,7 @@ def _run_pipeline_body(
         if isinstance(val, list) and len(val) > effective_model_top_k:
             q2m_neighbors_by_mode[m] = val[:effective_model_top_k]
 
-    primary = q2m_neighbors_by_mode.get(mode_primary) or []
+    primary = q2m_neighbors_by_mode.get('dense') or []
     if not isinstance(primary, list):
         primary = []
 
