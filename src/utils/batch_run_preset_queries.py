@@ -89,7 +89,7 @@ def run_one_query(
     run_integration: bool = False,
     integration_type: str = "alite",
     integration_k: int = 10,
-    integration_max_models: int = 10,
+    integration_max_models: Optional[int] = None,
     integration_search_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run search (and optional integration) for a single query."""
@@ -144,13 +144,20 @@ def run_one_query(
     print("    ↳ Running integrations (model + table)...")
     model_int_url = f"{backend_url}/api/integrate-model-search"
     table_int_url = f"{backend_url}/api/integrate"
+    effective_integration_max_models = integration_max_models
+    if effective_integration_max_models is None:
+        effective_integration_max_models = int(results.get("model_top_k", 5))
+        print(f"      · integration max_models follows job model_top_k={effective_integration_max_models}")
+    else:
+        print(f"      · integration max_models override={effective_integration_max_models}")
 
     # Model Search integration
     model_payload = {
         "job_id": job_id,
         "integration_type": integration_type,
         "k": integration_k,
-        "max_models": integration_max_models,
+        "max_models": effective_integration_max_models,
+        "query2modelcard_retrieval_mode": "dense",
     }
     model_int_res: Optional[Dict[str, Any]] = None
     try:
@@ -175,7 +182,7 @@ def run_one_query(
             "search_type": st,
             "integration_type": integration_type,
             "k": integration_k,
-            "max_models": integration_max_models,
+            "max_models": effective_integration_max_models,
             # For batch use we stick to 'intermediate' to avoid very heavy all_from_modelcards scans.
             "tables_source": "intermediate",
         }
@@ -256,8 +263,8 @@ def main() -> int:
     parser.add_argument(
         "--integration_max_models",
         type=int,
-        default=10,
-        help="Max models for integration (default 10).",
+        default=None,
+        help="Optional override for integration max_models. Default: follow each job's model_top_k.",
     )
     parser.add_argument(
         "--integration_search_types",
@@ -336,4 +343,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

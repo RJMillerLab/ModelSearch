@@ -980,11 +980,6 @@
                             <option value="intersection">Intersection</option>
                             <option value="outer_join">Outer Join</option>
                         </select></div>
-                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Query2Card mode:</label><select id="integration_q2m_mode" class="form-control" onchange="syncModelSearchDisplay()" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
-                            <option value="dense">Dense</option>
-                            <option value="sparse">Sparse</option>
-                            <option value="hybrid">Hybrid</option>
-                        </select></div>
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
                         <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
@@ -995,6 +990,16 @@
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
                         <div style="margin-bottom: 16px; padding: 10px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #007bff;">
                             <h4 style="${intH4Flex} color: #004085;">${INT_TITLE_C2C_HTML}</h4>
+                            <div style="display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px;">
+                                <div style="flex: 0 0 auto;">
+                                    <label style="${topKLabelStyle}">Query2Card mode:</label>
+                                    <select id="integration_q2m_mode" class="form-control" onchange="syncModelSearchDisplay()" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                                        <option value="dense">Dense</option>
+                                        <option value="sparse">Sparse</option>
+                                        <option value="hybrid">Hybrid</option>
+                                    </select>
+                                </div>
+                            </div>
                             <div id="integrationModelSearchResults"></div>
                         </div>
                         <div style="padding: 10px; background: #d4edda; border-radius: 6px; border-left: 4px solid #28a745;">

@@ -225,8 +225,8 @@ python src/utils/batch_run_preset_queries.py \
 generate markdown for query table and retrieved tables and integrated tables
 ```bash
 python src/utils/check_retrieval_integration_consistency.py \
-  --jobs-root data_251117/jobs_251117 \
-  --search-types single_column unionable keyword \
+  --jobs-root jobs_251117 \
+  --integration-type alite \
   --per-job-md \
   --preview-max-rows 0 --preview-max-cols 0
 ```

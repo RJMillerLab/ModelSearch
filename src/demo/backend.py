@@ -296,14 +296,23 @@ def table_search_preview():
 @app.route("/api/integrate-model-search", methods=["POST"])
 def integrate_model_search():
     data = request.get_json() or {}
+    required = ["job_id", "integration_type", "query2modelcard_retrieval_mode", "k", "max_models"]
+    missing = [key for key in required if key not in data]
+    if missing:
+        return api_error(f"Missing required fields for /api/integrate-model-search: {', '.join(missing)}", 400)
+
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
-    integration_type = str(data.get("integration_type", "alite")).strip()
-    retrieval_mode = str(data.get("query2modelcard_retrieval_mode", "dense")).strip()
-    k = int(data.get("k", 10))
-    max_models = int(data.get("max_models", 10))
+    integration_type = str(data["integration_type"]).strip()
+    retrieval_mode = str(data["query2modelcard_retrieval_mode"]).strip()
+    k = int(data["k"])
+    max_models = int(data["max_models"])
     job_meta = JobMeta.load(paths.job_meta_path)
     q2m_file = Query2ModelCardFile.load(paths.query2modelcard_path)
+    append_log(
+        job_id,
+        f"integrate-model-search called integration_type={integration_type} retrieval_mode={retrieval_mode} k={k} max_models={max_models}",
+    )
     payload = q2m_file.build_preview(query=job_meta.query, table_resources=job_meta.table_resources, mode=retrieval_mode, max_models=max_models)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
@@ -316,13 +325,22 @@ def integrate_model_search():
 @app.route("/api/integrate", methods=["POST"])
 def integrate():
     data = request.get_json() or {}
+    required = ["job_id", "search_type", "integration_type", "tables_source", "k", "max_models"]
+    missing = [key for key in required if key not in data]
+    if missing:
+        return api_error(f"Missing required fields for /api/integrate: {', '.join(missing)}", 400)
+
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
-    search_type = str(data.get("search_type", "unionable")).strip()
-    integration_type = str(data.get("integration_type", "alite")).strip()
-    tables_source = str(data.get("tables_source", "intermediate")).strip()
-    k = int(data.get("k", 10))
-    max_models = int(data.get("max_models", 10))
+    search_type = str(data["search_type"]).strip()
+    integration_type = str(data["integration_type"]).strip()
+    tables_source = str(data["tables_source"]).strip()
+    k = int(data["k"])
+    max_models = int(data["max_models"])
+    append_log(
+        job_id,
+        f"integrate called search_type={search_type} integration_type={integration_type} tables_source={tables_source} k={k} max_models={max_models}",
+    )
     payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, max_models=max_models, tables_source=tables_source)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
