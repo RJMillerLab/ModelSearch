@@ -86,7 +86,7 @@ def _env_bool(name: str, default: bool) -> bool:
 USE_TAB2TAB_AUG = _env_bool("BACKEND_USE_TAB2TAB_AUG", False)
 
 USE_BY_TYPE = False
-JOBS_DIR = os.path.join(OUTPUT_DIR, f"jobs{DATA_TAG}")
+JOBS_DIR = str(REPO_ROOT / f"jobs{DATA_TAG}")
 os.makedirs(JOBS_DIR, exist_ok=True)
 
 # --- Other repositories ---

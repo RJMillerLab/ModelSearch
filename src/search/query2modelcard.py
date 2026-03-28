@@ -7,12 +7,8 @@ import os
 import json
 import sys
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional
 import argparse
-import numpy as np
-import faiss
-from sentence_transformers import SentenceTransformer
-import threading
 
 # Ensure repo root is on sys.path for `from src...` imports even when
 # this module is launched from a different working directory.

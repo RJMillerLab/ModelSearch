@@ -289,7 +289,8 @@ def table_search_preview():
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
     search_type = str(data.get("search_type", "single_column")).strip()
-    return jsonify({"status": "success", **Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type)})
+    tables_source = str(data.get("tables_source", "intermediate")).strip()
+    return jsonify({"status": "success", **Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, tables_source=tables_source)})
 
 
 @app.route("/api/integrate-model-search", methods=["POST"])
@@ -298,17 +299,18 @@ def integrate_model_search():
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
     integration_type = str(data.get("integration_type", "alite")).strip()
+    retrieval_mode = str(data.get("query2modelcard_retrieval_mode", "dense")).strip()
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
     job_meta = JobMeta.load(paths.job_meta_path)
     q2m_file = Query2ModelCardFile.load(paths.query2modelcard_path)
-    payload = q2m_file.build_preview(query=job_meta.query, table_resources=job_meta.table_resources, mode="dense", max_models=max_models)
+    payload = q2m_file.build_preview(query=job_meta.query, table_resources=job_meta.table_resources, mode=retrieval_mode, max_models=max_models)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
     csv_name = f"integrated_model_search_{integration_type}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")
-    return jsonify({"status": "success", "integration_type": integration_type, "k": k, "max_models": max_models, "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"data_251117/jobs_251117/{job_id}/{csv_name}", **payload})
+    return jsonify({"status": "success", "integration_type": integration_type, "query2modelcard_retrieval_mode": retrieval_mode, "k": k, "max_models": max_models, "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload})
 
 
 @app.route("/api/integrate", methods=["POST"])
@@ -318,15 +320,16 @@ def integrate():
     paths = JobPaths(JOBS_DIR, job_id)
     search_type = str(data.get("search_type", "unionable")).strip()
     integration_type = str(data.get("integration_type", "alite")).strip()
+    tables_source = str(data.get("tables_source", "intermediate")).strip()
     k = int(data.get("k", 10))
     max_models = int(data.get("max_models", 10))
-    payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, max_models=max_models)
+    payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, max_models=max_models, tables_source=tables_source)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
     csv_name = f"integrated_table_search_{integration_type}_{search_type}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")
-    return jsonify({"status": "success", "integration_type": integration_type, "search_type": search_type, "k": k, "max_models": max_models, "tables_source": payload["tables_source"], "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"data_251117/jobs_251117/{job_id}/{csv_name}", **payload})
+    return jsonify({"status": "success", "integration_type": integration_type, "search_type": search_type, "k": k, "max_models": max_models, "tables_source": payload["tables_source"], "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload})
 
 
 if __name__ == "__main__":

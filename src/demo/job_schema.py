@@ -164,7 +164,7 @@ class Query2ModelCardFile:
         return {
             "query2modelcard_retrieval_mode": mode,
             "models_with_tables": models_with_tables,
-            "model_ids": models_with_tables,
+            "model_ids": model_ids,
             "model_to_table_paths": model_to_table_paths,
             "table_paths": table_paths,
             "job_context": {
@@ -172,6 +172,7 @@ class Query2ModelCardFile:
                 "table_search_seed_model_id": self.seed_model_id,
             },
             "stats": {
+                "total_model_ids": len(model_ids),
                 "models_with_tables": len(models_with_tables),
                 "total_unique_tables": len(table_paths),
             },
@@ -213,25 +214,34 @@ class Query2Tab2CardFullMap:
                 rows.append({"table": os.path.basename(rt_s), "table_path": rt_s, "models": [str(x).strip() for x in self.tab2card[rt_s]]})
         return rows
 
-    def build_preview(self, *, search_type: str = "", max_models: Optional[int] = None) -> Dict[str, Any]:
+    def build_preview(self, *, search_type: str = "", max_models: Optional[int] = None, tables_source: str = "intermediate") -> Dict[str, Any]:
         model_ids = list(self.reranked)
         if max_models is not None:
             model_ids = model_ids[:max(0, int(max_models))]
-        model_to_table_paths = {mid: [str(p) for p in self.model_to_all_table_paths[mid] if str(p).strip()] for mid in model_ids}
-        model_to_table_paths = {mid: paths for mid, paths in model_to_table_paths.items() if paths}
-        models_with_tables = list(model_to_table_paths.keys())
-        table_paths = list(dict.fromkeys(x for v in model_to_table_paths.values() for x in v))
         tab2tab_trace_rows = self.tab2tab_rows()
         after_model_cap_trace_rows = []
-        allowed_models = set(models_with_tables)
+        allowed_models = set(model_ids)
         for row in tab2tab_trace_rows:
             models = [mid for mid in row["models"] if mid in allowed_models]
             if models:
                 after_model_cap_trace_rows.append({"table": row["table"], "table_path": row["table_path"], "models": models})
+        if tables_source == "all_from_modelcards":
+            model_to_table_paths = {mid: [str(p) for p in self.model_to_all_table_paths[mid] if str(p).strip()] for mid in model_ids}
+            model_to_table_paths = {mid: paths for mid, paths in model_to_table_paths.items() if paths}
+            models_with_tables = list(model_to_table_paths.keys())
+            table_paths = list(dict.fromkeys(x for v in model_to_table_paths.values() for x in v))
+        else:
+            model_to_table_paths = {}
+            for row in after_model_cap_trace_rows:
+                for mid in row["models"]:
+                    model_to_table_paths.setdefault(mid, []).append(row["table_path"])
+            model_to_table_paths = {mid: list(dict.fromkeys(paths)) for mid, paths in model_to_table_paths.items() if paths}
+            models_with_tables = list(model_to_table_paths.keys())
+            table_paths = list(dict.fromkeys(row["table_path"] for row in after_model_cap_trace_rows))
         return {
             "preview_format_version": 1,
             "search_type": search_type,
-            "tables_source": "all_from_modelcards",
+            "tables_source": tables_source,
             "query_tables": list(self.query_tables),
             "model_ids": list(model_ids),
             "models_with_tables": models_with_tables,
@@ -253,7 +263,7 @@ class Query2Tab2CardFullMap:
                 "source": "query2tab2card_full_map",
                 "search_type": search_type,
                 "tab2tab_trace_rows_source": "tab2tab_map+tab2card_map",
-                "tables_source": "all_from_modelcards",
+                "tables_source": tables_source,
                 "query": self.query,
                 "seed_model_ids": list(self.seed_models),
             },
@@ -264,6 +274,6 @@ class Query2Tab2CardFullMap:
             "stats": {
                 "models_with_tables": len(models_with_tables),
                 "total_unique_tables": len(table_paths),
-                "tables_source": "all_from_modelcards",
+                "tables_source": tables_source,
             },
         }

@@ -160,20 +160,15 @@
                     ? tab2tabTraceRows
                     : (afterModelCapTraceRows.length ? afterModelCapTraceRows : (Array.isArray(retrievedRows) ? retrievedRows : []));
                 if (searchedRows.length) {
-                    const n = searchedRows.length;
-                    html += `<div style="margin-top:8px;line-height:1.35;"><strong>1) Searched tables (Tab2Tab top-k per query table)</strong> <span style="color:#666;">n=${n}</span></div>`;
-                    html += `<details open style="margin-top:4px;"><summary style="cursor:pointer;color:#155724;">Full list (${n} tables)</summary><div style="margin-top:6px;">${renderTableToModelRows(searchedRows)}</div></details>`;
-                } else {
-                    html += `<div style="margin-top:8px;padding:6px;background:#fff3cd;border-radius:4px;font-size:11px;color:#856404;"><strong>Legacy job:</strong> no searched-table trace in search_results.json.</div>`;
+                    html += renderTableToModelRows(searchedRows);
                 }
                 const post = pipelineTrace && Array.isArray(pipelineTrace.model_ids_after_dense_rerank)
                     ? pipelineTrace.model_ids_after_dense_rerank
                     : rankedModelIds;
                 if (post.length) {
-                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>2) Reranked top-k models</strong> <span style="color:#666;">n=${post.length}</span></div><div style="margin-top:4px;line-height:1.35;">${modelIdLinks(post)}</div>`;
+                    html += `<div style="margin-top:10px;line-height:1.35;"><strong>Reranked models -> related tables</strong></div>`;
                 }
-                html += `<div style="margin-top:10px;line-height:1.35;"><strong>3) All tables from modelcards (per reranked model)</strong></div>`;
-                html += rankedModelIds.map((mid, idx) => {
+                html += post.map((mid, idx) => {
                     const s = String(mid).trim();
                     if (!s) return '';
                     const paths = modelToTablePaths[s] || [];
@@ -185,11 +180,7 @@
             }
 
             const bridgeIntermediate = afterModelCapTraceRows.length ? afterModelCapTraceRows : (Array.isArray(retrievedRows) ? retrievedRows : []);
-            let extra = '';
-            if (pipelineTrace && tab2tabTraceRows.length && tablesSource === 'intermediate') {
-                extra = `<div style="margin-top:8px;line-height:1.35;"><strong>Tab2Tab full (pre cap)</strong> <span style="color:#666;">for context</span></div><details style="margin-top:4px;"><summary style="cursor:pointer;">Show (${tab2tabTraceRows.length} tables)</summary><div style="margin-top:6px;">${renderTableToModelRows(tab2tabTraceRows)}</div></details>`;
-            }
-            return qLine + renderTableToModelRows(bridgeIntermediate) + extra;
+            return qLine + renderTableToModelRows(bridgeIntermediate);
         }
         
         async function loadPresetQueries() {
@@ -453,6 +444,7 @@
             };
             if (modelRes) {
                 setSelect('integration_type', modelRes.integration_type);
+                setSelect('integration_q2m_mode', modelRes.query2modelcard_retrieval_mode);
                 setInput('integration_k', modelRes.k);
                 setInput('integration_max_models', modelRes.max_models);
             }
@@ -497,7 +489,7 @@
                 container.style.display = 'block';
                 if (hasModel) {
                     const m = data.integration_model_search;
-                    const key = getModelSearchKey(m.integration_type);
+                    const key = getModelSearchKey(m.integration_type, m.query2modelcard_retrieval_mode);
                     window.__modelSearchRuns = [{ key, ...m }];
                 }
                 if (hasTable) {
@@ -988,6 +980,11 @@
                             <option value="intersection">Intersection</option>
                             <option value="outer_join">Outer Join</option>
                         </select></div>
+                        <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">Query2Card mode:</label><select id="integration_q2m_mode" class="form-control" onchange="syncModelSearchDisplay()" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
+                            <option value="dense">Dense</option>
+                            <option value="sparse">Sparse</option>
+                            <option value="hybrid">Hybrid</option>
+                        </select></div>
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
                         <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
@@ -1107,15 +1104,17 @@
         }
 
         function normalizeModelSearchRunKey(key) {
-            return String(key || '').toLowerCase().replace(/_(dense|sparse|hybrid)$/, '');
+            return String(key || '').toLowerCase();
         }
-        function getModelSearchKey(integrationType) {
-            return String(integrationType || 'union').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+        function getModelSearchKey(integrationType, retrievalMode) {
+            const it = String(integrationType || 'union').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+            const rm = String(retrievalMode || 'dense').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+            return `${it}_${rm}`;
         }
         function modelRunMatchesKey(run, wantKey) {
             const raw = run.key != null && String(run.key) !== ''
                 ? String(run.key)
-                : getModelSearchKey(run.integration_type);
+                : getModelSearchKey(run.integration_type, run.query2modelcard_retrieval_mode);
             return normalizeModelSearchRunKey(raw) === normalizeModelSearchRunKey(wantKey);
         }
         function getTableSearchKey(integrationType, searchType, tablesSource) {
@@ -1131,7 +1130,8 @@
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
             const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
-            const modelKey = getModelSearchKey(integrationType);
+            const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
+            const modelKey = getModelSearchKey(integrationType, retrievalMode);
             const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
             const modelRun = (window.__modelSearchRuns || []).find(r => modelRunMatchesKey(r, modelKey));
             const tablePath = (tableRun && tableRun.saved_path) ? tableRun.saved_path : '';
@@ -1157,7 +1157,8 @@
             if (!leftDiv || !container) return;
             container.style.display = 'block';
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
-            const key = getModelSearchKey(integrationType);
+            const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
+            const key = getModelSearchKey(integrationType, retrievalMode);
             const runs = window.__modelSearchRuns || [];
             const run = runs.find(r => modelRunMatchesKey(r, key));
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
@@ -1195,13 +1196,14 @@
                         const resp = await fetch('{{BACKEND_URL}}/api/model-search-preview', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ job_id: jobId })
+                            body: JSON.stringify({ job_id: jobId, query2modelcard_retrieval_mode: retrievalMode })
                         });
                         const preview = await resp.json();
                         if (preview && preview.status === 'success') {
                             const previewRun = {
                                 key,
                                 integration_type: integrationType,
+                                query2modelcard_retrieval_mode: retrievalMode,
                                 ...preview
                             };
                             let runsMutable = window.__modelSearchRuns || [];
@@ -1248,7 +1250,8 @@
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
             const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
-            const modelKey = getModelSearchKey(integrationType);
+            const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
+            const modelKey = getModelSearchKey(integrationType, retrievalMode);
             const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
             const modelRun = (window.__modelSearchRuns || []).find(r => modelRunMatchesKey(r, modelKey));
             const tableT = tableRun && tableRun.integrated_table;
@@ -1853,7 +1856,8 @@
                     </div>`;
                 }
                 initTablePanZoom(rightDiv);
-                const modelKey = getModelSearchKey(integrationType);
+                const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
+                const modelKey = getModelSearchKey(integrationType, retrievalMode);
                 const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
                 const hasModelRun = modelRes.status === 'success' || modelRes.status === 'no_result';
                 const hasTableRun = tableRes.status === 'success' || tableRes.status === 'no_result';
@@ -1991,6 +1995,7 @@
         
         async function runModelSearchIntegration(jobId) {
             const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
             const resultsDiv = document.getElementById('integrationModelSearchResults');
@@ -2001,7 +2006,7 @@
                 const response = await fetch('{{BACKEND_URL}}/api/integrate-model-search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels })
+                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, query2modelcard_retrieval_mode: retrievalMode, k, max_models: maxModels })
                 });
                 const data = await response.json();
                 if (data.status === 'success') {
