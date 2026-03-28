@@ -18,19 +18,21 @@ echo ""
 
 # Paths: same defaults as src.config (MODELTABLES_DATA, MODELLAKE_DB, RELATIONSHIP_PARQUET, TABLE_BASE_DIRS)
 PATHS=(
-  "data/card2card_embeddings.npz"
-  "data/card2card.faiss"
-  "data/modellake.db"
+  "data_251117/card2card_embeddings.npz"
+  "data_251117/card2card_embeddings_hugging.npz"
+  "data_251117/card2card_model_ids.txt"
+  "data_251117/model_to_tables_explode_v2_251117.parquet"
+  "data_251117/card2card.faiss"
+  "data_251117/valid_model_ids_with_tables_hugging.txt"
+  "data_251117/card2card_sparse_index"
   "../ModelTables/data/processed/modelcard_step3_dedup_v2_251117.parquet"
-  "data/valid_model_ids_with_tables.txt"
-  "data/card2card_sparse_index"
   "../ModelTables/data/processed/deduped_hugging_csvs_v2_251117"
   "../ModelTables/data/processed/deduped_github_csvs_v2_251117"
   "../ModelTables/data/processed/tables_output_v2_251117"
-  "data/table_classifications.json"
+  "data_251117/table_classifications.json"
   "config/demo_template/search_results.json"
   "fig"
-  "data/jobs"
+  "data_251117/jobs_251117"
 )
 
 printf "%-55s %-8s %s\n" "PATH" "EXISTS" "SIZE"
