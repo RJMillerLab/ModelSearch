@@ -431,17 +431,17 @@ RAW_HTML_TEMPLATE = """
             <div style="margin-bottom: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 4px; border: 1px solid #ddd;">
                 <label style="display: flex; align-items: center; cursor: pointer; gap: 6px; font-size: 13px;">
                     <input type="checkbox" id="load_previous_search" style="margin-right: 4px; width: 16px; height: 16px;">
-                    <span style="font-weight: 500;">Load Previous Search</span>
+                    <span style="font-weight: 500;">Load Previous Job</span>
                 </label>
             </div>
             
             <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
-                <p style="margin-bottom: 4px; font-size: 12px; color: #666;">Pick a saved search</p>
+                <p style="margin-bottom: 4px; font-size: 12px; color: #666;">Pick a saved job. New jobs are restored from <code>job_meta.json</code> plus raw retrieval JSON files.</p>
                 <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px;">
                     <select id="saved_search_select" class="form-control" style="flex: 1 1 360px; min-width: min(100%, 360px); max-width: 100%; height: 26px; font-size: 12px; padding: 2px 6px;">
-                        <option value="">— select folder —</option>
+                        <option value="">— select job —</option>
                     </select>
-                    <button id="loadMimicBtn" type="button" onclick="loadMimicSearch()" style="padding: 2px 10px; font-size: 12px; height: 26px;">Load Saved Results</button>
+                    <button id="loadMimicBtn" type="button" onclick="loadMimicSearch()" style="padding: 2px 10px; font-size: 12px; height: 26px;">Load Job</button>
                 </div>
                 <div id="saved_searches_list" style="display: none;"></div>
             </div>
@@ -500,7 +500,7 @@ RAW_HTML_TEMPLATE = """
         
         <div id="resultsSection" class="results-section">
             <div id="resultsMetaStrip" style="display: none; margin-bottom: 8px; padding: 6px 10px; line-height: 1.35; font-size: 12px; color: #495057; background: #fafafa; border: 1px solid #e9ecef; border-radius: 6px;"></div>
-            <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; font-weight: bold;">Retrieval results</h3>
+            <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; font-weight: bold;">Retrieval Results</h3>
             <div id="resultsContent"></div>
         </div>
         </div>

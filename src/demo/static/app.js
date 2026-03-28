@@ -884,7 +884,7 @@
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">${isError ? 'Error' : resultList.length + ' models'}</span>
                                         </h4>
                                     </div>
-                                    <div class="collapsible-content" id="${sectionId}">
+                                    <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
                                         ${isError ? `
                                             <div style="padding: 10px; color: #dc3545; background: #f8d7da; border-radius: 4px; margin: 10px 0;">
                                                 ❌ Error: ${modeResults.error || 'Unknown error'}
@@ -893,7 +893,7 @@
                                             <ul class="result-list" style="list-style: none; padding: 0;">
                                                 ${resultList.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
                                                 ${resultList.length > 10 ? `
-                                                    <li class="collapsible-content" id="${sectionId}-more">
+                                                    <li class="collapsible-content expanded" id="${sectionId}-more" style="display:block;">
                                                         ${resultList.slice(10).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
                                                     </li>
                                                     <li>
@@ -980,7 +980,7 @@
                                             </span>
                                         </h4>
                                     </div>
-                                    <div class="collapsible-content" id="${sectionId}">
+                                    <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
                                             ${sortedModels.length > 0 ? sortedModels.map((m, idx) => {
                                                 if (!SHOW_CARD2TAB2CARD_MODEL_TABLES) {
