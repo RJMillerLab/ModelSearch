@@ -10,17 +10,10 @@ Integrates multiple tables using various methods:
 
 import os
 import sys
-import time
-import re
 import io
 from contextlib import redirect_stdout, redirect_stderr
 import pandas as pd
-import json
-from typing import List, Dict, Optional, Any, Set, Tuple
-from collections import Counter
-
-from src.utils import resolve_table_path, load_table, _get_models_to_tables_batch_sql
-from src.integration.pipeline_preview import Query2Tab2CardFullMap
+from typing import List, Optional
 
 class TableIntegrater:
     def __init__(self):

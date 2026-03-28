@@ -443,7 +443,6 @@ RAW_HTML_TEMPLATE = """
                     </select>
                     <button id="loadMimicBtn" type="button" onclick="loadMimicSearch()" style="padding: 2px 10px; font-size: 12px; height: 26px;">Load Job</button>
                 </div>
-                <div id="saved_searches_list" style="display: none;"></div>
             </div>
             
             <div id="new-search-inputs">

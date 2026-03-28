@@ -327,19 +327,15 @@
         }
         
         async function loadSavedSearches() {
-            const listContainer = document.getElementById('saved_searches_list');
-            listContainer.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Loading...</div>';
-            
             try {
                 const response = await fetch('{{BACKEND_URL}}/api/saved-searches');
                 const data = await response.json();
                 
                 if (data.status === 'success') {
-                    let html = '';
                     const searches = data.searches || [];
                     const selectEl = document.getElementById('saved_search_select');
                     if (selectEl) {
-                        selectEl.innerHTML = '<option value="">— select folder —</option>';
+                        selectEl.innerHTML = '<option value="">— select job —</option>';
                         searches.forEach(search => {
                             const opt = document.createElement('option');
                             opt.value = search.folder_name || search.id || '';
@@ -352,36 +348,8 @@
                             selectEl.appendChild(opt);
                         });
                     }
-                    if (searches.length === 0) {
-                        html = '<div style="text-align: center; color: #666; padding: 20px;">No saved searches found. Run a new search to create one.</div>';
-                    } else {
-                        const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-                        searches.forEach(search => {
-                            const qShort = search.query ? (search.query.length > 96 ? search.query.substring(0, 96) + '...' : search.query) : '';
-                            const oneLine = search.query
-                                ? [search.timestamp_str || '', qShort].filter(Boolean).join(' ').trim()
-                                : [search.timestamp_str || '', search.model_id || ''].filter(Boolean).join(' ').trim();
-                            const folder = (search.folder_name || search.id || '').replace(/'/g, "\\'").replace(/\\/g, '\\\\');
-                            const titleText = [search.query || search.model_id || '', 'top_k: ' + (search.top_k || '-')].join(' | ');
-                            const titleSafe = escapeHtml(titleText.substring(0, 200));
-                            const oneLineSafe = escapeHtml(oneLine);
-                            html += `
-                                <div class="saved-search-item" onclick="loadSavedSearchFolder('${folder}')" 
-                                     style="padding: 6px 8px; margin-bottom: 4px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
-                                     title="${titleSafe}"
-                                     onmouseover="this.style.background='#e7f3ff'" 
-                                     onmouseout="this.style.background='white'">${oneLineSafe}</div>
-                            `;
-                        });
-                    }
-                    
-                    listContainer.innerHTML = html;
-                } else {
-                    listContainer.innerHTML = '<div style="text-align: center; color: #dc3545; padding: 20px;">Error loading saved searches</div>';
                 }
-            } catch (error) {
-                listContainer.innerHTML = `<div style="text-align: center; color: #dc3545; padding: 20px;">Error: ${formatFetchError(error)}</div>`;
-            }
+            } catch (error) {}
         }
         
         function clearResultsMetaStrip() {
@@ -396,39 +364,82 @@
             if (!m) return;
             m.innerHTML = '<span style="font-size:12px;color:#888;">Table Integration will appear here after a search completes.</span>';
         }
-        
-        async function loadSavedSearchFolder(folderName) {
-            // Reset UI
-            document.getElementById('progressSection').classList.add('active');
-            document.getElementById('resultsSection').classList.remove('active');
-            clearResultsMetaStrip();
-            clearIntegrationPanel();
-            document.getElementById('errorMsg').style.display = 'none';
-            document.getElementById('logContainer').innerHTML = '';
-            
-            try {
-                const response = await fetch('{{BACKEND_URL}}/api/search', {
+
+        async function fetchJson(url, options) {
+            const response = await fetch(url, options);
+            return await response.json();
+        }
+
+        function rowsToTableToModels(rows) {
+            const tableToModels = {};
+            (Array.isArray(rows) ? rows : []).forEach(row => {
+                const tablePath = String((row && (row.table_path || row.table)) || '').trim();
+                if (!tablePath) return;
+                tableToModels[tablePath] = (Array.isArray(row.models) ? row.models : []).map(String);
+            });
+            return tableToModels;
+        }
+
+        async function loadSearchDisplayData(jobId) {
+            const baseData = await fetchJson(`{{BACKEND_URL}}/api/results/${jobId}`);
+            if (baseData.status !== 'success') return baseData;
+            const meta = baseData.results || {};
+            const retrievalModes = ['dense', 'sparse', 'hybrid'];
+            const tableSearchTypes = ['unionable', 'single_column', 'keyword'];
+            const modePreviews = await Promise.all(retrievalModes.map(async mode => {
+                const preview = await fetchJson('{{BACKEND_URL}}/api/model-search-preview', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        search_mode: 'mimic',
-                        folder_name: folderName
-                    })
+                    body: JSON.stringify({ job_id: jobId, query2modelcard_retrieval_mode: mode, max_models: meta.model_top_k || 5 })
                 });
-                
-                const data = await response.json();
-                
-                if (data.status === 'completed' || data.status === 'success') {
-                    currentJobId = data.job_id;
-                    displayResults({ ...(data.results || data), job_id: data.job_id });
-                    await restoreIntegrationEvaluationQA(data);
-                    document.getElementById('progressSection').classList.remove('active');
-                } else {
-                    showError(data.message || 'Failed to load saved search');
-                }
-            } catch (error) {
-                showError('Error: ' + formatFetchError(error));
-            }
+                return [mode, preview];
+            }));
+            const tablePreviews = await Promise.all(tableSearchTypes.map(async searchType => {
+                const preview = await fetchJson('{{BACKEND_URL}}/api/table-search-preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ job_id: jobId, search_type: searchType })
+                });
+                return [searchType, preview];
+            }));
+            const query2modelcardAllModes = Object.fromEntries(
+                modePreviews.map(([mode, preview]) => [mode, preview.status === 'success' ? (preview.model_ids || []) : []])
+            );
+            const card2tab2cardResults = Object.fromEntries(
+                tablePreviews
+                    .filter(([, preview]) => preview.status === 'success')
+                    .map(([searchType, preview]) => [
+                        searchType,
+                        {
+                            model_ids: preview.model_ids || preview.models_with_tables || [],
+                            models_with_tables: preview.models_with_tables || [],
+                            model_to_table_paths: preview.model_to_table_paths || {},
+                            query_tables: preview.query_tables || [],
+                            searched_tables: (preview.retrieved_table_model_rows || []).map(row => row.table_path || row.table).filter(Boolean),
+                            intermediate: {
+                                table_to_models: rowsToTableToModels(preview.retrieved_table_model_rows || []),
+                                retrieved_table_filenames: (preview.retrieved_table_model_rows || []).map(row => row.table_path || row.table).filter(Boolean),
+                            },
+                            pipeline_trace: preview.pipeline_trace || {},
+                            tab2tab_trace_rows: preview.tab2tab_trace_rows || [],
+                            after_model_cap_trace_rows: preview.after_model_cap_trace_rows || [],
+                            retrieved_table_model_rows: preview.retrieved_table_model_rows || [],
+                            preview_meta: preview.preview_meta || {},
+                            stats: preview.stats || {},
+                        }
+                    ])
+            );
+            const densePreview = Object.fromEntries(modePreviews).dense || {};
+            const firstTablePreview = Object.values(card2tab2cardResults)[0] || {};
+            return {
+                ...meta,
+                job_id: jobId,
+                model_id: densePreview.job_context ? densePreview.job_context.table_search_seed_model_id : null,
+                table_search_seed_model_id: firstTablePreview.query_seed_model_id || (firstTablePreview.job_context ? firstTablePreview.job_context.table_search_seed_model_id : null),
+                query2modelcard_results: query2modelcardAllModes.dense || [],
+                query2modelcard_all_modes: query2modelcardAllModes,
+                card2tab2card_results: card2tab2cardResults,
+            };
         }
         
         function setIntegrationDropdownsFromSaved(modelRes, tableRes) {
@@ -515,48 +526,6 @@
             }
         }
         
-        async function loadDemoExample() {
-            // Load the demo example from template folder
-            const loadBtn = event.target;
-            loadBtn.disabled = true;
-            loadBtn.textContent = '⏳ Loading Template...';
-            
-            // Reset UI
-            document.getElementById('progressSection').classList.add('active');
-            document.getElementById('resultsSection').classList.remove('active');
-            clearResultsMetaStrip();
-            clearIntegrationPanel();
-            document.getElementById('errorMsg').style.display = 'none';
-            document.getElementById('logContainer').innerHTML = '';
-            
-            try {
-                const response = await fetch('{{BACKEND_URL}}/api/search', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        search_mode: 'mimic',
-                        folder_name: 'template'
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.status === 'completed' || data.status === 'success') {
-                    currentJobId = data.job_id;
-                    displayResults({ ...(data.results || data), job_id: data.job_id });
-                    restoreIntegrationEvaluationQA(data);
-                    document.getElementById('progressSection').classList.remove('active');
-                } else {
-                    showError(data.message || 'Failed to load template');
-                }
-            } catch (error) {
-                showError('Error: ' + error.message);
-            } finally {
-                loadBtn.disabled = false;
-                loadBtn.textContent = '🎨 Load Demo Example (Template)';
-            }
-        }
-        
         async function loadMimicSearch() {
             const select = document.getElementById('saved_search_select');
             const folderName = select.value;
@@ -579,24 +548,14 @@
             document.getElementById('logContainer').innerHTML = '';
             
             try {
-                const response = await fetch('{{BACKEND_URL}}/api/search', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        search_mode: 'mimic',
-                        folder_name: folderName
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.status === 'completed' || data.status === 'success') {
-                    currentJobId = data.job_id;
-                    displayResults({ ...(data.results || data), job_id: data.job_id });
-                    await restoreIntegrationEvaluationQA(data);
+                currentJobId = folderName;
+                const results = await loadSearchDisplayData(folderName);
+                if (results.status === 'success' || !results.status) {
+                    displayResults(results);
+                    await restoreIntegrationEvaluationQA({ job_id: folderName });
                     document.getElementById('progressSection').classList.remove('active');
                 } else {
-                    showError(data.message || 'Failed to load saved search');
+                    showError(results.message || 'Failed to load saved job');
                 }
             } catch (error) {
                 showError('Error: ' + error.message);
@@ -640,9 +599,7 @@
             try {
                 // Start search
                 const requestBody = {
-                    search_mode: 'new',
                     top_k: topK,
-                    tab2tab_mode: 'search',
                     table_search_k: tableSearchK,
                     model_top_k: modelTopK,
                     query: query,
@@ -733,7 +690,8 @@
                     
                     if (data.status === 'success') {
                         clearInterval(interval);
-                        displayResults({ ...(data.results || {}), job_id: data.job_id });
+                        const results = await loadSearchDisplayData(jobId);
+                        displayResults(results);
                         await restoreIntegrationEvaluationQA(data);
                         document.getElementById('searchBtn').disabled = false;
                     } else if (data.status === 'error') {
@@ -1012,38 +970,6 @@
                 </div>
             `;
             
-            // Comparison HTML: will be merged into Evaluation card
-            const comparisonHtml = results.comparison ? `
-                <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #856404;">Comparison</h4>
-                <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
-                    Overlap analysis between Query2Card and Query2Tab2Card search results
-                </p>
-                <div style="overflow-x: auto; margin-bottom: 20px;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-                        <thead>
-                            <tr style="background: #007bff; color: white;">
-                                <th style="padding: 8px; text-align: left; border: 1px solid #0056b3;">Search Type</th>
-                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Query2Card Count</th>
-                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Query2Tab2Card Count</th>
-                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Overlap Count</th>
-                                <th style="padding: 8px; text-align: center; border: 1px solid #0056b3;">Overlap Ratio</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${Object.entries(results.comparison).map(([type, comp], idx) => `
-                                <tr style="${idx % 2 === 0 ? 'background: #f8f9fa;' : 'background: white;'}">
-                                    <td style="padding: 6px; border: 1px solid #dee2e6; font-weight: 500;">${type}</td>
-                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center;">${comp.query2modelcard_count || 0}</td>
-                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center;">${comp.card2tab2card_count || 0}</td>
-                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center; font-weight: bold; color: #28a745;">${comp.overlap_count || 0}</td>
-                                    <td style="padding: 6px; border: 1px solid #dee2e6; text-align: center; font-weight: bold;">${((comp.overlap_ratio || 0) * 100).toFixed(1)}%</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            ` : '';
-            
             // Table Integration: 1 Query2Card vs 2 Query2Tab2Card — separate params and dropdown switching
             const integrationCardStyle = 'padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 8px; border: 1px solid #dee2e6; font-size: 13px; color: #212529; min-width: 0;';
             const integrationTitleStyle = 'margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;';
@@ -1113,7 +1039,6 @@
                     <div id="integrationShortAnalysisContent"></div>
                 </div>
                 <div class="evaluation-section" style="margin-top: 16px; padding: 12px; background: #fff3cd; border-radius: 6px; border: 2px solid #ffc107;">
-                    ${comparisonHtml}
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                         <div>
                             <h3 style="margin: 0 0 4px 0; color: #856404; font-size: 15px;">📊 Evaluation on Integrated Tables</h3>
@@ -2375,176 +2300,6 @@
                     // Expand: show content, triangle points down (▼)
                     element.classList.add('expanded');
                     headerElement.classList.add('expanded');
-                }
-            }
-        }
-        
-        async function copyTablePath(escapedTablePath, buttonElement) {
-            // Decode HTML entities to get the actual path
-            const decodedPath = escapedTablePath
-                .replace(/&gt;/g, '>')
-                .replace(/&lt;/g, '<')
-                .replace(/&quot;/g, '"')
-                .replace(/&#39;/g, "'")
-                .replace(/&amp;/g, '&');
-            
-            try {
-                // Use Clipboard API if available
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(decodedPath);
-                    const originalHTML = buttonElement.innerHTML;
-                    buttonElement.innerHTML = '✓';
-                    buttonElement.style.background = '#28a745';
-                    setTimeout(() => {
-                        buttonElement.innerHTML = originalHTML;
-                        buttonElement.style.background = '#6c757d';
-                    }, 1500);
-                    console.log('✅ Copied to clipboard:', decodedPath);
-                } else {
-                    // Fallback for older browsers
-                    const textArea = document.createElement('textarea');
-                    textArea.value = decodedPath;
-                    textArea.style.position = 'fixed';
-                    textArea.style.opacity = '0';
-                    document.body.appendChild(textArea);
-                    textArea.select();
-                    try {
-                        document.execCommand('copy');
-                        const originalHTML = buttonElement.innerHTML;
-                        buttonElement.innerHTML = '✓';
-                        buttonElement.style.background = '#28a745';
-                        setTimeout(() => {
-                            buttonElement.innerHTML = originalHTML;
-                            buttonElement.style.background = '#6c757d';
-                        }, 1500);
-                        console.log('✅ Copied to clipboard (fallback):', decodedPath);
-                    } catch (err) {
-                        console.error('❌ Failed to copy:', err);
-                        alert('Failed to copy. Path: ' + decodedPath);
-                    }
-                    document.body.removeChild(textArea);
-                }
-            } catch (error) {
-                console.error('❌ Error copying to clipboard:', error);
-                alert('Failed to copy. Path: ' + decodedPath);
-            }
-        }
-        
-        async function toggleTablePreview(tableExpandId, toggleElement) {
-            const element = document.getElementById(tableExpandId);
-            if (!element) {
-                console.error('❌ Element not found:', tableExpandId);
-                return;
-            }
-            
-            // Get table path from data attribute
-            const tablePath = toggleElement.getAttribute('data-table-path');
-            if (!tablePath) {
-                console.error('❌ No table path found in data-table-path attribute');
-                console.error('   Toggle element:', toggleElement);
-                console.error('   Available attributes:', Array.from(toggleElement.attributes).map(a => `${a.name}="${a.value}"`));
-                return;
-            }
-            
-            // Decode HTML entities if any (from &quot; etc.)
-            // Decode &amp; last since other entities contain &
-            const decodedPath = tablePath
-                .replace(/&gt;/g, '>')
-                .replace(/&lt;/g, '<')
-                .replace(/&quot;/g, '"')
-                .replace(/&#39;/g, "'")
-                .replace(/&amp;/g, '&');  // Must be last
-            
-            console.log('🔄 Toggle table preview:', tableExpandId);
-            console.log('   Raw path from attribute:', tablePath);
-            console.log('   Decoded path:', decodedPath);
-            console.log('   Current display:', element.style.display);
-            
-            // Check current state - simpler logic
-            const isCurrentlyVisible = element.style.display === 'block' || (element.style.display === '' && element.offsetHeight > 0);
-            const contentDiv = element.querySelector('div');
-            const hasLoadedContent = contentDiv && 
-                                   contentDiv.innerHTML && 
-                                   !contentDiv.innerHTML.includes('Loading preview...') &&
-                                   !contentDiv.innerHTML.includes('⏳') &&
-                                   (contentDiv.innerHTML.includes('<table') || contentDiv.innerHTML.includes('Preview:'));
-            
-            console.log('   Is visible:', isCurrentlyVisible, 'Has content:', hasLoadedContent);
-            
-            if (isCurrentlyVisible && hasLoadedContent) {
-                // Collapse if already loaded and visible
-                console.log('   ➖ Collapsing...');
-                element.style.display = 'none';
-                toggleElement.textContent = '▶';
-                toggleElement.classList.remove('expanded');
-                toggleElement.style.transform = 'none';  // Reset any CSS rotation
-            } else {
-                // Expand and load
-                console.log('   ➕ Expanding and loading...');
-                element.style.display = 'block';
-                toggleElement.textContent = '▼';
-                toggleElement.classList.add('expanded');
-                toggleElement.style.transform = 'none';  // Reset any CSS rotation (we use text, not rotation)
-                
-                // Get or create content div
-                let div = element.querySelector('div');
-                if (!div) {
-                    div = document.createElement('div');
-                    div.style.cssText = 'padding: 8px; background: white; border-radius: 4px; border: 1px solid #dee2e6;';
-                    element.appendChild(div);
-                }
-                
-                // Check if already loaded (has HTML table content, not just loading message)
-                const currentHTML = div.innerHTML || '';
-                const hasRealContent = currentHTML && 
-                                     !currentHTML.includes('Loading preview...') && 
-                                     !currentHTML.includes('⏳') &&
-                                     (currentHTML.includes('<table') || currentHTML.includes('Preview:'));
-                
-                if (!hasRealContent) {
-                    // Show loading state
-                    div.innerHTML = '<div style="font-size: 11px; color: #999;">⏳ Loading preview...</div>';
-                    
-                    // Load preview
-                    try {
-                        // Use decoded path for the API call
-                        const pathToSend = decodedPath || tablePath;
-                        console.log('📊 Loading table preview for:', pathToSend);
-                        const url = `{{BACKEND_URL}}/api/table-preview?path=${encodeURIComponent(pathToSend)}`;
-                        console.log('📡 Request URL:', url);
-                        
-                        const response = await fetch(url);
-                        
-                        if (!response.ok) {
-                            const errorText = await response.text();
-                            console.error('❌ HTTP Error:', response.status, errorText);
-                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                        }
-                        
-                        const data = await response.json();
-                        console.log('✅ Table preview response:', data);
-                        
-                        if (data.status === 'success') {
-                            // Use HTML directly from backend
-                            div.innerHTML = `
-                                <div style="font-size: 10px; color: #999; margin-bottom: 5px;">
-                                    Preview excerpt: up to ${data.rows} rows × ${data.columns} columns loaded (subset shown below)
-                                </div>
-                                <div style="max-height: 200px; overflow: auto;">
-                                    ${data.html || ''}
-                                </div>
-                            `;
-                            console.log('✅ Table preview loaded successfully');
-                        } else {
-                            console.error('❌ API Error:', data.message);
-                            div.innerHTML = `<div style="color: #dc3545; font-size: 11px;">❌ Error: ${data.message || 'Failed to load preview'}</div>`;
-                        }
-                    } catch (error) {
-                        console.error('❌ Error loading table preview:', error);
-                        div.innerHTML = `<div style="color: #dc3545; font-size: 11px;">❌ Error: ${error.message}</div>`;
-                    }
-                } else {
-                    console.log('✅ Table preview already loaded, skipping fetch');
                 }
             }
         }
