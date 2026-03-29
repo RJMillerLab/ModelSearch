@@ -78,10 +78,10 @@ class Card2Tab2CardSearch:
         use_tab2tab_aug: bool = False,
     ) -> Dict[str, object]:
         self.card2tab(modelid_list, table_resources)
-        # should extend, not list, and dedup
-        query_tables = list(set(sum(self.card2tab_map.values(), [])))
+        # Preserve retrieval order while deduplicating.
+        query_tables = list(dict.fromkeys(sum(self.card2tab_map.values(), [])))
         self.tab2tab(query_tables, con_data, search_type, table_top_k, table_resources, use_tab2tab_aug)
-        retrieved_tables = list(set(sum(self.tab2tab_map.values(), [])))
+        retrieved_tables = list(dict.fromkeys(sum(self.tab2tab_map.values(), [])))
         self.tab2card(retrieved_tables, modelid_list)
     
     def get_full_map(self) -> Dict[str, object]:

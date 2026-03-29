@@ -201,7 +201,7 @@ class Query2Tab2CardFullMap:
         query = next(iter(q2c.keys()))
         seed_models = [str(x).strip() for x in q2c[query]]
         query_tables = list(dict.fromkeys([str(t) for t in card2tab[seed_models[0]]]))
-        candidate_pool = list({x for v in tab2card.values() for x in v})
+        candidate_pool = list(dict.fromkeys(x for v in tab2card.values() for x in v))
         retrieved_unique = list(dict.fromkeys(sum(tab2tab.values(), [])))
         model_to_all_table_paths = {mid: load_modelid_to_csvlist(mid, resources=["hugging"]) for mid in reranked}
         return q2c, card2tab, tab2tab, tab2card, reranked, query, seed_models, query_tables, candidate_pool, retrieved_unique, model_to_all_table_paths

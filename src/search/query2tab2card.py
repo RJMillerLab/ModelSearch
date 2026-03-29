@@ -41,7 +41,8 @@ class Query2Tab2CardSearch(Card2Tab2CardSearch):
     ) -> None:
         self.query2card(dense_wtable, query, q2m_top_k)
         self.card2tab2card_pipeline(self.query2card_map[query], con_data, table_resources, search_type, table_top_k, use_tab2tab_aug)
-        candidate_pool = list(set(sum(self.tab2card_map.values(), [])))
+        # Preserve tab2card discovery order so rerank/top-k is stable across runs.
+        candidate_pool = list(dict.fromkeys(sum(self.tab2card_map.values(), [])))
         if apply_query_rerank and candidate_pool:
             self.query2model_reranker(dense, query, candidate_pool, model_top_k)
         else:
