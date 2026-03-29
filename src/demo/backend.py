@@ -235,13 +235,20 @@ def _build_model_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, 
     retrieval_mode = stem[len(integration_type) + 1:] if stem.startswith(f"{integration_type}_") else "dense"
     if retrieval_mode not in QUERY2MODELCARD_RETRIEVAL_MODES:
         retrieval_mode = "dense"
-    return {
+    payload = {
         "status": "success",
         "integration_type": integration_type,
         "query2modelcard_retrieval_mode": retrieval_mode,
         "integrated_table": _csv_table_payload(csv_path),
         "saved_path": f"jobs_251117/{job_id}/{basename}",
     }
+    json_path = os.path.join(JOBS_DIR, job_id, f"integration_model_search_{integration_type}_{retrieval_mode}.json")
+    saved_json = _load_json_if_exists(json_path) or {}
+    if saved_json:
+        payload.update(saved_json)
+        payload["integrated_table"] = payload.get("integrated_table") or _csv_table_payload(csv_path)
+        payload["saved_path"] = payload.get("saved_path") or f"jobs_251117/{job_id}/{basename}"
+    return payload
 
 
 def _build_table_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, Any]]:
@@ -263,7 +270,7 @@ def _build_table_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, 
     search_type = remainder
     if search_type not in CARD2TAB2CARD_TYPES:
         return None
-    return {
+    payload = {
         "status": "success",
         "integration_type": integration_type,
         "search_type": search_type,
@@ -271,6 +278,13 @@ def _build_table_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, 
         "integrated_table": _csv_table_payload(csv_path),
         "saved_path": f"jobs_251117/{job_id}/{basename}",
     }
+    json_path = os.path.join(JOBS_DIR, job_id, f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json")
+    saved_json = _load_json_if_exists(json_path) or {}
+    if saved_json:
+        payload.update(saved_json)
+        payload["integrated_table"] = payload.get("integrated_table") or _csv_table_payload(csv_path)
+        payload["saved_path"] = payload.get("saved_path") or f"jobs_251117/{job_id}/{basename}"
+    return payload
 
 
 def _enrich_model_run_from_job(job_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -311,7 +325,11 @@ def _enrich_table_run_from_job(job_id: str, run: Dict[str, Any]) -> Dict[str, An
         stats = dict(preview.get("stats") or {})
         integrated_stats = ((run.get("integrated_table") or {}).get("stats") or {})
         stats.update(integrated_stats)
-        stats["input_tables"] = int(len(preview.get("table_paths") or []))
+        integration_input_paths = run.get("integration_input_table_paths") or []
+        if integration_input_paths:
+            stats["input_tables"] = int(len(integration_input_paths))
+        else:
+            stats["input_tables"] = int(len(preview.get("query_tables") or [])) + int(len(preview.get("table_paths") or []))
         out["stats"] = stats
         return out
     except Exception:

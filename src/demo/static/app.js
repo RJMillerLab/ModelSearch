@@ -47,6 +47,22 @@
             if (!j) return '#';
             return '{{BACKEND_URL}}/api/integration-review-page/' + encodeURIComponent(j);
         }
+
+        function describeTableSearchCount(run, stats) {
+            const queryTableCount = Array.isArray(run && run.query_tables) ? run.query_tables.length : 0;
+            const baseTablesCount = (stats && stats.total_unique_tables != null)
+                ? stats.total_unique_tables
+                : ((run && Array.isArray(run.table_paths)) ? run.table_paths.length : 0);
+            const integrationInputCount = Array.isArray(run && run.integration_input_table_paths) && run.integration_input_table_paths.length
+                ? run.integration_input_table_paths.length
+                : (baseTablesCount + queryTableCount);
+            const tablesSource = String((run && run.tables_source) || (stats && stats.tables_source) || 'intermediate');
+            const baseLabel = tablesSource === 'all_from_modelcards' ? 'related tables' : 'retrieved tables';
+            if (queryTableCount > 0) {
+                return `${integrationInputCount} input tables (${queryTableCount} query table + ${baseTablesCount} ${baseLabel})`;
+            }
+            return `${baseTablesCount} ${baseLabel}`;
+        }
         
         /** Open full HTML table view; label defaults to file basename. */
         function integrationTablePathLink(fullPath, displayLabel) {
@@ -1353,12 +1369,11 @@
                     });
                     const stats = run.stats || {};
                     const modelsCount = stats.models_with_tables != null ? stats.models_with_tables : modelIds.length;
-                    const tablesCount = stats.total_unique_tables != null ? stats.total_unique_tables : tablePathsList.length;
                     extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
                         <details style="margin: 0;">
                             <summary style="cursor: pointer; list-style: none; outline: none;">
                                 <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
-                                <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
+                                <span style="color:#155724;">(${modelsCount} models, ${describeTableSearchCount(run, stats)})</span>
                             </summary>
                             <div style="margin-top: 6px; font-size: 11px;">
                                 ${traceHtml}
@@ -1704,12 +1719,11 @@
                             afterModelCapTraceRows: tableRes.after_model_cap_trace_rows,
                         });
                         const modelsCount = (tableRes.stats && tableRes.stats.models_with_tables != null) ? tableRes.stats.models_with_tables : tableModelIds.length;
-                        const tablesCount = tplist.length;
                         tableExtra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">
                             <details style="margin: 0;">
                                 <summary style="cursor: pointer; list-style: none; outline: none;">
                                     <span style="font-weight: 600;">${INT_MODEL_IDS_C2T2C}</span>
-                                    <span style="color:#155724;">(${modelsCount} models, ${tablesCount} tables)</span>
+                                    <span style="color:#155724;">(${modelsCount} models, ${describeTableSearchCount(tableRes, tableRes.stats || {})})</span>
                                 </summary>
                                 <div style="margin-top: 6px; font-size: 11px;">
                                     ${traceHtml}

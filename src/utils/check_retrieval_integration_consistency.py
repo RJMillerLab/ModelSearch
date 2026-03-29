@@ -756,7 +756,7 @@ def build_job_markdown(
                 integrated_table,
                 max_rows=preview_max_rows,
                 max_cols=preview_max_cols,
-                source_label="Input table",
+                source_label="Related table",
             )
         )
 
@@ -785,15 +785,22 @@ def build_job_markdown(
         integration_input_labels: List[str] = []
         if integration_input_paths:
             normalized_query_paths = {str(p).strip() for p in (preview.get("query_tables", []) or []) if str(p).strip()}
+            retrieved_idx = 0
             for path in integration_input_paths:
                 path_s = str(path).strip()
                 if not path_s:
                     continue
                 integration_input_tables.append(_read_csv_table(path_s))
-                integration_input_labels.append("Query table" if path_s in normalized_query_paths else f"Retrieved table {len([x for x in integration_input_labels if x.startswith('Retrieved table')]) + 1}")
+                if path_s in normalized_query_paths:
+                    integration_input_labels.append("Query table")
+                else:
+                    retrieved_idx += 1
+                    label_prefix = "Related table" if integration_payload.get("tables_source") == "all_from_modelcards" else "Retrieved table"
+                    integration_input_labels.append(f"{label_prefix} {retrieved_idx}")
         else:
             integration_input_tables = list(query_tables) + list(retrieved_tables)
-            integration_input_labels = (["Query table"] if query_tables else []) + [f"Retrieved table {idx}" for idx in range(1, len(retrieved_tables) + 1)]
+            label_prefix = "Related table" if integration_payload.get("tables_source") == "all_from_modelcards" else "Retrieved table"
+            integration_input_labels = (["Query table"] if query_tables else []) + [f"{label_prefix} {idx}" for idx in range(1, len(retrieved_tables) + 1)]
         integrated_table = _load_integrated_table_candidates(
             job_dir,
             [
