@@ -48,6 +48,7 @@ from src.config import MODEL_TO_TABLES_EXPLODE_PARQUET, QUERY2MODELCARD_RETRIEVA
 
 DEFAULT_SEARCH_TYPES = ["single_column", "unionable", "keyword"]
 DEFAULT_INTEGRATION_TYPE = "alite"
+DEFAULT_JOB_MARKDOWN_FILENAME = "integration_review.md"
 
 
 @dataclass
@@ -77,6 +78,12 @@ def _load_json(path: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"Expected JSON object in {path}")
     return data
+
+
+def _load_json_if_exists(path: str) -> Dict[str, Any]:
+    if not os.path.isfile(path):
+        return {}
+    return _load_json(path)
 
 
 def _unique_keep_order(items: Iterable[str]) -> List[str]:
@@ -171,6 +178,42 @@ def _table_to_markdown(table: TableData, *, max_rows: Optional[int], max_cols: O
     return "\n".join(lines)
 
 
+def _table_to_html(table: TableData, *, max_rows: Optional[int], max_cols: Optional[int], max_cell: int = 80) -> str:
+    if not table.columns:
+        return "<em>(table missing or empty)</em>"
+
+    col_end = max_cols if isinstance(max_cols, int) and max_cols > 0 else len(table.columns)
+    row_end = max_rows if isinstance(max_rows, int) and max_rows > 0 else len(table.rows)
+    columns = table.columns[:col_end]
+    header_html = "".join(
+        f"<th style=\"border:1px solid #d0d7de;padding:6px 8px;background:#f6f8fa;text-align:left;white-space:nowrap;\">{_md_escape(c)}</th>"
+        for c in columns
+    )
+    body_rows: List[str] = []
+    for row in table.rows[:row_end]:
+        vals: List[str] = []
+        for cell in row[:col_end]:
+            text = _md_escape(cell)
+            if len(text) > max_cell:
+                text = text[: max_cell - 3] + "..."
+            vals.append(text)
+        if len(vals) < len(columns):
+            vals.extend("" for _ in range(len(columns) - len(vals)))
+        cells_html = "".join(
+            f"<td style=\"border:1px solid #d0d7de;padding:6px 8px;vertical-align:top;white-space:nowrap;\">{v}</td>"
+            for v in vals
+        )
+        body_rows.append(f"<tr>{cells_html}</tr>")
+    return (
+        "<div style=\"overflow:auto;max-width:100%;\">"
+        "<table style=\"border-collapse:collapse;font-size:12px;background:#fff;\">"
+        f"<thead><tr>{header_html}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+
 def _model_link_md(model_id: str) -> str:
     mid = str(model_id).strip()
     if not mid:
@@ -206,6 +249,11 @@ def _slug_anchor(value: str) -> str:
     s = s.replace("_", "-").replace(" ", "-")
     s = re.sub(r"-+", "-", s).strip("-")
     return s
+
+
+def _duckdb_sql_string_literal(value: Any) -> str:
+    s = str(value)
+    return "'" + s.replace("'", "''") + "'"
 
 
 def _compare_columns(left: TableData, right: TableData) -> Dict[str, Any]:
@@ -283,8 +331,17 @@ def _iter_job_dirs(jobs_root: str) -> List[str]:
     return [
         os.path.join(jobs_root, name)
         for name in sorted(os.listdir(jobs_root))
-        if os.path.isdir(os.path.join(jobs_root, name)) and name != "job_md"
+        if os.path.isdir(os.path.join(jobs_root, name))
+        and name not in {"job_md", "batch_runs"}
+        and os.path.isfile(os.path.join(jobs_root, name, "job_meta.json"))
     ]
+
+
+def _resolve_existing_file(candidates: Sequence[str]) -> str:
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ""
 
 
 def _discover_search_types(job_dir: str) -> List[str]:
@@ -328,12 +385,12 @@ def _lookup_model_to_tables_duckdb(model_ids: Sequence[str], *, resources: Optio
 
     conn = duckdb.connect(":memory:")
     try:
-        values_sql = ", ".join("(" + json.dumps(mid) + ")" for mid in mids)
+        values_sql = ", ".join("(" + _duckdb_sql_string_literal(mid) + ")" for mid in mids)
         where_parts = [f"e.modelId = m.modelId"]
         if resources:
             allowed = [str(x).strip() for x in resources if str(x).strip()]
             if allowed:
-                res_sql = ", ".join(json.dumps(x) for x in allowed)
+                res_sql = ", ".join(_duckdb_sql_string_literal(x) for x in allowed)
                 where_parts.append(f"e.resource IN ({res_sql})")
         query = f"""
             WITH mids(modelId) AS (
@@ -516,6 +573,28 @@ def _load_integrated_table(job_dir: str, filename: str) -> TableData:
     return _read_csv_table(path)
 
 
+def _load_integrated_table_candidates(job_dir: str, filenames: Sequence[str]) -> TableData:
+    path = _resolve_existing_file(os.path.join(job_dir, name) for name in filenames)
+    if not path:
+        fallback = filenames[0] if filenames else "(missing)"
+        return TableData(path=os.path.join(job_dir, fallback), source_path="", display_name=fallback, columns=[], rows=[])
+    return _read_csv_table(path)
+
+
+def _load_model_integration_payload(job_dir: str, integration_type: str, retrieval_mode: str) -> Dict[str, Any]:
+    filename = f"integration_model_search_{integration_type}_{retrieval_mode}.json"
+    return _load_json_if_exists(os.path.join(job_dir, filename))
+
+
+def _load_table_integration_payload(job_dir: str, integration_type: str, search_type: str, tables_source: str = "intermediate") -> Dict[str, Any]:
+    candidates = [
+        f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json",
+        f"integration_table_search_{integration_type}_{search_type}.json",
+    ]
+    path = _resolve_existing_file(os.path.join(job_dir, name) for name in candidates)
+    return _load_json_if_exists(path) if path else {}
+
+
 def _render_table_section(title: str, table: TableData, *, max_rows: Optional[int], max_cols: Optional[int]) -> List[str]:
     lines = [f"### {title}", ""]
     lines.append(f"- Source: {_file_link_md(table.source_path or table.path or '(missing)', label=table.display_name or 'table')}")
@@ -543,12 +622,66 @@ def _render_retrieved_tables_section(title: str, tables: List[TableData], *, max
     return lines
 
 
+def _render_horizontal_review_section(
+    title: str,
+    source_tables: List[TableData],
+    integrated_table: TableData,
+    *,
+    max_rows: Optional[int],
+    max_cols: Optional[int],
+    source_label: str,
+) -> List[str]:
+    lines = [f"### {title}", ""]
+    cells: List[str] = []
+    for idx, table in enumerate(source_tables, start=1):
+        label = f"{source_label} {idx}"
+        source_html = _file_link_md(table.source_path or table.path or "(missing)", label=table.display_name or "table")
+        shape = f"{table.row_count} x {table.col_count}"
+        content = [
+            f"<div style=\"font-weight:600;margin-bottom:4px;\">{label}</div>",
+            f"<div style=\"font-size:12px;color:#57606a;margin-bottom:4px;\">Source: {source_html}</div>",
+            f"<div style=\"font-size:12px;color:#57606a;margin-bottom:8px;\">Shape: <code>{shape}</code></div>",
+            _table_to_html(table, max_rows=max_rows, max_cols=max_cols),
+        ]
+        cells.append(
+            "<td style=\"vertical-align:top;padding:10px;border:1px solid #d0d7de;\">"
+            + "".join(content)
+            + "</td>"
+        )
+    if not cells:
+        cells.append("<td style=\"vertical-align:top;padding:10px;border:1px solid #d0d7de;\"><em>(no input tables)</em></td>")
+
+    integrated_source_html = _file_link_md(
+        integrated_table.source_path or integrated_table.path or "(missing)",
+        label=integrated_table.display_name or "integrated",
+    )
+    integrated_shape = f"{integrated_table.row_count} x {integrated_table.col_count}"
+    colspan = len(cells)
+    lines.append("<table style=\"border-collapse:collapse;width:100%;margin:8px 0 16px 0;\">")
+    lines.append("<tbody>")
+    lines.append("<tr>" + "".join(cells) + "</tr>")
+    lines.append(
+        "<tr>"
+        f"<td colspan=\"{colspan}\" style=\"vertical-align:top;padding:10px;border:1px solid #d0d7de;background:#f6f8fa;\">"
+        "<div style=\"font-weight:600;margin-bottom:4px;\">Integrated Result</div>"
+        f"<div style=\"font-size:12px;color:#57606a;margin-bottom:4px;\">Source: {integrated_source_html}</div>"
+        f"<div style=\"font-size:12px;color:#57606a;margin-bottom:8px;\">Shape: <code>{integrated_shape}</code></div>"
+        f"{_table_to_html(integrated_table, max_rows=max_rows, max_cols=max_cols)}"
+        "</td>"
+        "</tr>"
+    )
+    lines.append("</tbody>")
+    lines.append("</table>")
+    lines.append("")
+    return lines
+
+
 def _union_schema_table(name: str, tables: Sequence[TableData]) -> TableData:
     cols = _unique_keep_order(col for table in tables for col in table.columns if col)
     return TableData(path=name, source_path=name, display_name=name, columns=cols, rows=[])
 
 
-def _job_markdown(
+def build_job_markdown(
     *,
     job_dir: str,
     search_types: Optional[Sequence[str]],
@@ -577,10 +710,8 @@ def _job_markdown(
 
     lines.append("## Contents")
     lines.append("")
-    lines.append("- [Query2Card Summary (All Modes)](#query2card-summary-all-modes)")
     for mode in QUERY2MODELCARD_RETRIEVAL_MODES:
         lines.append(f"- [Query2Card {mode}](#query2card-summary-{_slug_anchor(mode)})")
-    lines.append("- [Query2Card Integrated Table](#query2card-integrated-table)")
     for search_type in active_search_types:
         anchor = _slug_anchor(search_type)
         lines.append(f"- [Query2Tab2Card {search_type}](#query2tab2card-summary-{anchor})")
@@ -594,20 +725,40 @@ def _job_markdown(
         except Exception:
             q2c_max_models = None
 
-    q2c_previews = [
-        _build_query2card_preview(job_dir, mode=mode, max_models=q2c_max_models)
+    q2c_previews_by_mode = {
+        mode: _build_query2card_preview(job_dir, mode=mode, max_models=q2c_max_models)
         for mode in QUERY2MODELCARD_RETRIEVAL_MODES
-    ]
-    q2c_integrated = _load_integrated_table(job_dir, f"integrated_model_search_{integration_type}.csv")
+    }
+    q2c_integrated_by_mode: Dict[str, TableData] = {}
 
-    lines.append("## Query2Card Summary (All Modes)")
-    lines.append("")
-    for preview in q2c_previews:
+    for mode in QUERY2MODELCARD_RETRIEVAL_MODES:
+        preview = q2c_previews_by_mode[mode]
         lines.extend(_render_query2card_summary(preview, heading_level=3))
-        q2c_table_previews = [_read_csv_table(p) for p in preview.get("table_paths", [])]
-        mode = str(preview.get("query2modelcard_retrieval_mode", "")).strip()
-        lines.extend(_render_retrieved_tables_section(f"Query2Card Related Tables ({mode})", q2c_table_previews, max_rows=preview_max_rows, max_cols=preview_max_cols))
-    lines.extend(_render_table_section("Query2Card Integrated Table", q2c_integrated, max_rows=preview_max_rows, max_cols=preview_max_cols))
+        integration_payload = _load_model_integration_payload(job_dir, integration_type, mode)
+        input_table_paths = integration_payload.get("table_paths") or preview.get("table_paths", []) or []
+        input_tables = [_read_csv_table(p) for p in input_table_paths]
+        integrated_table = _load_integrated_table_candidates(
+            job_dir,
+            [
+                f"integrated_model_search_{integration_type}_{mode}.csv",
+                f"integrated_model_search_{integration_type}.csv" if mode == "dense" else "",
+            ],
+        )
+        q2c_integrated_by_mode[mode] = integrated_table
+        lines.extend(
+            _render_horizontal_review_section(
+                f"Query2Card Integration Review ({mode})",
+                input_tables,
+                integrated_table,
+                max_rows=preview_max_rows,
+                max_cols=preview_max_cols,
+                source_label="Input table",
+            )
+        )
+
+    q2c_compare_reference = q2c_integrated_by_mode.get("dense")
+    if not q2c_compare_reference or not q2c_compare_reference.columns:
+        q2c_compare_reference = next((tbl for tbl in q2c_integrated_by_mode.values() if tbl.columns), TableData("", "", "(missing)", [], []))
 
     for search_type in active_search_types:
         c2t2c_path = os.path.join(job_dir, f"card2tab2card_{search_type}.json")
@@ -622,15 +773,31 @@ def _job_markdown(
         lines.extend(_render_query2tab2card_summary(preview))
 
         query_tables = [_read_csv_table(p) for p in preview.get("query_tables", [])]
-        retrieved_tables = [_read_csv_table(p) for p in preview.get("table_paths", [])]
-        integrated_table = _load_integrated_table(job_dir, f"integrated_table_search_{integration_type}_{search_type}.csv")
+        integration_payload = _load_table_integration_payload(job_dir, integration_type, search_type, "intermediate")
+        retrieved_table_paths = integration_payload.get("table_paths") or preview.get("table_paths", []) or []
+        retrieved_tables = [_read_csv_table(p) for p in retrieved_table_paths]
+        integrated_table = _load_integrated_table_candidates(
+            job_dir,
+            [
+                f"integrated_table_search_{integration_type}_{search_type}_intermediate.csv",
+                f"integrated_table_search_{integration_type}_{search_type}.csv",
+            ],
+        )
 
         if query_tables:
             lines.extend(_render_table_section(f"Query Table ({search_type})", query_tables[0], max_rows=preview_max_rows, max_cols=preview_max_cols))
         else:
             lines.extend(_render_table_section(f"Query Table ({search_type})", TableData("", "", "(missing)", [], []), max_rows=preview_max_rows, max_cols=preview_max_cols))
-        lines.extend(_render_retrieved_tables_section(f"Retrieved Tables ({search_type})", retrieved_tables, max_rows=preview_max_rows, max_cols=preview_max_cols))
-        lines.extend(_render_table_section(f"Integrated Table ({search_type})", integrated_table, max_rows=preview_max_rows, max_cols=preview_max_cols))
+        lines.extend(
+            _render_horizontal_review_section(
+                f"Query2Tab2Card Integration Review ({search_type})",
+                retrieved_tables,
+                integrated_table,
+                max_rows=preview_max_rows,
+                max_cols=preview_max_cols,
+                source_label="Retrieved table",
+            )
+        )
 
         lines.append(f"## Comparison ({search_type})")
         lines.append("")
@@ -644,11 +811,34 @@ def _job_markdown(
             stats = _compare_columns(union_table, integrated_table)
             lines.extend(_render_compare_block("Retrieved Tables Union Schema vs Integrated Table", stats, left_name="retrieved union", right_name="integrated"))
 
-        if q2c_integrated.columns and integrated_table.columns:
-            stats = _compare_columns(q2c_integrated, integrated_table)
-            lines.extend(_render_compare_block("Query2Card Integrated vs Query2Tab2Card Integrated", stats, left_name="q2c integrated", right_name=f"{search_type} integrated"))
+        if q2c_compare_reference.columns and integrated_table.columns:
+            stats = _compare_columns(q2c_compare_reference, integrated_table)
+            lines.extend(_render_compare_block("Query2Card Integrated vs Query2Tab2Card Integrated", stats, left_name="q2c integrated (dense if available)", right_name=f"{search_type} integrated"))
 
     return "\n".join(lines)
+
+
+def write_job_markdown(
+    *,
+    job_dir: str,
+    search_types: Optional[Sequence[str]],
+    integration_type: str,
+    preview_max_rows: Optional[int],
+    preview_max_cols: Optional[int],
+    output_path: Optional[str] = None,
+) -> str:
+    md = build_job_markdown(
+        job_dir=job_dir,
+        search_types=search_types,
+        integration_type=integration_type,
+        preview_max_rows=preview_max_rows,
+        preview_max_cols=preview_max_cols,
+    )
+    final_output_path = output_path or os.path.join(job_dir, DEFAULT_JOB_MARKDOWN_FILENAME)
+    os.makedirs(os.path.dirname(os.path.abspath(final_output_path)), exist_ok=True)
+    with open(final_output_path, "w", encoding="utf-8") as f:
+        f.write(md)
+    return final_output_path
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -673,22 +863,45 @@ def main(argv: Optional[List[str]] = None) -> int:
     preview_max_rows = None if int(args.preview_max_rows) <= 0 else int(args.preview_max_rows)
     preview_max_cols = None if int(args.preview_max_cols) <= 0 else int(args.preview_max_cols)
 
-    docs: List[Tuple[str, str]] = []
+    written_paths: List[Tuple[str, str]] = []
     for job_dir in job_dirs:
         job_id = os.path.basename(os.path.normpath(job_dir))
-        md = _job_markdown(
+        if args.per_job_md:
+            output_path = (
+                os.path.join(args.per_job_md_dir, f"{job_id}.md")
+                if args.per_job_md_dir
+                else os.path.join(job_dir, DEFAULT_JOB_MARKDOWN_FILENAME)
+            )
+            written_path = write_job_markdown(
+                job_dir=job_dir,
+                search_types=search_types,
+                integration_type=str(args.integration_type).strip(),
+                preview_max_rows=preview_max_rows,
+                preview_max_cols=preview_max_cols,
+                output_path=output_path,
+            )
+            written_paths.append((job_id, written_path))
+            print(f"[ok] generated markdown for {job_id}")
+            print(f"  wrote {written_path}")
+            continue
+
+        md = build_job_markdown(
             job_dir=job_dir,
             search_types=search_types,
             integration_type=str(args.integration_type).strip(),
             preview_max_rows=preview_max_rows,
             preview_max_cols=preview_max_cols,
         )
-        docs.append((job_id, md))
+        written_paths.append((job_id, md))
         print(f"[ok] generated markdown for {job_id}")
 
     if args.per_job_md:
-        out_dir = args.per_job_md_dir or os.path.join(args.jobs_root, "job_md")
-        os.makedirs(out_dir, exist_ok=True)
+        index_path = (
+            os.path.join(args.per_job_md_dir, "README.md")
+            if args.per_job_md_dir
+            else os.path.join(args.jobs_root, "integration_review_index.md")
+        )
+        os.makedirs(os.path.dirname(os.path.abspath(index_path)), exist_ok=True)
         index_lines = [
             "# Job Markdown Index",
             "",
@@ -696,13 +909,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"- Jobs root: `{args.jobs_root}`",
             "",
         ]
-        for job_id, md in docs:
-            path = os.path.join(out_dir, f"{job_id}.md")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(md)
-            index_lines.append(f"- [{job_id}](./{job_id}.md)")
-            print(f"  wrote {path}")
-        index_path = os.path.join(out_dir, "README.md")
+        for job_id, path in written_paths:
+            rel_path = os.path.relpath(path, os.path.dirname(index_path))
+            index_lines.append(f"- [{job_id}]({rel_path})")
         with open(index_path, "w", encoding="utf-8") as f:
             f.write("\n".join(index_lines))
         print(f"  wrote {index_path}")
@@ -711,7 +920,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     out_path = args.markdown_out or os.path.join(args.jobs_root, "integration_reasonableness_report.md")
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write("\n\n---\n\n".join(md for _, md in docs))
+        f.write("\n\n---\n\n".join(md for _, md in written_paths))
     print(f"wrote {out_path}")
     return 0
 

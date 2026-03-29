@@ -61,6 +61,37 @@ TABLE_PAGE_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
+MARKDOWN_PAGE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f6f8fa; color: #24292f; }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
+    .meta { margin-bottom: 16px; padding: 12px 14px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; font-size: 13px; }
+    .doc { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 24px; overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; }
+    th, td { border: 1px solid #d0d7de; padding: 6px 8px; text-align: left; vertical-align: top; }
+    thead th { background: #f6f8fa; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="meta">
+      <div><strong>{{ title }}</strong></div>
+      <div style="margin-top:4px;">Saved markdown: <code>{{ path_display }}</code></div>
+    </div>
+    <div class="doc">{{ content_html|safe }}</div>
+  </div>
+</body>
+</html>"""
+
 app = Flask(__name__)
 CORS(app)
 
@@ -341,6 +372,15 @@ def make_table_page_response(path_q: str) -> Response:
     return Response(body, mimetype="text/html; charset=utf-8")
 
 
+def markdown_to_html(md_text: str) -> str:
+    try:
+        import markdown  # type: ignore
+
+        return markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+    except Exception:
+        return f"<pre>{html.escape(md_text)}</pre>"
+
+
 def run_search_job(job_id: str, query: str, top_k: int, table_search_k: int, model_top_k: int, use_by_type: bool, runtime) -> None:
     paths = JobPaths(JOBS_DIR, job_id)
     jobs[job_id]["status"] = "running"
@@ -459,6 +499,35 @@ def table_preview():
 @app.route("/api/table-page", methods=["GET"])
 def table_page():
     return make_table_page_response(request.args["path"])
+
+
+@app.route("/api/integration-review-page/<job_id>", methods=["GET"])
+def integration_review_page(job_id: str):
+    paths = _job_paths(job_id)
+    if not os.path.isfile(paths.job_meta_path):
+        return api_error(f"Unknown job_id: {job_id}", 404)
+    try:
+        from src.utils.check_retrieval_integration_consistency import write_job_markdown
+
+        md_path = write_job_markdown(
+            job_dir=paths.job_dir,
+            search_types=None,
+            integration_type="alite",
+            preview_max_rows=None,
+            preview_max_cols=None,
+            output_path=os.path.join(paths.job_dir, "integration_review.md"),
+        )
+        with open(md_path, "r", encoding="utf-8") as f:
+            md_text = f.read()
+        body = render_template_string(
+            MARKDOWN_PAGE_HTML,
+            title=f"Integration Review: {job_id}",
+            path_display=md_path,
+            content_html=markdown_to_html(md_text),
+        )
+        return Response(body, mimetype="text/html; charset=utf-8")
+    except Exception as exc:
+        return api_error(f"Failed to build integration review markdown: {exc}", 500)
 
 
 @app.route("/api/model-search-preview", methods=["POST"])

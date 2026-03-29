@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from src.config import JOBS_DIR
+from src.config import CARD2TAB2CARD_TYPES, JOBS_DIR, QUERY2MODELCARD_RETRIEVAL_MODES
 
 
 def _load_preset_queries(preset_path: str) -> List[Dict[str, Any]]:
@@ -92,6 +92,7 @@ def run_one_query(
     integration_type: str = "alite",
     integration_k: int = 10,
     integration_max_models: Optional[int] = None,
+    integration_model_modes: Optional[List[str]] = None,
     integration_search_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run search (and optional integration) for a single query."""
@@ -153,29 +154,33 @@ def run_one_query(
     else:
         print(f"      · integration max_models override={effective_integration_max_models}")
 
-    # Model Search integration
-    model_payload = {
-        "job_id": job_id,
-        "integration_type": integration_type,
-        "k": integration_k,
-        "max_models": effective_integration_max_models,
-        "query2modelcard_retrieval_mode": "dense",
-    }
-    model_int_res: Optional[Dict[str, Any]] = None
-    try:
-        model_int_res = _post_json(model_int_url, model_payload)
-        status = model_int_res.get("status")
-        if status == "success":
-            print("      ✓ Model Search integration success")
-        else:
-            print(f"      ⚠ Model Search integration status={status} message={model_int_res.get('message')}")
-    except Exception as e:
-        print(f"      ✖ Model Search integration failed: {e}")
+    if not integration_model_modes:
+        integration_model_modes = list(QUERY2MODELCARD_RETRIEVAL_MODES)
+
+    model_int_res_by_mode: Dict[str, Any] = {}
+    for retrieval_mode in integration_model_modes:
+        model_payload = {
+            "job_id": job_id,
+            "integration_type": integration_type,
+            "k": integration_k,
+            "max_models": effective_integration_max_models,
+            "query2modelcard_retrieval_mode": retrieval_mode,
+        }
+        try:
+            res = _post_json(model_int_url, model_payload)
+            model_int_res_by_mode[retrieval_mode] = res
+            status = res.get("status")
+            if status == "success":
+                print(f"      ✓ Model Search integration success (mode={retrieval_mode})")
+            else:
+                print(f"      ⚠ Model Search integration status={status} (mode={retrieval_mode}) message={res.get('message')}")
+        except Exception as e:
+            model_int_res_by_mode[retrieval_mode] = {"status": "error", "message": str(e)}
+            print(f"      ✖ Model Search integration failed (mode={retrieval_mode}): {e}")
 
     # Table Search integration
     if not integration_search_types:
-        # Default: run ALITE integration for all Card2Tab2Card modes.
-        integration_search_types = ["single_column", "unionable", "keyword"]
+        integration_search_types = list(CARD2TAB2CARD_TYPES)
 
     table_int_res_by_type: Dict[str, Any] = {}
     for st in integration_search_types:
@@ -203,7 +208,7 @@ def run_one_query(
             table_int_res_by_type[st] = {"status": "error", "message": str(e)}
             print(f"      ✖ Table Search integration failed (search_type={st}): {e}")
 
-    outcome["integration_model_search"] = model_int_res
+    outcome["integration_model_search"] = model_int_res_by_mode
     outcome["integration_table_search"] = table_int_res_by_type
     return outcome
 
@@ -269,12 +274,21 @@ def main() -> int:
         help="Optional override for integration max_models. Default: follow each job's model_top_k.",
     )
     parser.add_argument(
+        "--integration_model_modes",
+        nargs="+",
+        default=[],
+        help=(
+            "Query2Card retrieval modes to integrate via /api/integrate-model-search. "
+            f"Default: {' '.join(QUERY2MODELCARD_RETRIEVAL_MODES)}"
+        ),
+    )
+    parser.add_argument(
         "--integration_search_types",
         nargs="+",
         default=[],
         help=(
             "Table search types to integrate via /api/integrate. "
-            "Default: single_column unionable keyword"
+            f"Default: {' '.join(CARD2TAB2CARD_TYPES)}"
         ),
     )
 
@@ -319,6 +333,7 @@ def main() -> int:
                 integration_type=args.integration_type,
                 integration_k=args.integration_k,
                 integration_max_models=args.integration_max_models,
+                integration_model_modes=(args.integration_model_modes or None),
                 integration_search_types=(args.integration_search_types or None),
             )
             all_outcomes.append({"id": q_id, "query": q_text, **outcome})

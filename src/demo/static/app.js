@@ -41,6 +41,12 @@
             if (!p) return '#';
             return '{{BACKEND_URL}}/api/table-page?path=' + encodeURIComponent(p);
         }
+
+        function integrationReviewPageHref(jobId) {
+            const j = String(jobId || currentJobId || '').trim();
+            if (!j) return '#';
+            return '{{BACKEND_URL}}/api/integration-review-page/' + encodeURIComponent(j);
+        }
         
         /** Open full HTML table view; label defaults to file basename. */
         function integrationTablePathLink(fullPath, displayLabel) {
@@ -992,9 +998,9 @@
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
                         <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
                         <button id="integrationRunBothBtn" onclick="runBothIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 14px; font-size: 13px; font-weight: 600;">Integrated</button>
-                        <button id="integrationRunAllTableBtn" onclick="runAllTableIntegrations('${results.job_id || currentJobId}')" style="padding: 6px 10px; font-size: 12px; font-weight: 500; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;" title="Precompute integrations for all modes and table-search types; results saved on this job.">
-                            Integrate all modes
-                        </button>
+                        <a href="${integrationReviewPageHref(results.job_id || currentJobId)}" target="_blank" rel="noopener noreferrer" style="font-size: 12px; color: #0056b3; text-decoration: none; padding: 6px 0;">
+                            Review integration details here
+                        </a>
                     </div>
                     <div id="integrationResultsContainer" style="margin-top: 12px;">
                         <div style="margin-bottom: 16px; padding: 10px; background: #e7f3ff; border-radius: 6px; border-left: 4px solid #007bff;">
@@ -1589,6 +1595,7 @@
         
         async function runBothIntegrations(jobId) {
             const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
+            const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
@@ -1610,7 +1617,7 @@
                 const modelReq = fetch('{{BACKEND_URL}}/api/integrate-model-search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, k, max_models: maxModels })
+                    body: JSON.stringify({ job_id: jobId, integration_type: integrationType, query2modelcard_retrieval_mode: retrievalMode, k, max_models: maxModels })
                 }).then(r => r.json());
                 const tableReq = fetch('{{BACKEND_URL}}/api/integrate', {
                     method: 'POST',
@@ -1730,7 +1737,6 @@
                     </div>`;
                 }
                 initTablePanZoom(rightDiv);
-                const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
                 const modelKey = getModelSearchKey(integrationType, retrievalMode);
                 const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
                 const hasModelRun = modelRes.status === 'success' || modelRes.status === 'no_result';
