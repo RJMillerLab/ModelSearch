@@ -187,11 +187,15 @@ def _csv_table_payload(csv_path: str) -> Dict[str, Any]:
 
 def _build_model_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, Any]]:
     basename = os.path.basename(csv_path)
-    m = re.fullmatch(r"integrated_model_search_([a-z0-9_]+)(?:_([a-z0-9_]+))?\.csv", basename)
-    if not m:
+    prefix = "integrated_model_search_"
+    suffix = ".csv"
+    if not (basename.startswith(prefix) and basename.endswith(suffix)):
         return None
-    integration_type = m.group(1)
-    retrieval_mode = m.group(2) or "dense"
+    stem = basename[len(prefix):-len(suffix)]
+    integration_type = "alite"
+    retrieval_mode = stem[len(integration_type) + 1:] if stem.startswith(f"{integration_type}_") else "dense"
+    if retrieval_mode not in QUERY2MODELCARD_RETRIEVAL_MODES:
+        retrieval_mode = "dense"
     return {
         "status": "success",
         "integration_type": integration_type,
@@ -203,12 +207,23 @@ def _build_model_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, 
 
 def _build_table_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, Any]]:
     basename = os.path.basename(csv_path)
-    m = re.fullmatch(r"integrated_table_search_([a-z0-9_]+)_([a-z0-9_]+)(?:_([a-z0-9_]+))?\.csv", basename)
-    if not m:
+    prefix = "integrated_table_search_"
+    suffix = ".csv"
+    if not (basename.startswith(prefix) and basename.endswith(suffix)):
         return None
-    integration_type = m.group(1)
-    search_type = m.group(2)
-    tables_source = m.group(3) or "intermediate"
+    stem = basename[len(prefix):-len(suffix)]
+    integration_type = "alite"
+    if not stem.startswith(integration_type):
+        return None
+    remainder = stem[len(integration_type):].lstrip("_")
+    tables_source = "intermediate"
+    matched_source = next((src for src in ("all_from_modelcards", "intermediate") if remainder.endswith(f"_{src}")), None)
+    if matched_source:
+        tables_source = matched_source
+        remainder = remainder[:-(len(matched_source) + 1)]
+    search_type = remainder
+    if search_type not in CARD2TAB2CARD_TYPES:
+        return None
     return {
         "status": "success",
         "integration_type": integration_type,
