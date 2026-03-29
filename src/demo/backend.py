@@ -165,6 +165,10 @@ def local_table_paths(items: List[str]) -> List[str]:
     return [resolve_table_path(name) for name in ordered_unique(items)]
 
 
+def ordered_unique_paths(items: List[str]) -> List[str]:
+    return ordered_unique(items)
+
+
 def _table_payload_from_path(path_q: str) -> Dict[str, Any]:
     resolved = resolve_table_path(path_q) or str(path_q)
     df = pd.read_csv(resolved)
@@ -702,12 +706,25 @@ def integrate():
     )
     payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, max_models=max_models, tables_source=tables_source)
     payload = _attach_single_table_preview(payload)
-    table_paths = payload["table_paths"][:k]
-    df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
+    query_table_paths = [str(p).strip() for p in (payload.get("query_tables") or []) if str(p).strip()]
+    retrieved_table_paths = [str(p).strip() for p in (payload.get("table_paths") or []) if str(p).strip()]
+    integration_input_table_paths = ordered_unique_paths(query_table_paths + retrieved_table_paths[:k])
+    df = TableIntegrater().run(local_table_paths(integration_input_table_paths), mode=integration_type)
     csv_name = f"integrated_table_search_{integration_type}_{search_type}_{tables_source}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")
-    response_payload = {"status": "success", "integration_type": integration_type, "search_type": search_type, "k": k, "max_models": max_models, "tables_source": payload["tables_source"], "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload}
+    response_payload = {
+        "status": "success",
+        "integration_type": integration_type,
+        "search_type": search_type,
+        "k": k,
+        "max_models": max_models,
+        "tables_source": payload["tables_source"],
+        "integration_input_table_paths": integration_input_table_paths,
+        "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())},
+        "saved_path": f"jobs_251117/{job_id}/{csv_name}",
+        **payload,
+    }
     _save_json(os.path.join(paths.job_dir, f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json"), response_payload)
     return jsonify(response_payload)
 

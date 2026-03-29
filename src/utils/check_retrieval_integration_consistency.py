@@ -629,12 +629,16 @@ def _render_horizontal_review_section(
     *,
     max_rows: Optional[int],
     max_cols: Optional[int],
-    source_label: str,
+    source_labels: Optional[Sequence[str]] = None,
+    source_label: str = "Input table",
 ) -> List[str]:
     lines = [f"### {title}", ""]
     cells: List[str] = []
     for idx, table in enumerate(source_tables, start=1):
-        label = f"{source_label} {idx}"
+        if source_labels and idx - 1 < len(source_labels) and str(source_labels[idx - 1]).strip():
+            label = str(source_labels[idx - 1]).strip()
+        else:
+            label = f"{source_label} {idx}"
         source_html = _file_link_md(table.source_path or table.path or "(missing)", label=table.display_name or "table")
         shape = f"{table.row_count} x {table.col_count}"
         content = [
@@ -776,6 +780,20 @@ def build_job_markdown(
         integration_payload = _load_table_integration_payload(job_dir, integration_type, search_type, "intermediate")
         retrieved_table_paths = integration_payload.get("table_paths") or preview.get("table_paths", []) or []
         retrieved_tables = [_read_csv_table(p) for p in retrieved_table_paths]
+        integration_input_paths = integration_payload.get("integration_input_table_paths") or []
+        integration_input_tables: List[TableData] = []
+        integration_input_labels: List[str] = []
+        if integration_input_paths:
+            normalized_query_paths = {str(p).strip() for p in (preview.get("query_tables", []) or []) if str(p).strip()}
+            for path in integration_input_paths:
+                path_s = str(path).strip()
+                if not path_s:
+                    continue
+                integration_input_tables.append(_read_csv_table(path_s))
+                integration_input_labels.append("Query table" if path_s in normalized_query_paths else f"Retrieved table {len([x for x in integration_input_labels if x.startswith('Retrieved table')]) + 1}")
+        else:
+            integration_input_tables = list(query_tables) + list(retrieved_tables)
+            integration_input_labels = (["Query table"] if query_tables else []) + [f"Retrieved table {idx}" for idx in range(1, len(retrieved_tables) + 1)]
         integrated_table = _load_integrated_table_candidates(
             job_dir,
             [
@@ -791,11 +809,11 @@ def build_job_markdown(
         lines.extend(
             _render_horizontal_review_section(
                 f"Query2Tab2Card Integration Review ({search_type})",
-                retrieved_tables,
+                integration_input_tables,
                 integrated_table,
                 max_rows=preview_max_rows,
                 max_cols=preview_max_cols,
-                source_label="Retrieved table",
+                source_labels=integration_input_labels,
             )
         )
 
