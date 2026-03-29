@@ -438,6 +438,7 @@
                             after_model_cap_trace_rows: preview.after_model_cap_trace_rows || [],
                             retrieved_table_model_rows: preview.retrieved_table_model_rows || [],
                             preview_meta: preview.preview_meta || {},
+                            job_context: preview.job_context || {},
                             stats: preview.stats || {},
                         }
                     ])

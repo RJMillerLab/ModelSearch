@@ -112,7 +112,7 @@ class TableIntegrater:
             return table_df, source_path
 
         transposed = self._transpose_promote_first_row(table_df)
-        #transposed = self._preprocess_transposed_table(transposed)
+        transposed = self._preprocess_transposed_table(transposed)
         tmp_path = os.path.join(target_dir, f"tmp_step_{step_idx}_{side}.csv")
         self._write_temp_table(transposed, tmp_path)
         print(
