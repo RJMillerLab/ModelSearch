@@ -15,13 +15,12 @@ from typing import List, Optional
 
 import pandas as pd
 
-from src.integration.quick_aug_recognition import KeywordRecognizer, KeywordRecognizerForAlite
+from src.integration.quick_aug_recognition import KeywordRecognizer
 
 
 class TableIntegrater:
     def __init__(self, temp_dir: Optional[str] = None):
         self.temp_dir = os.path.abspath(temp_dir) if temp_dir else None
-        #self.keyword_recognizer = KeywordRecognizerForAlite(verbose=False)
         self.keyword_recognizer = KeywordRecognizer(verbose=False)
         self.output_aligner = KeywordRecognizer(verbose=False)
 
@@ -141,20 +140,12 @@ class TableIntegrater:
 
         for step_idx, candidate_path in enumerate(table_paths[1:], start=2):
             candidate_df = pd.read_csv(candidate_path)
-            current_orientation, candidate_orientation = self.keyword_recognizer.recognize_pair_dataframes(
-                df1=current_df,
-                df2=candidate_df,
-                table1_name=os.path.basename(current_path),
-                table2_name=os.path.basename(candidate_path),
+            candidate_orientation = self.keyword_recognizer.recognize_one_dataframe(
+                query_df=current_df,
+                retrieved_df=candidate_df,
+                table_name=os.path.basename(candidate_path),
             )
-            prepared_current_df, prepared_current_path = self._prepare_table_for_orientation(
-                table_df=current_df,
-                source_path=current_path,
-                orientation=current_orientation,
-                step_idx=step_idx,
-                side="left",
-                temp_dir=target_dir,
-            )
+            prepared_current_path = current_path
             prepared_candidate_df, prepared_candidate_path = self._prepare_table_for_orientation(
                 table_df=candidate_df,
                 source_path=candidate_path,

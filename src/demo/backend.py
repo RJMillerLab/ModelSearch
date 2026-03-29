@@ -12,7 +12,7 @@ No evaluation.
 No compatibility layers.
 """
 
-import atexit, html, json, math, os, random, string, threading, time
+import atexit, html, json, math, os, random, re, string, threading, time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -175,6 +175,48 @@ def _load_json_if_exists(path: str) -> Optional[Dict[str, Any]]:
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _csv_table_payload(csv_path: str) -> Dict[str, Any]:
+    df = pd.read_csv(csv_path)
+    return {
+        "columns": list(df.columns),
+        "data": sanitize_for_json(df.values.tolist()),
+    }
+
+
+def _build_model_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, Any]]:
+    basename = os.path.basename(csv_path)
+    m = re.fullmatch(r"integrated_model_search_([a-z0-9_]+)(?:_([a-z0-9_]+))?\.csv", basename)
+    if not m:
+        return None
+    integration_type = m.group(1)
+    retrieval_mode = m.group(2) or "dense"
+    return {
+        "status": "success",
+        "integration_type": integration_type,
+        "query2modelcard_retrieval_mode": retrieval_mode,
+        "integrated_table": _csv_table_payload(csv_path),
+        "saved_path": f"jobs_251117/{job_id}/{basename}",
+    }
+
+
+def _build_table_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, Any]]:
+    basename = os.path.basename(csv_path)
+    m = re.fullmatch(r"integrated_table_search_([a-z0-9_]+)_([a-z0-9_]+)(?:_([a-z0-9_]+))?\.csv", basename)
+    if not m:
+        return None
+    integration_type = m.group(1)
+    search_type = m.group(2)
+    tables_source = m.group(3) or "intermediate"
+    return {
+        "status": "success",
+        "integration_type": integration_type,
+        "search_type": search_type,
+        "tables_source": tables_source,
+        "integrated_table": _csv_table_payload(csv_path),
+        "saved_path": f"jobs_251117/{job_id}/{basename}",
+    }
 
 
 def ensure_job_state(job_id: str) -> Dict[str, Any]:
@@ -411,7 +453,7 @@ def integrate_model_search():
     payload = _attach_single_table_preview(payload)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
-    csv_name = f"integrated_model_search_{integration_type}.csv"
+    csv_name = f"integrated_model_search_{integration_type}_{retrieval_mode}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")
     response_payload = {"status": "success", "integration_type": integration_type, "query2modelcard_retrieval_mode": retrieval_mode, "k": k, "max_models": max_models, "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload}
@@ -447,7 +489,7 @@ def integrate():
     payload = _attach_single_table_preview(payload)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
-    csv_name = f"integrated_table_search_{integration_type}_{search_type}.csv"
+    csv_name = f"integrated_table_search_{integration_type}_{search_type}_{tables_source}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")
     response_payload = {"status": "success", "integration_type": integration_type, "search_type": search_type, "k": k, "max_models": max_models, "tables_source": payload["tables_source"], "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload}
@@ -464,14 +506,16 @@ def integration_runs(job_id: str):
     model_runs: List[Dict[str, Any]] = []
     table_runs: List[Dict[str, Any]] = []
 
-    for retrieval_mode in QUERY2MODELCARD_RETRIEVAL_MODES:
-        payload = _load_json_if_exists(os.path.join(paths.job_dir, f"integration_model_search_alite_{retrieval_mode}.json"))
-        if payload:
-            model_runs.append(payload)
-
-    for search_type in CARD2TAB2CARD_TYPES:
-        for tables_source in ("intermediate", "all_from_modelcards"):
-            payload = _load_json_if_exists(os.path.join(paths.job_dir, f"integration_table_search_alite_{search_type}_{tables_source}.json"))
+    for basename in sorted(os.listdir(paths.job_dir)):
+        full_path = os.path.join(paths.job_dir, basename)
+        if not os.path.isfile(full_path) or not basename.endswith(".csv"):
+            continue
+        if basename.startswith("integrated_model_search_"):
+            payload = _build_model_run_from_csv(job_id, full_path)
+            if payload:
+                model_runs.append(payload)
+        elif basename.startswith("integrated_table_search_"):
+            payload = _build_table_run_from_csv(job_id, full_path)
             if payload:
                 table_runs.append(payload)
 
