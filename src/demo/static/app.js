@@ -1131,7 +1131,7 @@
             const target = document.getElementById('qaIntegratedPaths');
             if (!target) return;
             // Use run data so paths show even when DOM structure differs; same key logic as sync*Display
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
             const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
@@ -1161,7 +1161,7 @@
             const container = document.getElementById('integrationResultsContainer');
             if (!leftDiv || !container) return;
             container.style.display = 'block';
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
             const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
             const key = getModelSearchKey(integrationType, retrievalMode);
             const runs = window.__modelSearchRuns || [];
@@ -1193,6 +1193,10 @@
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (1 Query2Card Results): — (none or not available)</div>';
                 }
                 leftDiv.innerHTML = renderIntegrationTable(run.integrated_table, stats, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'model-search-' + key });
+            } else if (run && run.single_table_preview && run.single_table_preview.columns) {
+                const single = run.single_table_preview;
+                const extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Single related table found, so no integration was needed. Showing that table directly.</div>`;
+                leftDiv.innerHTML = renderIntegrationTable(single, single.stats || {}, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: single.path || '', downloadId: 'model-search-single-preview-' + key });
             } else {
                 // Try backend preview API first (no integration needed).
                 try {
@@ -1216,6 +1220,15 @@
                             if (idx >= 0) runsMutable[idx] = { ...runsMutable[idx], ...previewRun };
                             else runsMutable.push(previewRun);
                             window.__modelSearchRuns = runsMutable;
+
+                            if (preview.single_table_preview && preview.single_table_preview.columns) {
+                                const single = preview.single_table_preview;
+                                const extra = `<div style="margin-bottom: 10px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 12px;">Single related table found, so no integration was needed. Showing that table directly.</div>`;
+                                leftDiv.innerHTML = renderIntegrationTable(single, single.stats || {}, { title: INT_TITLE_C2C_HTML, successColor: '#007bff', extraHtml: extra, savedPath: single.path || '', downloadId: 'model-search-single-preview-' + key });
+                                initTablePanZoom(leftDiv);
+                                refreshIntegrationShortAnalysis();
+                                return;
+                            }
 
                             const modelIds = preview.models_with_tables || [];
                             const modelToTables = preview.model_to_table_paths || {};
@@ -1251,7 +1264,7 @@
             const container = document.getElementById('integrationShortAnalysis');
             const content = document.getElementById('integrationShortAnalysisContent');
             if (!container || !content) return;
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
             const tableKey = getTableSearchKey(integrationType, searchType, tablesSource);
@@ -1336,7 +1349,7 @@
             const container = document.getElementById('integrationResultsContainer');
             if (!rightDiv || !container) return;
             container.style.display = 'block';
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
             const tablesSource = (document.getElementById('integration_tables_source') || {}).value || 'intermediate';
             const key = getTableSearchKey(integrationType, searchType, tablesSource);
@@ -1384,6 +1397,10 @@
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Query2Tab2Card Results): — (none or not available)</div>';
                 }
                 rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
+            } else if (run && run.single_table_preview && run.single_table_preview.columns) {
+                const single = run.single_table_preview;
+                const extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">Only one table is available for this setting, so no integration was needed. Showing that table directly.</div>`;
+                rightDiv.innerHTML = renderIntegrationTable(single, single.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: single.path || '', downloadId: 'table-search-single-preview-' + key });
             } else if (run && !run.integrated_table && (run.pipeline_trace || run.tab2tab_trace_rows || run.query_tables || run.model_to_table_paths || run.models_with_tables)) {
                 // Pre-integration preview (already have retrieval relationship info, but integration not run yet).
                 const modelIds = run.models_with_tables || [];
@@ -1438,6 +1455,15 @@
                             if (idx >= 0) runsMutable[idx] = { ...runsMutable[idx], ...previewRun };
                             else runsMutable.push(previewRun);
                             window.__tableSearchRuns = runsMutable;
+
+                            if (preview.single_table_preview && preview.single_table_preview.columns) {
+                                const single = preview.single_table_preview;
+                                const extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">Only one table is available for this setting, so no integration was needed. Showing that table directly.</div>`;
+                                rightDiv.innerHTML = renderIntegrationTable(single, single.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: single.path || '', downloadId: 'table-search-single-preview-' + key });
+                                initTablePanZoom(rightDiv);
+                                refreshIntegrationShortAnalysis();
+                                return;
+                            }
 
                             const modelIds = preview.models_with_tables || [];
                             const tablePathsList = preview.table_paths || [];

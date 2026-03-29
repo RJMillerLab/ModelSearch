@@ -134,6 +134,49 @@ def local_table_paths(items: List[str]) -> List[str]:
     return [resolve_table_path(name) for name in ordered_unique(items)]
 
 
+def _table_payload_from_path(path_q: str) -> Dict[str, Any]:
+    resolved = resolve_table_path(path_q) or str(path_q)
+    df = pd.read_csv(resolved)
+    return {
+        "columns": list(df.columns),
+        "data": sanitize_for_json(df.values.tolist()),
+        "path": resolved,
+        "stats": {
+            "input_tables": 1,
+            "input_rows": int(len(df)),
+            "output_rows": int(len(df)),
+            "output_columns": int(df.shape[1]),
+            "total_unique_tables": 1,
+        },
+    }
+
+
+def _attach_single_table_preview(payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(payload)
+    table_paths = [p for p in (out.get("table_paths") or []) if str(p).strip()]
+    if len(table_paths) == 1:
+        try:
+            out["single_table_preview"] = _table_payload_from_path(table_paths[0])
+        except Exception:
+            pass
+    return out
+
+
+def _save_json(path: str, payload: Dict[str, Any]) -> None:
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _load_json_if_exists(path: str) -> Optional[Dict[str, Any]]:
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def ensure_job_state(job_id: str) -> Dict[str, Any]:
     if job_id not in jobs:
         jobs[job_id] = {"status": "completed" if _job_exists_on_disk(job_id) else "pending", "logs": [], "results": None}
@@ -323,6 +366,7 @@ def model_search_preview():
     if mode in ("integration", "saved", "default"):
         mode = "dense"
     payload = q2m_file.build_preview(query=job_meta.query, table_resources=job_meta.table_resources, mode=mode, max_models=int(data.get("max_models", job_meta.model_top_k)))
+    payload = _attach_single_table_preview(payload)
     return jsonify({"status": "success", **payload})
 
 
@@ -333,7 +377,9 @@ def table_search_preview():
     paths = JobPaths(JOBS_DIR, job_id)
     search_type = str(data.get("search_type", "single_column")).strip()
     tables_source = str(data.get("tables_source", "intermediate")).strip()
-    return jsonify({"status": "success", **Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, tables_source=tables_source)})
+    payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, tables_source=tables_source)
+    payload = _attach_single_table_preview(payload)
+    return jsonify({"status": "success", **payload})
 
 
 @app.route("/api/integrate-model-search", methods=["POST"])
@@ -359,12 +405,15 @@ def integrate_model_search():
         f"integrate-model-search called integration_type={integration_type} retrieval_mode={retrieval_mode} k={k} max_models={max_models}",
     )
     payload = q2m_file.build_preview(query=job_meta.query, table_resources=job_meta.table_resources, mode=retrieval_mode, max_models=max_models)
+    payload = _attach_single_table_preview(payload)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
     csv_name = f"integrated_model_search_{integration_type}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")
-    return jsonify({"status": "success", "integration_type": integration_type, "query2modelcard_retrieval_mode": retrieval_mode, "k": k, "max_models": max_models, "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload})
+    response_payload = {"status": "success", "integration_type": integration_type, "query2modelcard_retrieval_mode": retrieval_mode, "k": k, "max_models": max_models, "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload}
+    _save_json(os.path.join(paths.job_dir, f"integration_model_search_{integration_type}_{retrieval_mode}.json"), response_payload)
+    return jsonify(response_payload)
 
 
 @app.route("/api/integrate", methods=["POST"])
@@ -389,12 +438,38 @@ def integrate():
         f"integrate called search_type={search_type} integration_type={integration_type} tables_source={tables_source} k={k} max_models={max_models}",
     )
     payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, max_models=max_models, tables_source=tables_source)
+    payload = _attach_single_table_preview(payload)
     table_paths = payload["table_paths"][:k]
     df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
     csv_name = f"integrated_table_search_{integration_type}_{search_type}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")
-    return jsonify({"status": "success", "integration_type": integration_type, "search_type": search_type, "k": k, "max_models": max_models, "tables_source": payload["tables_source"], "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload})
+    response_payload = {"status": "success", "integration_type": integration_type, "search_type": search_type, "k": k, "max_models": max_models, "tables_source": payload["tables_source"], "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())}, "saved_path": f"jobs_251117/{job_id}/{csv_name}", **payload}
+    _save_json(os.path.join(paths.job_dir, f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json"), response_payload)
+    return jsonify(response_payload)
+
+
+@app.route("/api/integration-runs/<job_id>", methods=["GET"])
+def integration_runs(job_id: str):
+    paths = JobPaths(JOBS_DIR, job_id)
+    if not os.path.isdir(paths.job_dir):
+        return api_error(f"Unknown job_id: {job_id}", 404)
+
+    model_runs: List[Dict[str, Any]] = []
+    table_runs: List[Dict[str, Any]] = []
+
+    for retrieval_mode in QUERY2MODELCARD_RETRIEVAL_MODES:
+        payload = _load_json_if_exists(os.path.join(paths.job_dir, f"integration_model_search_alite_{retrieval_mode}.json"))
+        if payload:
+            model_runs.append(payload)
+
+    for search_type in CARD2TAB2CARD_TYPES:
+        for tables_source in ("intermediate", "all_from_modelcards"):
+            payload = _load_json_if_exists(os.path.join(paths.job_dir, f"integration_table_search_alite_{search_type}_{tables_source}.json"))
+            if payload:
+                table_runs.append(payload)
+
+    return jsonify({"status": "success", "job_id": job_id, "model_search_runs": model_runs, "table_search_runs": table_runs})
 
 
 if __name__ == "__main__":
