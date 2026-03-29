@@ -182,6 +182,10 @@ def _csv_table_payload(csv_path: str) -> Dict[str, Any]:
     return {
         "columns": list(df.columns),
         "data": sanitize_for_json(df.values.tolist()),
+        "stats": {
+            "output_rows": int(len(df)),
+            "output_columns": int(df.shape[1]),
+        },
     }
 
 
@@ -232,6 +236,51 @@ def _build_table_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, 
         "integrated_table": _csv_table_payload(csv_path),
         "saved_path": f"jobs_251117/{job_id}/{basename}",
     }
+
+
+def _enrich_model_run_from_job(job_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
+    paths = JobPaths(JOBS_DIR, job_id)
+    try:
+        job_meta = JobMeta.load(paths.job_meta_path)
+        q2m_file = Query2ModelCardFile.load(paths.query2modelcard_path)
+        retrieval_mode = str(run.get("query2modelcard_retrieval_mode") or "dense").strip() or "dense"
+        preview = q2m_file.build_preview(
+            query=job_meta.query,
+            table_resources=job_meta.table_resources,
+            mode=retrieval_mode,
+            max_models=int(job_meta.model_top_k),
+        )
+        out = {**preview, **run}
+        stats = dict(preview.get("stats") or {})
+        integrated_stats = ((run.get("integrated_table") or {}).get("stats") or {})
+        stats.update(integrated_stats)
+        stats["input_tables"] = int(len(preview.get("table_paths") or []))
+        out["stats"] = stats
+        return out
+    except Exception:
+        return run
+
+
+def _enrich_table_run_from_job(job_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
+    paths = JobPaths(JOBS_DIR, job_id)
+    try:
+        job_meta = JobMeta.load(paths.job_meta_path)
+        search_type = str(run.get("search_type") or "").strip()
+        tables_source = str(run.get("tables_source") or "intermediate").strip() or "intermediate"
+        preview = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(
+            search_type=search_type,
+            max_models=int(job_meta.model_top_k),
+            tables_source=tables_source,
+        )
+        out = {**preview, **run}
+        stats = dict(preview.get("stats") or {})
+        integrated_stats = ((run.get("integrated_table") or {}).get("stats") or {})
+        stats.update(integrated_stats)
+        stats["input_tables"] = int(len(preview.get("table_paths") or []))
+        out["stats"] = stats
+        return out
+    except Exception:
+        return run
 
 
 def ensure_job_state(job_id: str) -> Dict[str, Any]:
@@ -536,8 +585,8 @@ def integration_runs(job_id: str):
                 key = f"{payload['integration_type']}::{payload['search_type']}::{payload['tables_source']}"
                 table_runs_by_key[key] = payload
 
-    model_runs = list(model_runs_by_key.values())
-    table_runs = list(table_runs_by_key.values())
+    model_runs = [_enrich_model_run_from_job(job_id, run) for run in model_runs_by_key.values()]
+    table_runs = [_enrich_table_run_from_job(job_id, run) for run in table_runs_by_key.values()]
     return jsonify({"status": "success", "job_id": job_id, "model_search_runs": model_runs, "table_search_runs": table_runs})
 
 
