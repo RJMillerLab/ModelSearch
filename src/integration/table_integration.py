@@ -15,13 +15,13 @@ from typing import List, Optional
 
 import pandas as pd
 
-from src.integration.quick_aug_recognition import KeywordRecognizer
+from src.integration.quick_aug_recognition import KeywordRecognizerForAlite
 
 
 class TableIntegrater:
     def __init__(self, temp_dir: Optional[str] = None):
         self.temp_dir = os.path.abspath(temp_dir) if temp_dir else None
-        self.keyword_recognizer = KeywordRecognizer(verbose=False)
+        self.keyword_recognizer = KeywordRecognizerForAlite(verbose=False)
 
     def load_tables(self, table_paths: List[str]) -> List[pd.DataFrame]:
         return [pd.read_csv(path) for path in table_paths]
@@ -69,34 +69,31 @@ class TableIntegrater:
         df.to_csv(path, index=False)
         return path
 
-    def _prepare_candidate_path(
+    def _prepare_table_for_orientation(
         self,
         *,
-        anchor_df: pd.DataFrame,
-        candidate_path: str,
+        table_df: pd.DataFrame,
+        source_path: str,
+        orientation: str,
         step_idx: int,
+        side: str,
         temp_dir: Optional[str] = None,
-    ) -> str:
+    ) -> tuple[pd.DataFrame, str]:
         target_dir = self._get_temp_dir(temp_dir)
-        candidate_df = pd.read_csv(candidate_path)
-        decision = self.keyword_recognizer.recognize_one_dataframe(
-            query_df=anchor_df,
-            retrieved_df=candidate_df,
-            table_name=os.path.basename(candidate_path),
-        )
-        if decision != "tr":
-            print(f"[quick_aug] step={step_idx} keep {os.path.basename(candidate_path)}", flush=True)
-            return candidate_path
+        mode = str(orientation or "ori").strip().lower()
+        if mode != "tr":
+            print(f"[quick_aug] step={step_idx} keep {side} {os.path.basename(source_path)}", flush=True)
+            return table_df, source_path
 
-        transposed = self._transpose_promote_first_row(candidate_df)
+        transposed = self._transpose_promote_first_row(table_df)
         transposed = self._preprocess_transposed_table(transposed)
-        tmp_path = os.path.join(target_dir, f"tmp_step_{step_idx}.csv")
+        tmp_path = os.path.join(target_dir, f"tmp_step_{step_idx}_{side}.csv")
         self._write_temp_table(transposed, tmp_path)
         print(
-            f"[quick_aug] step={step_idx} transpose {os.path.basename(candidate_path)} -> {tmp_path}",
+            f"[quick_aug] step={step_idx} transpose {side} {os.path.basename(source_path)} -> {tmp_path}",
             flush=True,
         )
-        return tmp_path
+        return transposed, tmp_path
 
     def _integrate_tables_original_alite(
         self,
@@ -141,18 +138,35 @@ class TableIntegrater:
         current_df = pd.read_csv(current_path)
 
         for step_idx, candidate_path in enumerate(table_paths[1:], start=2):
-            prepared_candidate_path = self._prepare_candidate_path(
-                anchor_df=current_df,
-                candidate_path=candidate_path,
+            candidate_df = pd.read_csv(candidate_path)
+            current_orientation, candidate_orientation = self.keyword_recognizer.recognize_pair_dataframes(
+                df1=current_df,
+                df2=candidate_df,
+                table1_name=os.path.basename(current_path),
+                table2_name=os.path.basename(candidate_path),
+            )
+            prepared_current_df, prepared_current_path = self._prepare_table_for_orientation(
+                table_df=current_df,
+                source_path=current_path,
+                orientation=current_orientation,
                 step_idx=step_idx,
+                side="left",
+                temp_dir=target_dir,
+            )
+            prepared_candidate_df, prepared_candidate_path = self._prepare_table_for_orientation(
+                table_df=candidate_df,
+                source_path=candidate_path,
+                orientation=candidate_orientation,
+                step_idx=step_idx,
+                side="right",
                 temp_dir=target_dir,
             )
             print(
-                f"[alite] iterative step={step_idx - 1} pair=({os.path.basename(current_path)}, {os.path.basename(prepared_candidate_path)})",
+                f"[alite] iterative step={step_idx - 1} pair=({os.path.basename(prepared_current_path)}, {os.path.basename(prepared_candidate_path)})",
                 flush=True,
             )
             pair_df = self._integrate_tables_original_alite(
-                [current_path, prepared_candidate_path],
+                [prepared_current_path, prepared_candidate_path],
                 temp_dir=target_dir,
             )
             if pair_df is None:

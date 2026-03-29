@@ -165,6 +165,107 @@ class KeywordRecognizer(BaseKeywordRecognizer):
         return self.recognize_paths(query_table=query_table, retrieved_tables=retrieved_tables)
 
 
+class KeywordRecognizerForAlite(BaseKeywordRecognizer):
+    """
+    Pairwise orientation recognizer for ALITE.
+
+    Decision rule is based on the 2x2 overlap matrix between:
+    - df1 header / df1 first column
+    - df2 header / df2 first column
+
+    Mapping:
+    - header x header  -> ("ori", "ori")
+    - header x col1    -> ("ori", "tr")
+    - col1 x header    -> ("tr", "ori")
+    - col1 x col1      -> ("tr", "tr")
+
+    Special cases:
+    - if both diagonal cells are non-zero, prefer ("ori", "ori")
+    - if first-column names are exactly the same, exempt col1-col1 and prefer ("ori", "ori")
+    """
+
+    def _first_col_name(self, df: pd.DataFrame) -> str:
+        if df is None or len(df.columns) == 0:
+            return ""
+        return _normalize_text(df.columns[0])
+
+    def _matrix_overlaps(
+        self,
+        *,
+        df1: pd.DataFrame,
+        df2: pd.DataFrame,
+    ) -> Tuple[List[str], List[str], List[str], List[str]]:
+        df1_header_keywords, df1_first_col_keywords = _extract_axis_keywords(df1)
+        df2_header_keywords, df2_first_col_keywords = _extract_axis_keywords(df2)
+        hh = self._overlap(df1_header_keywords, df2_header_keywords)
+        hc = self._overlap(df1_header_keywords, df2_first_col_keywords)
+        ch = self._overlap(df1_first_col_keywords, df2_header_keywords)
+        cc = self._overlap(df1_first_col_keywords, df2_first_col_keywords)
+        return hh, hc, ch, cc
+
+    def recognize_pair_dataframes(
+        self,
+        *,
+        df1: pd.DataFrame,
+        df2: pd.DataFrame,
+        table1_name: str = "",
+        table2_name: str = "",
+    ) -> Tuple[str, str]:
+        hh, hc, ch, cc = self._matrix_overlaps(df1=df1, df2=df2)
+        first_col_name_same = self._first_col_name(df1) and self._first_col_name(df1) == self._first_col_name(df2)
+
+        if len(hh) > 0 and len(cc) > 0:
+            result = ("ori", "ori")
+            reason = "header-header and col1-col1 both have overlap"
+        elif first_col_name_same:
+            result = ("ori", "ori")
+            reason = "first column names are identical, so col1-col1 gets an exemption"
+        else:
+            scores = {
+                ("ori", "ori"): len(hh),
+                ("ori", "tr"): len(hc),
+                ("tr", "ori"): len(ch),
+                ("tr", "tr"): len(cc),
+            }
+            best_pair = max(scores.items(), key=lambda item: (item[1], item[0] == ("ori", "ori")))[0]
+            result = best_pair
+            if result == ("ori", "ori"):
+                reason = "header-header overlap is dominant"
+            elif result == ("ori", "tr"):
+                reason = "df1 header matches df2 first column best"
+            elif result == ("tr", "ori"):
+                reason = "df1 first column matches df2 header best"
+            else:
+                reason = "first-column to first-column overlap is dominant"
+
+        if self.verbose:
+            print(
+                f"{table1_name or '(table1)'} vs {table2_name or '(table2)'}: {result[0]}, {result[1]}\n"
+                f"{self._matrix_text(hh=hh, hc=hc, ch=ch, cc=cc)}\n"
+                f"reason: {reason}",
+                flush=True,
+            )
+
+        return result
+
+    def recognize_pair_paths(
+        self,
+        *,
+        table1: str,
+        table2: str,
+    ) -> Tuple[str, str]:
+        table1_path = _resolve_table_path(table1)
+        table2_path = _resolve_table_path(table2)
+        df1 = pd.read_csv(table1_path)
+        df2 = pd.read_csv(table2_path)
+        return self.recognize_pair_dataframes(
+            df1=df1,
+            df2=df2,
+            table1_name=os.path.basename(table1_path),
+            table2_name=os.path.basename(table2_path),
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recognize whether each retrieved table should be ori or tr.")
     parser.add_argument("--query_table", required=True, help="Query table path or basename.")
