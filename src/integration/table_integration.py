@@ -21,7 +21,8 @@ from src.integration.quick_aug_recognition import KeywordRecognizer, KeywordReco
 class TableIntegrater:
     def __init__(self, temp_dir: Optional[str] = None):
         self.temp_dir = os.path.abspath(temp_dir) if temp_dir else None
-        self.keyword_recognizer = KeywordRecognizerForAlite(verbose=False)
+        #self.keyword_recognizer = KeywordRecognizerForAlite(verbose=False)
+        self.keyword_recognizer = KeywordRecognizer(verbose=False)
         self.output_aligner = KeywordRecognizer(verbose=False)
 
     def load_tables(self, table_paths: List[str]) -> List[pd.DataFrame]:
