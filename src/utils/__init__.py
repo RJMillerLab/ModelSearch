@@ -455,7 +455,12 @@ def _load_modelid_to_csv_expand(resources: Optional[List[str]] = None) -> pd.Dat
 def resolve_table_path(csv_path: str) -> Optional[str]:
     """
     Resolve CSV basename to full path. Used by integration when only filename is known."""
-    base = os.path.basename(csv_path)
+    raw = str(csv_path or "").strip()
+    if not raw:
+        return None
+    if os.path.isfile(raw):
+        return os.path.abspath(raw)
+    base = os.path.basename(raw)
     dirs = TABLE_BASE_DIRS
     for base_dir in dirs:
         p = os.path.join(base_dir, base)
@@ -839,4 +844,3 @@ def _paths_for_resource_set(resources: List[str]) -> Tuple[str, str, str]:
     if rset == {"hugging", "github", "arxiv"}:
         return str(EMB_NPZ), str(SPARSE_INDEX), str(MODELLAKE_DB)
     raise ValueError(f"Unsupported resource combination: {rset}. Must be one of: {'hugging', 'github', 'arxiv'}")
-

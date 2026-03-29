@@ -19,8 +19,9 @@ from src.integration.quick_aug_recognition import KeywordRecognizer
 
 
 class TableIntegrater:
-    def __init__(self, temp_dir: Optional[str] = None):
+    def __init__(self, temp_dir: Optional[str] = None, reorder_columns: bool = False):
         self.temp_dir = os.path.abspath(temp_dir) if temp_dir else None
+        self.reorder_columns = bool(reorder_columns)
         self.keyword_recognizer = KeywordRecognizer(verbose=False)
         self.output_aligner = KeywordRecognizer(verbose=False)
 
@@ -205,6 +206,7 @@ class TableIntegrater:
         table_paths: List[str],
         mode: str = "alite",
         temp_dir: Optional[str] = None,
+        reorder_columns: Optional[bool] = None,
     ) -> Optional[pd.DataFrame]:
         if not table_paths:
             print("❌ No tables to integrate", flush=True)
@@ -216,8 +218,10 @@ class TableIntegrater:
         df = self._integrate_tables_alite(table_paths, temp_dir=temp_dir)
         if df is not None:
             df = self._align_output_to_query(query_df, df)
-
-        return self._reorder_columns_deterministic(df) if df is not None else None
+        should_reorder = self.reorder_columns if reorder_columns is None else bool(reorder_columns)
+        if df is None:
+            return None
+        return self._reorder_columns_deterministic(df) if should_reorder else df
 
     def save_table(self, df: pd.DataFrame, path: str):
         if df is None:
@@ -234,6 +238,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=["alite"], default="alite")
     parser.add_argument("--output_csv", default="tmp/integrated_table.csv")
     parser.add_argument("--temp_dir", default="tmp")
+    parser.add_argument("--no_reorder", action="store_true", help="Disable deterministic output-column reordering.")
     args = parser.parse_args()
 
     if not args.tables:
@@ -252,11 +257,12 @@ def main() -> None:
         raise FileNotFoundError(f"Missing table paths: {missing}")
 
     print(f"[table_integration] mode={args.mode} tables={len(table_paths)} output={os.path.abspath(args.output_csv)}", flush=True)
-    integrater = TableIntegrater(temp_dir=args.temp_dir)
+    integrater = TableIntegrater(temp_dir=args.temp_dir, reorder_columns=not args.no_reorder)
     df = integrater.run(
         table_paths,
         mode=args.mode,
         temp_dir=args.temp_dir,
+        reorder_columns=not args.no_reorder,
     )
     if df is None:
         raise RuntimeError("Integration returned None")
