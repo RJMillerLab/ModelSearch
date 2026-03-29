@@ -34,3 +34,4 @@ flask-cors>=3.0.0
 # Utilities
 tqdm>=4.64.0
 
+markdown

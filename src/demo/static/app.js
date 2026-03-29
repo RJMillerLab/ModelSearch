@@ -797,6 +797,19 @@
                 if (jobIdStrip) {
                     metaParts.push(`<div style="margin-top:3px;font-size:11px;color:#555;"><strong>JOB_ID:</strong> <code style="font-size:11px;background:#f1f3f5;padding:1px 6px;border-radius:3px;">${escapeHtml(jobIdStrip)}</code></div>`);
                 }
+                const metaInline = [];
+                if (results.model_top_k != null && results.model_top_k !== '') {
+                    metaInline.push(`<strong>model_top_k:</strong> <code style="font-size:11px;background:#f1f3f5;padding:1px 6px;border-radius:3px;">${escapeHtml(results.model_top_k)}</code>`);
+                }
+                if (results.table_search_k != null && results.table_search_k !== '') {
+                    metaInline.push(`<strong>table_search_k:</strong> <code style="font-size:11px;background:#f1f3f5;padding:1px 6px;border-radius:3px;">${escapeHtml(results.table_search_k)}</code>`);
+                }
+                if (results.timestamp) {
+                    metaInline.push(`<strong>Timestamp:</strong> <code style="font-size:11px;background:#f1f3f5;padding:1px 6px;border-radius:3px;">${escapeHtml(results.timestamp)}</code>`);
+                }
+                if (metaInline.length) {
+                    metaParts.push(`<div style="margin-top:4px;font-size:11px;color:#555;display:flex;gap:10px;flex-wrap:wrap;">${metaInline.join(' <span style="color:#c2c8cf;">|</span> ')}</div>`);
+                }
                 metaStrip.innerHTML = metaParts.join('');
                 metaStrip.style.display = metaParts.length ? 'block' : 'none';
             }

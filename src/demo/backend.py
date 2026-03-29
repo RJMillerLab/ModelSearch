@@ -375,10 +375,92 @@ def make_table_page_response(path_q: str) -> Response:
 def markdown_to_html(md_text: str) -> str:
     try:
         import markdown  # type: ignore
-
         return markdown.markdown(md_text, extensions=["tables", "fenced_code"])
     except Exception:
-        return f"<pre>{html.escape(md_text)}</pre>"
+        return _simple_markdown_to_html(md_text)
+
+
+def _inline_md_to_html(text: str) -> str:
+    out = html.escape(text)
+    out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
+    out = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2" target="_blank" rel="noopener noreferrer">\1</a>', out)
+    return out
+
+
+def _simple_markdown_to_html(md_text: str) -> str:
+    lines = md_text.splitlines()
+    chunks: List[str] = []
+    list_items: List[str] = []
+    in_code = False
+    code_lines: List[str] = []
+    raw_html_block: List[str] = []
+
+    def flush_list() -> None:
+        nonlocal list_items
+        if list_items:
+            chunks.append("<ul>" + "".join(f"<li>{item}</li>" for item in list_items) + "</ul>")
+            list_items = []
+
+    def flush_code() -> None:
+        nonlocal code_lines
+        if code_lines:
+            chunks.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+            code_lines = []
+
+    def flush_raw_html() -> None:
+        nonlocal raw_html_block
+        if raw_html_block:
+            chunks.append("\n".join(raw_html_block))
+            raw_html_block = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if in_code:
+            if stripped.startswith("```"):
+                flush_code()
+                in_code = False
+            else:
+                code_lines.append(line)
+            continue
+
+        if stripped.startswith("```"):
+            flush_list()
+            flush_raw_html()
+            in_code = True
+            code_lines = []
+            continue
+
+        if stripped.startswith("<") and stripped.endswith(">"):
+            flush_list()
+            raw_html_block.append(line)
+            continue
+        flush_raw_html()
+
+        if not stripped:
+            flush_list()
+            chunks.append("")
+            continue
+
+        m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if m:
+            flush_list()
+            level = len(m.group(1))
+            chunks.append(f"<h{level}>{_inline_md_to_html(m.group(2))}</h{level}>")
+            continue
+
+        m = re.match(r"^-\s+(.*)$", stripped)
+        if m:
+            list_items.append(_inline_md_to_html(m.group(1)))
+            continue
+
+        chunks.append(f"<p>{_inline_md_to_html(stripped)}</p>")
+
+    flush_list()
+    flush_raw_html()
+    if in_code:
+        flush_code()
+    return "\n".join(part for part in chunks if part != "")
 
 
 def run_search_job(job_id: str, query: str, top_k: int, table_search_k: int, model_top_k: int, use_by_type: bool, runtime) -> None:
