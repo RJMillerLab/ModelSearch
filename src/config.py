@@ -90,7 +90,8 @@ JOBS_DIR = str(REPO_ROOT / f"jobs{DATA_TAG}")
 os.makedirs(JOBS_DIR, exist_ok=True)
 
 # --- Other repositories ---
-DIALITE_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "dialite")
+DIALITE_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "dialite_internal")
+ALITE_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "alite_internal")
 BLEND_INTERNAL_REPO = os.path.join(REPO_ROOT, "others", "Blend_internal")
 TAB2KNOW_REPO = os.path.join(REPO_ROOT, "others", "tab2know")
 QUERY2MODELCARD_RETRIEVAL_MODES = ["dense", "sparse", "hybrid"]

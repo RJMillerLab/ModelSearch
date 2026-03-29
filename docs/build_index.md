@@ -14,6 +14,8 @@
 # Build DuckDB index from csvs, for later search
 git clone git@github.com:DoraDong-2023/Blend_internal.git 
 ln -s ../Blend_internal others/Blend_internal
+git clone git@github.com:DoraDong-2023/alite_internal.git 
+ln -s ../alite_internal others/alite_internal
 # create DuckDB index from csvs, by following the instructions from Blend README. Output: modellake_v2_251117_nomask.db
 
 # optional: create subset of duckdb index for later search
@@ -214,7 +216,7 @@ ssh -L 5001:127.0.0.1:5001 -L 5002:127.0.0.1:5002 chippie.cs.uwaterloo.ca
 
 mimic user for batch running
 ```bash
-python src/utils/batch_run_preset_queries.py \
+python -m src.utils.batch_run_preset_queries \
   --backend_url http://localhost:5002 \
   --preset_path config/preset_queries.json \
   --run_integration \
@@ -224,18 +226,32 @@ python src/utils/batch_run_preset_queries.py \
 
 generate markdown for query table and retrieved tables and integrated tables
 ```bash
-python src/utils/check_retrieval_integration_consistency.py \
+python -m src.utils.check_retrieval_integration_consistency \
   --jobs-root jobs_251117 \
   --integration-type alite \
   --per-job-md \
   --preview-max-rows 0 --preview-max-cols 0
 ```
 
----
+test postprocess
+```bash
+python -m src.integration.quick_aug_recognition \
+  --query_table ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/9ba9372b41_table1.csv \
+  --retrieved_tables ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/e5322d01d4_table1.csv \
+  ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0a86da9b8e_table1.csv \
+  ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/5a0c87e1c5_table2.csv \
+  --verbose
+```
 
-# Inference fast checklist
-
-1. **Run Part 1 once** (modelcard indexes via **`ir_index_builder`**, Blend DuckDB, optional table classification for by_type).
-2. **Do not** re-run index builders or `classification --mode batch` during serving or per-query scripts.
-3. Inference **loads** artifacts only: card2card **`EMB_NPZ` + Lucene `SPARSE_INDEX`** (or hugging subsets), `modellake.db`, optional `table_classifications.json`. Use **`ir_searcher`** (`DenseSearcher` / `SparseSearcher`) for modelcard retrieval.
-4. For tab2know: batch classification (optional 1.3) runs tab2know **inference** per table and writes JSON; at query time we only `load_classifications(json)`. Tab2know’s own model training lives in TabKnow_internal (separate repo).
+```bash
+ALITE_VERBOSE=1 python -m src.integration.table_integration \
+  --tables \
+  ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/9ba9372b41_table1.csv \
+  ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/e5322d01d4_table1.csv \
+  ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0a86da9b8e_table1.csv \
+  ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/5a0c87e1c5_table2.csv \
+  --table_orientations ori ori ori tr \
+  --mode alite \
+  --temp_dir tmp \
+  --output_csv tmp/integrated_table.csv
+```

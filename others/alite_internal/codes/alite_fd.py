@@ -13,6 +13,9 @@ import csv
 import os
 import random
 import time
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 
@@ -54,12 +57,31 @@ def GetProjectedTuple(tuple1, non_null_positions, m):
 #preprocess input tables
 def preprocess(table):
     #table = table.replace(r'^\s*$',np.nan, regex=True)
-    table.columns = map(str.lower, table.columns)
+    table.columns = [str(col).lower().strip() for col in table.columns]
     #table = table.replace(r'^\s*$',"undefinedval", regex=True) #convert inherit nulls to "undefinedval"
     #table = table.replace(np.nan,"undefinedval", regex=True) #convert inherit nulls to "undefinedval"
-    table = table.map(str) 
+    #table = table.applymap(str)  # deprecated
+    table = table.astype(str)
     table = table.apply(lambda x: x.str.lower()) #convert to lower case
     table = table.apply(lambda x: x.str.strip()) #strip leading and trailing spaces, if any
+    return table
+
+
+
+def _is_null_like(value):
+    if pd.isna(value):
+        return True
+    text = str(value).strip().lower()
+    return text in {"", "nan", "none", "null"}
+
+
+def DropEmptyColumns(table):
+    empty_columns = [
+        colname for colname in table.columns
+        if table[colname].map(_is_null_like).all()
+    ]
+    if empty_columns:
+        table = table.drop(columns=empty_columns)
     return table
 
 
@@ -67,22 +89,23 @@ def ReplaceNulls(table, null_count):
     #table.dropna()
     #return table
     #print(table)
+    table = table.copy().astype(object)
     null_set = set()
     for colname in table:
         for i in range (0, table.shape[0]):
             try:
-                if str(table[colname][i]) == "nan":
-                    table[colname][i] = "null"+ str(null_count)
+                if _is_null_like(table.loc[i, colname]):
+                    table.loc[i, colname] = "null"+ str(null_count)
                     null_set.add("null"+ str(null_count))
                     null_count += 1
-            except:
-                print(colname)
-                #print(table[colname][i])
-                print(table.shape[0])
-                print(i)
-                sys.exit()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"ReplaceNulls failed at column={colname!r}, row={i}, "
+                    f"shape={table.shape}: {exc}"
+                ) from exc
     #print(null_set)
     return table, null_count, null_set
+
 
 # =============================================================================
 # testTablePath = r"cihr_alignment_benchmark\base tables\cihr_co-applicant_10.csv"
@@ -421,10 +444,10 @@ def EfficientSubsumption(tuple_list):
 
 
 
-def FDAlgorithm(filenames):
+def FDAlgorithm(filenames, cluster):
     #stats
-    # print("-----x---------x--------x---")
-    # print("Processing cluster:", cluster)
+    print("-----x---------x--------x---")
+    print("Processing cluster:", cluster)
     stats_df = pd.DataFrame(
             columns = ["cluster", "n", "s","total_cols", "f", "labeled_nulls",
                        "produced_nulls", "complement_time",
@@ -436,7 +459,12 @@ def FDAlgorithm(filenames):
     null_count = 0
     null_set = set()
     table1 = filenames[0]
-    table1 = pd.read_csv(table1, encoding='latin1', on_bad_lines = "skip")
+    table1 = pd.read_csv(
+        table1,
+        encoding='latin1',
+        on_bad_lines='warn'
+    )
+    table1 = DropEmptyColumns(table1)
     table1 = table1.drop_duplicates().reset_index(drop=True)
     table1 = table1.replace(r'^\s*$',np.nan, regex=True)
     table1 = table1.replace("-",np.nan)
@@ -447,7 +475,12 @@ def FDAlgorithm(filenames):
         null_set = null_set.union(current_null_set)
     table1 = preprocess(table1)
     for files in filenames[1:]:
-        table2 = pd.read_csv(files, encoding='latin1', on_bad_lines = "skip")
+        table2 = pd.read_csv(
+            files,
+            encoding='latin1',
+            on_bad_lines='warn'
+        )
+        table2 = DropEmptyColumns(table2)
         table2 = table2.drop_duplicates().reset_index(drop=True)
         table2 = table2.replace(r'^\s*$',np.nan, regex=True)
         table1 = table1.replace("-",np.nan)
@@ -491,8 +524,8 @@ def FDAlgorithm(filenames):
     fd_table = fd_table.replace(np.nan, "nan", regex = True)
     fd_data = [tuple(x) for x in fd_table.values]
     print("Output tuples: ( total", len(fd_data),")")
-    # for t in fd_data:
-    #     print(t)
+    for t in fd_data:
+        print(t)
     end_time = time.time_ns()
     f = len(fd_data)
     produced_nulls = CountProducedNulls(fd_data)
@@ -500,12 +533,44 @@ def FDAlgorithm(filenames):
     #print("---------------------------------")
     #print("Time taken FD algorithm:", total_time)
     #print("Tuples generated FD algorithm:", f)
-    append_list = ["cluster", m, s, total_cols, f, len(null_set),
+    append_list = [cluster, m, s, total_cols, f, len(null_set),
                    produced_nulls, complement_time, 
                    complement_partitions, largest_partition_size,
                    partitioning_used, subsume_time,
                    subsumed_tuples, total_time, f/s]
-    a_series = pd.Series(append_list, index = stats_df.columns)
-    stats_df = pd.concat([stats_df, a_series.to_frame().T], ignore_index=True)    
+    stats_df.loc[len(stats_df)] = append_list
     return fd_table, stats_df, debug_dict
 
+if __name__ == "__main__":
+    #INPUT_TABLE_PATH = r"."
+    print("Enter input folder path:")    
+    #input_path = str(input())
+    input_path = r"minimum_example/"
+    print(input_path)
+    output_path = r"output_tables/"+ input_path
+# =============================================================================
+#     if not os.path.exists(output_path):
+#       # Create a new directory because it does not exist 
+#       os.makedirs(output_path)
+#       print("output directory is is created!")
+# =============================================================================
+    stat_path = r"statistics/"+ input_path[:-1]+".csv"
+    foldernames = glob.glob(input_path + "*")
+    #print(foldernames)
+    statistics = pd.DataFrame(
+            columns = ["cluster", "n", "s", "f", "labeled_nulls",
+                       "produced_nulls", "complement_time",
+                       "complement_partitions", "largest_partition_size", "partitioning_used",
+                       "subsume_time",
+                       "subsumed_tuples", "total_time", "f_s_ratio"])
+    for cluster in foldernames:
+        try:
+            filenames = glob.glob(cluster + "/*.csv")
+        except:
+            continue
+        cluster_name = cluster.rsplit(os.sep)[-1]
+        result_FD, stats_df, debug_dict = FDAlgorithm(filenames, cluster_name)
+        #save result to hard drive
+        #result_FD.to_csv(output_path+ cluster_name+".csv",index = False)
+        #statistics = pd.concat([statistics, stats_df])
+        #statistics.to_csv(stat_path, index = False)
