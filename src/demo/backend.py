@@ -518,8 +518,8 @@ def integration_runs(job_id: str):
     if not os.path.isdir(paths.job_dir):
         return api_error(f"Unknown job_id: {job_id}", 404)
 
-    model_runs: List[Dict[str, Any]] = []
-    table_runs: List[Dict[str, Any]] = []
+    model_runs_by_key: Dict[str, Dict[str, Any]] = {}
+    table_runs_by_key: Dict[str, Dict[str, Any]] = {}
 
     for basename in sorted(os.listdir(paths.job_dir)):
         full_path = os.path.join(paths.job_dir, basename)
@@ -528,12 +528,16 @@ def integration_runs(job_id: str):
         if basename.startswith("integrated_model_search_"):
             payload = _build_model_run_from_csv(job_id, full_path)
             if payload:
-                model_runs.append(payload)
+                key = f"{payload['integration_type']}::{payload['query2modelcard_retrieval_mode']}"
+                model_runs_by_key[key] = payload
         elif basename.startswith("integrated_table_search_"):
             payload = _build_table_run_from_csv(job_id, full_path)
             if payload:
-                table_runs.append(payload)
+                key = f"{payload['integration_type']}::{payload['search_type']}::{payload['tables_source']}"
+                table_runs_by_key[key] = payload
 
+    model_runs = list(model_runs_by_key.values())
+    table_runs = list(table_runs_by_key.values())
     return jsonify({"status": "success", "job_id": job_id, "model_search_runs": model_runs, "table_search_runs": table_runs})
 
 
