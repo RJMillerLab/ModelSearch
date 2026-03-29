@@ -1,11 +1,7 @@
 """
 Table Integration Implementation
 
-Integrates multiple tables using various methods:
-- Union: Combine all rows from all tables
-- Intersection: Find common rows across all tables
-- ALITE: FD-based integration using dialite_internal (requires dialite_internal repository)
-- Outer Join: Merge all tables using outer join
+Integrates multiple tables using ALITE only.
 """
 
 from __future__ import annotations
@@ -94,59 +90,6 @@ class TableIntegrater:
 
         return out_paths
 
-    def _integrate_tables_union(
-        self,
-        table_paths: List[str],
-        table_orientations: Optional[List[str]] = None,
-        temp_dir: Optional[str] = None,
-    ) -> Optional[pd.DataFrame]:
-        if not table_paths:
-            return None
-
-        table_paths = self._postprocess_table_paths(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
-        tables = self.load_tables(table_paths)
-        if len(tables) == 1:
-            return tables[0].copy()
-
-        all_columns: List[str] = []
-        for df in tables:
-            for col in df.columns:
-                if col not in all_columns:
-                    all_columns.append(col)
-        aligned_tables = [df.reindex(columns=all_columns) for df in tables]
-        integrated = pd.concat(aligned_tables, axis=0, ignore_index=True)
-        return integrated.drop_duplicates()
-
-    def _integrate_tables_intersection(
-        self,
-        table_paths: List[str],
-        table_orientations: Optional[List[str]] = None,
-        temp_dir: Optional[str] = None,
-    ) -> Optional[pd.DataFrame]:
-        if not table_paths:
-            return None
-
-        table_paths = self._postprocess_table_paths(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
-        tables = self.load_tables(table_paths)
-        if len(tables) == 1:
-            return tables[0].copy()
-
-        common_columns = set(tables[0].columns)
-        for df in tables[1:]:
-            common_columns = common_columns.intersection(set(df.columns))
-        if not common_columns:
-            print("⚠️  No common columns found for intersection", flush=True)
-            return pd.DataFrame()
-
-        common_columns = list(common_columns)
-        result = tables[0][common_columns].copy()
-        result["_temp_key"] = result.apply(lambda x: "|".join(x.astype(str)), axis=1)
-        for df in tables[1:]:
-            df_subset = df[common_columns].copy()
-            df_subset["_temp_key"] = df_subset.apply(lambda x: "|".join(x.astype(str)), axis=1)
-            result = result[result["_temp_key"].isin(df_subset["_temp_key"])]
-        return result[common_columns]
-
     def _integrate_tables_alite(
         self,
         table_paths: List[str],
@@ -175,25 +118,6 @@ class TableIntegrater:
                 result_fd, _stats_df, _debug_dict = alite_module.FDAlgorithm(table_paths.copy(), cluster="__".join(os.path.splitext(os.path.basename(table_path))[0] for table_path in table_paths))
         return result_fd
 
-    def _integrate_tables_outer_join(
-        self,
-        table_paths: List[str],
-        table_orientations: Optional[List[str]] = None,
-        temp_dir: Optional[str] = None,
-    ) -> Optional[pd.DataFrame]:
-        if not table_paths:
-            return None
-
-        table_paths = self._postprocess_table_paths(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
-        tables = self.load_tables(table_paths)
-        if len(tables) == 1:
-            return tables[0].copy()
-
-        result = tables[0].copy()
-        for df in tables[1:]:
-            result = pd.concat([result.reset_index(drop=True), df.reset_index(drop=True)], axis=1, join="outer")
-        return result
-
     def _reorder_columns_deterministic(self, df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
         if df is None or df.empty or len(df.columns) == 0:
             return df
@@ -211,7 +135,7 @@ class TableIntegrater:
     def run(
         self,
         table_paths: List[str],
-        mode: str = "union",
+        mode: str = "alite",
         table_orientations: Optional[List[str]] = None,
         temp_dir: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
@@ -219,16 +143,9 @@ class TableIntegrater:
             print("❌ No tables to integrate", flush=True)
             return None
 
-        if mode == "union":
-            df = self._integrate_tables_union(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
-        elif mode == "intersection":
-            df = self._integrate_tables_intersection(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
-        elif mode == "outer_join":
-            df = self._integrate_tables_outer_join(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
-        elif mode == "alite":
-            df = self._integrate_tables_alite(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
+        if mode != "alite":
+            raise ValueError(f"Only 'alite' integration is supported now, got: {mode}")
+        df = self._integrate_tables_alite(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
 
         return self._reorder_columns_deterministic(df) if df is not None else None
 
@@ -244,7 +161,7 @@ class TableIntegrater:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Integrate tables from CSV paths.")
     parser.add_argument("--tables", nargs="+", help="CSV paths to integrate.")
-    parser.add_argument("--mode", choices=["union", "intersection", "outer_join", "alite"], default="union")
+    parser.add_argument("--mode", choices=["alite"], default="alite")
     parser.add_argument("--table_orientations", nargs="*", help="Optional ori/tr list aligned with --tables.")
     parser.add_argument("--output_csv", default="tmp/integrated_table.csv")
     parser.add_argument("--temp_dir", default="tmp")
@@ -255,7 +172,7 @@ def main() -> None:
         print(
             "Example:\n"
             "python -m src.integration.table_integration "
-            "--tables a.csv b.csv c.csv --mode union --output_csv tmp/integrated_table.csv",
+            "--tables a.csv b.csv c.csv --mode alite --output_csv tmp/integrated_table.csv",
             flush=True,
         )
         return

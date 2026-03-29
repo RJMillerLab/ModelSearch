@@ -339,6 +339,8 @@ def integrate_model_search():
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
     integration_type = str(data["integration_type"]).strip()
+    if integration_type != "alite":
+        return api_error("Only integration_type=alite is supported.", 400)
     retrieval_mode = str(data["query2modelcard_retrieval_mode"]).strip()
     k = int(data["k"])
     max_models = int(data["max_models"])
@@ -369,6 +371,8 @@ def integrate():
     paths = JobPaths(JOBS_DIR, job_id)
     search_type = str(data["search_type"]).strip()
     integration_type = str(data["integration_type"]).strip()
+    if integration_type != "alite":
+        return api_error("Only integration_type=alite is supported.", 400)
     tables_source = str(data["tables_source"]).strip()
     k = int(data["k"])
     max_models = int(data["max_models"])
