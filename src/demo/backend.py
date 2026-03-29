@@ -134,12 +134,20 @@ def local_table_paths(items: List[str]) -> List[str]:
     return [resolve_table_path(name) for name in ordered_unique(items)]
 
 
+def ensure_job_state(job_id: str) -> Dict[str, Any]:
+    if job_id not in jobs:
+        jobs[job_id] = {"status": "completed" if _job_exists_on_disk(job_id) else "pending", "logs": [], "results": None}
+    jobs[job_id].setdefault("logs", [])
+    return jobs[job_id]
+
+
 def append_log(job_id: str, message: str) -> None:
     paths = JobPaths(JOBS_DIR, job_id)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
     line = f"[{ts}] [{job_id}] {message}"
-    jobs[job_id]["logs"].append({"timestamp": datetime.now().isoformat(), "message": message})
+    ensure_job_state(job_id)["logs"].append({"timestamp": datetime.now().isoformat(), "message": message})
     print(line, flush=True)
+    os.makedirs(paths.job_dir, exist_ok=True)
     with open(os.path.join(paths.job_dir, "pipeline_run.log"), "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -338,7 +346,7 @@ def integrate_model_search():
 
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
-    integration_type = str(data["integration_type"]).strip()
+    integration_type = str(data["integration_type"]).strip().lower()
     if integration_type != "alite":
         return api_error("Only integration_type=alite is supported.", 400)
     retrieval_mode = str(data["query2modelcard_retrieval_mode"]).strip()
@@ -370,7 +378,7 @@ def integrate():
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
     search_type = str(data["search_type"]).strip()
-    integration_type = str(data["integration_type"]).strip()
+    integration_type = str(data["integration_type"]).strip().lower()
     if integration_type != "alite":
         return api_error("Only integration_type=alite is supported.", 400)
     tables_source = str(data["tables_source"]).strip()
