@@ -28,6 +28,29 @@ class TableIntegrater:
     def load_tables(self, table_paths: List[str]) -> List[pd.DataFrame]:
         return [pd.read_csv(path) for path in table_paths]
 
+    def _make_columns_unique(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or len(df.columns) == 0:
+            return df
+        seen = {}
+        new_cols: List[str] = []
+        changed = False
+        for idx, col in enumerate(df.columns):
+            base = str(col).strip()
+            if not base or base.lower() == "nan":
+                base = f"col_{idx}"
+            count = seen.get(base, 0)
+            if count == 0:
+                new_cols.append(base)
+            else:
+                changed = True
+                new_cols.append(f"{base}__{count}")
+            seen[base] = count + 1
+        if not changed and list(df.columns) == new_cols:
+            return df
+        out = df.copy()
+        out.columns = new_cols
+        return out
+
     def _transpose_promote_first_row(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None:
             return pd.DataFrame()
@@ -43,7 +66,7 @@ class TableIntegrater:
             new_columns.append(text if text and text.lower() != "nan" else f"col_{idx}")
         transposed = transposed.iloc[1:].reset_index(drop=True)
         transposed.columns = new_columns
-        return transposed
+        return self._make_columns_unique(transposed)
 
     def _preprocess_transposed_table(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -68,7 +91,8 @@ class TableIntegrater:
         parent = os.path.dirname(os.path.abspath(path))
         if parent:
             os.makedirs(parent, exist_ok=True)
-        df.to_csv(path, index=False)
+        safe_df = self._make_columns_unique(df)
+        safe_df.to_csv(path, index=False)
         return path
 
     def _prepare_table_for_orientation(
@@ -165,7 +189,7 @@ class TableIntegrater:
             )
             if pair_df is None:
                 return None
-            current_df = pair_df
+            current_df = self._make_columns_unique(pair_df)
             current_path = os.path.join(target_dir, f"integrated_step_{step_idx - 1}.csv")
             self._write_temp_table(current_df, current_path)
 
@@ -185,7 +209,7 @@ class TableIntegrater:
             return output_df
 
         print("[final_align] transpose output back to align with query", flush=True)
-        return self._transpose_promote_first_row(output_df)
+        return self._make_columns_unique(self._transpose_promote_first_row(output_df))
 
     def _reorder_columns_deterministic(self, df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
         if df is None or df.empty or len(df.columns) == 0:
