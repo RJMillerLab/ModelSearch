@@ -481,6 +481,18 @@
                 container.style.display = 'block';
                 if (modelRuns.length > 0) setIntegrationDropdownsFromSaved(modelRuns[0], null);
                 if (tableRuns.length > 0) setIntegrationDropdownsFromSaved(null, tableRuns[0]);
+                if (tableRuns.length > 0) {
+                    const t = tableRuns[0];
+                    const key = getTableSearchKey(t.integration_type, t.search_type, t.tables_source);
+                    const activeKey = getTableSearchKey(
+                        (document.getElementById('integration_type') || {}).value || 'alite',
+                        (document.getElementById('integration_search_type') || {}).value || 'single_column',
+                        (document.getElementById('integration_tables_source') || {}).value || 'intermediate',
+                    );
+                    if (key !== activeKey) {
+                        setIntegrationDropdownsFromSaved(null, t);
+                    }
+                }
                 syncBothIntegrationDisplays();
             } else {
             const hasModel = data.integration_model_search && data.integration_model_search.status === 'success' && data.integration_model_search.integrated_table;
@@ -976,9 +988,6 @@
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="alite">ALITE</option>
-                            <option value="union">Union</option>
-                            <option value="intersection">Intersection</option>
-                            <option value="outer_join">Outer Join</option>
                         </select></div>
                         <!-- top k tables/models: commented out - use defaults; integrate prints #tables/#models -->
                         <div style="display: none;"><input type="number" id="integration_k" value="${defaultIntegrationK}" min="1" max="50"><input type="number" id="integration_max_models" value="${defaultIntegrationMaxModels}" min="1" max="50"></div>
@@ -1112,7 +1121,7 @@
             return String(key || '').toLowerCase();
         }
         function getModelSearchKey(integrationType, retrievalMode) {
-            const it = String(integrationType || 'union').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+            const it = String(integrationType || 'alite').toLowerCase().replace(/[^a-z0-9_]/g, '_');
             const rm = String(retrievalMode || 'dense').toLowerCase().replace(/[^a-z0-9_]/g, '_');
             return `${it}_${rm}`;
         }
@@ -1124,7 +1133,7 @@
         }
         function getTableSearchKey(integrationType, searchType, tablesSource) {
             const src = (tablesSource || 'intermediate').toLowerCase().replace(/-/g, '_').replace(/[^a-z0-9_]/g, '_');
-            return [(integrationType || 'union'), (searchType || 'single_column'), src].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
+            return [(integrationType || 'alite'), (searchType || 'single_column'), src].map(s => String(s).toLowerCase().replace(/[^a-z0-9_]/g, '_')).join('_');
         }
 
         function refreshQAIntegratedPaths() {
@@ -1745,7 +1754,7 @@
         }
         
         async function runBothIntegrations(jobId) {
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
@@ -1925,7 +1934,7 @@
             const tablesSource = 'intermediate';
             const btn = document.getElementById('integrationRunAllTableBtn');
             if (!btn) return;
-            const integrationTypes = ['alite', 'union', 'intersection', 'outer_join'];
+            const integrationTypes = ['alite'];
             const tableSearchTypes = ['single_column','keyword','multi_column','unionable','complex','correlation','imputation','augmentation','dependent_data','feature_for_ml','multi_column_collinearity','negative_example'];
             btn.disabled = true;
             const originalText = btn.textContent;
@@ -1976,7 +1985,7 @@
         
         async function runIntegration(jobId) {
             const searchType = (document.getElementById('integration_search_type') || {}).value || 'single_column';
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;
             
@@ -2025,7 +2034,7 @@
         }
         
         async function runModelSearchIntegration(jobId) {
-            const integrationType = (document.getElementById('integration_type') || {}).value || 'union';
+            const integrationType = (document.getElementById('integration_type') || {}).value || 'alite';
             const retrievalMode = (document.getElementById('integration_q2m_mode') || {}).value || 'dense';
             const k = parseInt((document.getElementById('integration_k') || {}).value, 10) || 10;
             const maxModels = parseInt((document.getElementById('integration_max_models') || {}).value, 10) || 10;

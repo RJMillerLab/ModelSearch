@@ -15,13 +15,14 @@ from typing import List, Optional
 
 import pandas as pd
 
-from src.integration.quick_aug_recognition import KeywordRecognizerForAlite
+from src.integration.quick_aug_recognition import KeywordRecognizer, KeywordRecognizerForAlite
 
 
 class TableIntegrater:
     def __init__(self, temp_dir: Optional[str] = None):
         self.temp_dir = os.path.abspath(temp_dir) if temp_dir else None
         self.keyword_recognizer = KeywordRecognizerForAlite(verbose=False)
+        self.output_aligner = KeywordRecognizer(verbose=False)
 
     def load_tables(self, table_paths: List[str]) -> List[pd.DataFrame]:
         return [pd.read_csv(path) for path in table_paths]
@@ -177,6 +178,22 @@ class TableIntegrater:
 
         return current_df
 
+    def _align_output_to_query(self, query_df: pd.DataFrame, output_df: pd.DataFrame) -> pd.DataFrame:
+        if query_df is None or output_df is None or output_df.empty:
+            return output_df
+
+        decision = self.output_aligner.recognize_one_dataframe(
+            query_df=query_df,
+            retrieved_df=output_df,
+            table_name="integrated_output",
+        )
+        if decision != "tr":
+            print("[final_align] keep output orientation aligned with query", flush=True)
+            return output_df
+
+        print("[final_align] transpose output back to align with query", flush=True)
+        return self._transpose_promote_first_row(output_df)
+
     def _reorder_columns_deterministic(self, df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
         if df is None or df.empty or len(df.columns) == 0:
             return df
@@ -203,7 +220,10 @@ class TableIntegrater:
 
         if mode != "alite":
             raise ValueError(f"Only 'alite' integration is supported now, got: {mode}")
+        query_df = pd.read_csv(table_paths[0])
         df = self._integrate_tables_alite(table_paths, temp_dir=temp_dir)
+        if df is not None:
+            df = self._align_output_to_query(query_df, df)
 
         return self._reorder_columns_deterministic(df) if df is not None else None
 
