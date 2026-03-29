@@ -231,8 +231,8 @@ def main() -> int:
     parser.add_argument(
         "--table_search_k",
         type=int,
-        default=3,
-        help="Per-table search k (frontend slider, default 3).",
+        default=2,
+        help="Per-table search k (frontend slider, default 2).",
     )
     parser.add_argument(
         "--top_k",
