@@ -375,6 +375,9 @@ def table_search_preview():
     data = request.get_json() or {}
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
+    # `search_type` here refers to the table-retrieval mode from Query2Tab2Card
+    # (for example: keyword / single_column / unionable). It is unrelated to the
+    # internal keyword-based transpose recognition now embedded in TableIntegrater.
     search_type = str(data.get("search_type", "single_column")).strip()
     tables_source = str(data.get("tables_source", "intermediate")).strip()
     payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, tables_source=tables_source)
@@ -426,6 +429,9 @@ def integrate():
 
     job_id = str(data["job_id"]).strip()
     paths = JobPaths(JOBS_DIR, job_id)
+    # This `search_type` is still the retrieval bucket name used to load the saved
+    # Query2Tab2Card results. Orientation detection is no longer driven by backend
+    # parameters; it is handled internally inside TableIntegrater.
     search_type = str(data["search_type"]).strip()
     integration_type = str(data["integration_type"]).strip().lower()
     if integration_type != "alite":

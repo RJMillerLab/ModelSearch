@@ -15,10 +15,13 @@ from typing import List, Optional
 
 import pandas as pd
 
+from src.integration.quick_aug_recognition import KeywordRecognizer
+
 
 class TableIntegrater:
     def __init__(self, temp_dir: Optional[str] = None):
         self.temp_dir = os.path.abspath(temp_dir) if temp_dir else None
+        self.keyword_recognizer = KeywordRecognizer(verbose=False)
 
     def load_tables(self, table_paths: List[str]) -> List[pd.DataFrame]:
         return [pd.read_csv(path) for path in table_paths]
@@ -54,46 +57,50 @@ class TableIntegrater:
         out.columns = cols
         return out
 
-    def _postprocess_table_paths(
-        self,
-        table_paths: List[str],
-        table_orientations: Optional[List[str]] = None,
-        temp_dir: Optional[str] = None,
-    ) -> List[str]:
-        if not table_orientations:
-            return list(table_paths)
-
-        assert len(table_orientations) == len(table_paths), (
-            f"table_orientations length {len(table_orientations)} must match "
-            f"table_paths length {len(table_paths)}"
-        )
-
+    def _get_temp_dir(self, temp_dir: Optional[str] = None) -> str:
         target_dir = os.path.abspath(temp_dir or self.temp_dir or "tmp")
         os.makedirs(target_dir, exist_ok=True)
-        out_paths: List[str] = []
+        return target_dir
 
-        for idx, (path, orientation) in enumerate(zip(table_paths, table_orientations), start=1):
-            mode = str(orientation or "ori").strip().lower()
-            if mode == "ori":
-                out_paths.append(path)
-                continue
-            if mode != "tr":
-                raise ValueError(f"Unsupported table orientation: {orientation!r}; expected 'ori' or 'tr'")
+    def _write_temp_table(self, df: pd.DataFrame, path: str) -> str:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        df.to_csv(path, index=False)
+        return path
 
-            df = pd.read_csv(path)
-            transposed = self._transpose_promote_first_row(df)
-            transposed = self._preprocess_transposed_table(transposed)
-            tmp_path = os.path.join(target_dir, f"tmp_{idx}.csv")
-            transposed.to_csv(tmp_path, index=False)
-            print(f"[postprocess] transpose table {idx}: {os.path.basename(path)} -> {tmp_path}", flush=True)
-            out_paths.append(tmp_path)
+    def _prepare_candidate_path(
+        self,
+        *,
+        anchor_df: pd.DataFrame,
+        candidate_path: str,
+        step_idx: int,
+        temp_dir: Optional[str] = None,
+    ) -> str:
+        target_dir = self._get_temp_dir(temp_dir)
+        candidate_df = pd.read_csv(candidate_path)
+        decision = self.keyword_recognizer.recognize_one_dataframe(
+            query_df=anchor_df,
+            retrieved_df=candidate_df,
+            table_name=os.path.basename(candidate_path),
+        )
+        if decision != "tr":
+            print(f"[quick_aug] step={step_idx} keep {os.path.basename(candidate_path)}", flush=True)
+            return candidate_path
 
-        return out_paths
+        transposed = self._transpose_promote_first_row(candidate_df)
+        transposed = self._preprocess_transposed_table(transposed)
+        tmp_path = os.path.join(target_dir, f"tmp_step_{step_idx}.csv")
+        self._write_temp_table(transposed, tmp_path)
+        print(
+            f"[quick_aug] step={step_idx} transpose {os.path.basename(candidate_path)} -> {tmp_path}",
+            flush=True,
+        )
+        return tmp_path
 
-    def _integrate_tables_alite(
+    def _integrate_tables_original_alite(
         self,
         table_paths: List[str],
-        table_orientations: Optional[List[str]] = None,
         temp_dir: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
         from src.config import ALITE_INTERNAL_REPO
@@ -102,7 +109,6 @@ class TableIntegrater:
             print("⚠️  ALITE requires file paths, not DataFrames", flush=True)
             return None
 
-        table_paths = self._postprocess_table_paths(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
         alite_repo = os.path.abspath(ALITE_INTERNAL_REPO)
         alite_codes_dir = os.path.join(alite_repo, "codes")
         if alite_codes_dir not in sys.path:
@@ -117,6 +123,45 @@ class TableIntegrater:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 result_fd, _stats_df, _debug_dict = alite_module.FDAlgorithm(table_paths.copy(), cluster="__".join(os.path.splitext(os.path.basename(table_path))[0] for table_path in table_paths))
         return result_fd
+
+    def _integrate_tables_alite(
+            self,
+            table_paths: List[str],
+            temp_dir: Optional[str] = None,
+        ) -> Optional[pd.DataFrame]:
+        if not table_paths:
+            print("⚠️  ALITE requires file paths, not DataFrames", flush=True)
+            return None
+
+        if len(table_paths) == 1:
+            return pd.read_csv(table_paths[0])
+
+        target_dir = self._get_temp_dir(temp_dir)
+        current_path = table_paths[0]
+        current_df = pd.read_csv(current_path)
+
+        for step_idx, candidate_path in enumerate(table_paths[1:], start=2):
+            prepared_candidate_path = self._prepare_candidate_path(
+                anchor_df=current_df,
+                candidate_path=candidate_path,
+                step_idx=step_idx,
+                temp_dir=target_dir,
+            )
+            print(
+                f"[alite] iterative step={step_idx - 1} pair=({os.path.basename(current_path)}, {os.path.basename(prepared_candidate_path)})",
+                flush=True,
+            )
+            pair_df = self._integrate_tables_original_alite(
+                [current_path, prepared_candidate_path],
+                temp_dir=target_dir,
+            )
+            if pair_df is None:
+                return None
+            current_df = pair_df
+            current_path = os.path.join(target_dir, f"integrated_step_{step_idx - 1}.csv")
+            self._write_temp_table(current_df, current_path)
+
+        return current_df
 
     def _reorder_columns_deterministic(self, df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
         if df is None or df.empty or len(df.columns) == 0:
@@ -136,7 +181,6 @@ class TableIntegrater:
         self,
         table_paths: List[str],
         mode: str = "alite",
-        table_orientations: Optional[List[str]] = None,
         temp_dir: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
         if not table_paths:
@@ -145,7 +189,7 @@ class TableIntegrater:
 
         if mode != "alite":
             raise ValueError(f"Only 'alite' integration is supported now, got: {mode}")
-        df = self._integrate_tables_alite(table_paths, table_orientations=table_orientations, temp_dir=temp_dir)
+        df = self._integrate_tables_alite(table_paths, temp_dir=temp_dir)
 
         return self._reorder_columns_deterministic(df) if df is not None else None
 
@@ -162,7 +206,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Integrate tables from CSV paths.")
     parser.add_argument("--tables", nargs="+", help="CSV paths to integrate.")
     parser.add_argument("--mode", choices=["alite"], default="alite")
-    parser.add_argument("--table_orientations", nargs="*", help="Optional ori/tr list aligned with --tables.")
     parser.add_argument("--output_csv", default="tmp/integrated_table.csv")
     parser.add_argument("--temp_dir", default="tmp")
     args = parser.parse_args()
@@ -182,15 +225,11 @@ def main() -> None:
     if missing:
         raise FileNotFoundError(f"Missing table paths: {missing}")
 
-    if args.table_orientations and len(args.table_orientations) != len(table_paths):
-        raise ValueError("--table_orientations length must match --tables length")
-
     print(f"[table_integration] mode={args.mode} tables={len(table_paths)} output={os.path.abspath(args.output_csv)}", flush=True)
     integrater = TableIntegrater(temp_dir=args.temp_dir)
     df = integrater.run(
         table_paths,
         mode=args.mode,
-        table_orientations=list(args.table_orientations) if args.table_orientations else None,
         temp_dir=args.temp_dir,
     )
     if df is None:
