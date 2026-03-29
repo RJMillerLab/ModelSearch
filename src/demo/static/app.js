@@ -744,15 +744,10 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;');
             // Seed model + Query tables: same row, two columns (aligned with the two result cards below)
-            const seedModelId = results.model_id || null;
             const tableSearchSeedId = results.table_search_seed_model_id || null;
-            const seedModelCell = results.error ? '' : (seedModelId
-                ? `<div class="retrieval-seed-col"><div class="retrieval-seed-line"><strong>Query2Card seed (top-1):</strong> <a class="retrieval-seed-link" href="https://huggingface.co/${seedModelId}" target="_blank" rel="noopener noreferrer">${seedModelId}</a></div>${
-                    tableSearchSeedId && tableSearchSeedId !== seedModelId
-                        ? `<div class="retrieval-seed-line"><strong>Query2Tab2Card seed (first with tables):</strong> <a class="retrieval-seed-link" href="https://huggingface.co/${tableSearchSeedId}" target="_blank" rel="noopener noreferrer">${tableSearchSeedId}</a></div>`
-                        : ''
-                  }</div>`
-                : `<span style="font-size: 12px; color: #856404;">⚠️ Model ID missing</span>`);
+            const seedModelCell = results.error ? '' : (tableSearchSeedId
+                ? `<div class="retrieval-seed-col"><div class="retrieval-seed-line"><strong>Table-search anchor seed:</strong> <a class="retrieval-seed-link" href="https://huggingface.co/${tableSearchSeedId}" target="_blank" rel="noopener noreferrer">${tableSearchSeedId}</a></div></div>`
+                : `<span style="font-size: 12px; color: #856404;">⚠️ Table-search seed missing</span>`);
             // Query table path(s) from seed model card — used to run table search; result items below are model cards hit by that search
             let queryTables = [];
             let searchedTables = [];

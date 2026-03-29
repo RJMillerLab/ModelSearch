@@ -145,17 +145,15 @@ class Query2ModelCardFile:
     def seed_model_id(self) -> str:
         return str(self.dense[0]).strip()
 
-    def neighbor_model_ids(self, mode: str, limit: int) -> List[str]:
+    def mode_model_ids(self, mode: str, limit: int) -> List[str]:
         model_ids = []
         for item in self.results[mode]:
             model_id = str(item).strip()
-            if model_id == self.seed_model_id:
-                continue
             model_ids.append(model_id)
         return list(dict.fromkeys(model_ids))[:limit]
 
     def build_preview(self, *, query: str, table_resources: List[str], mode: str, max_models: int) -> Dict[str, Any]:
-        model_ids = self.neighbor_model_ids(mode, max_models)
+        model_ids = self.mode_model_ids(mode, max_models)
         model_to_all_tables = _get_models_to_tables_batch_sql(model_ids, resources=table_resources)
         model_to_table_paths = {mid: [name for name in list(dict.fromkeys(str(x).strip() for x in model_to_all_tables[mid] if str(x).strip())) if resolve_table_path(name)] for mid in model_ids}
         model_to_table_paths = {mid: paths for mid, paths in model_to_table_paths.items() if paths}
@@ -200,7 +198,14 @@ class Query2Tab2CardFullMap:
         reranked = self.full_map["model_rerank_map"]
         query = next(iter(q2c.keys()))
         seed_models = [str(x).strip() for x in q2c[query]]
-        query_tables = list(dict.fromkeys([str(t) for t in card2tab[seed_models[0]]]))
+        query_tables = list(
+            dict.fromkeys(
+                str(t)
+                for seed_model in seed_models
+                for t in card2tab.get(seed_model, [])
+                if str(t).strip()
+            )
+        )
         candidate_pool = list(dict.fromkeys(x for v in tab2card.values() for x in v))
         retrieved_unique = list(dict.fromkeys(sum(tab2tab.values(), [])))
         model_to_all_table_paths = {mid: load_modelid_to_csvlist(mid, resources=["hugging"]) for mid in reranked}

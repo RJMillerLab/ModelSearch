@@ -360,13 +360,13 @@ def _query2card_seed_and_neighbors(payload: Dict[str, Any], mode: str, max_model
     dense = results.get("dense", []) if isinstance(results, dict) else []
     seed = str(dense[0]).strip() if dense else ""
     mode_items = results.get(mode, []) if isinstance(results, dict) else []
-    neighbors: List[str] = []
+    ranked: List[str] = []
     for item in mode_items:
         mid = str(item).strip()
-        if not mid or mid == seed:
+        if not mid:
             continue
-        neighbors.append(mid)
-    out = _unique_keep_order(neighbors)
+        ranked.append(mid)
+    out = _unique_keep_order(ranked)
     if max_models is None:
         return seed, out
     return seed, out[: max(0, int(max_models))]
@@ -453,7 +453,12 @@ def _build_query2tab2card_preview(job_dir: str, search_type: str, *, max_models:
     query = next(iter(q2c.keys()), "")
     seed_models = [str(x).strip() for x in q2c.get(query, []) if str(x).strip()]
     seed_model = seed_models[0] if seed_models else ""
-    query_tables = [str(x).strip() for x in card2tab.get(seed_model, []) if str(x).strip()]
+    query_tables = _unique_keep_order(
+        str(x).strip()
+        for seed_model_id in seed_models
+        for x in card2tab.get(seed_model_id, [])
+        if str(x).strip()
+    )
 
     model_ids = [str(x).strip() for x in reranked if str(x).strip()]
     if max_models is not None:
@@ -685,6 +690,12 @@ def _union_schema_table(name: str, tables: Sequence[TableData]) -> TableData:
     return TableData(path=name, source_path=name, display_name=name, columns=cols, rows=[])
 
 
+def _query_table_labels(query_tables: Sequence[TableData]) -> List[str]:
+    if len(query_tables) <= 1:
+        return ["Query table"] if query_tables else []
+    return [f"Query table {idx}" for idx in range(1, len(query_tables) + 1)]
+
+
 def build_job_markdown(
     *,
     job_dir: str,
@@ -785,6 +796,13 @@ def build_job_markdown(
         integration_input_labels: List[str] = []
         if integration_input_paths:
             normalized_query_paths = {str(p).strip() for p in (preview.get("query_tables", []) or []) if str(p).strip()}
+            query_table_count = len(preview.get("query_tables", []) or [])
+            query_label_by_path: Dict[str, str] = {}
+            for idx, qpath in enumerate(preview.get("query_tables", []) or [], start=1):
+                qpath_s = str(qpath).strip()
+                if not qpath_s:
+                    continue
+                query_label_by_path[qpath_s] = "Query table" if query_table_count == 1 else f"Query table {idx}"
             retrieved_idx = 0
             for path in integration_input_paths:
                 path_s = str(path).strip()
@@ -792,7 +810,7 @@ def build_job_markdown(
                     continue
                 integration_input_tables.append(_read_csv_table(path_s))
                 if path_s in normalized_query_paths:
-                    integration_input_labels.append("Query table")
+                    integration_input_labels.append(query_label_by_path.get(path_s, "Query table"))
                 else:
                     retrieved_idx += 1
                     label_prefix = "Related table" if integration_payload.get("tables_source") == "all_from_modelcards" else "Retrieved table"
@@ -800,7 +818,7 @@ def build_job_markdown(
         else:
             integration_input_tables = list(query_tables) + list(retrieved_tables)
             label_prefix = "Related table" if integration_payload.get("tables_source") == "all_from_modelcards" else "Retrieved table"
-            integration_input_labels = (["Query table"] if query_tables else []) + [f"{label_prefix} {idx}" for idx in range(1, len(retrieved_tables) + 1)]
+            integration_input_labels = _query_table_labels(query_tables) + [f"{label_prefix} {idx}" for idx in range(1, len(retrieved_tables) + 1)]
         integrated_table = _load_integrated_table_candidates(
             job_dir,
             [
@@ -809,8 +827,10 @@ def build_job_markdown(
             ],
         )
 
-        if query_tables:
+        if len(query_tables) == 1:
             lines.extend(_render_table_section(f"Query Table ({search_type})", query_tables[0], max_rows=preview_max_rows, max_cols=preview_max_cols))
+        elif query_tables:
+            lines.extend(_render_retrieved_tables_section(f"Query Tables ({search_type})", query_tables, max_rows=preview_max_rows, max_cols=preview_max_cols))
         else:
             lines.extend(_render_table_section(f"Query Table ({search_type})", TableData("", "", "(missing)", [], []), max_rows=preview_max_rows, max_cols=preview_max_cols))
         lines.extend(
@@ -828,8 +848,10 @@ def build_job_markdown(
         lines.append("")
 
         if query_tables:
-            stats = _compare_columns(query_tables[0], integrated_table)
-            lines.extend(_render_compare_block("Query Table vs Integrated Table", stats, left_name="query table", right_name="integrated"))
+            query_compare_table = query_tables[0] if len(query_tables) == 1 else _union_schema_table(f"query-union-{search_type}", query_tables)
+            left_name = "query table" if len(query_tables) == 1 else "query tables union"
+            stats = _compare_columns(query_compare_table, integrated_table)
+            lines.extend(_render_compare_block("Query Table vs Integrated Table", stats, left_name=left_name, right_name="integrated"))
 
         if retrieved_tables:
             union_table = _union_schema_table(f"retrieved-union-{search_type}", retrieved_tables)

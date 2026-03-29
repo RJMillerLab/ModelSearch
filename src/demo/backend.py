@@ -27,7 +27,7 @@ from src.integration.table_integration import TableIntegrater
 from src.search.ir_searcher import DenseSearcher, SparseSearcher
 from src.search.query2modelcard import Query2ModelCardSearch
 from src.search.query2tab2card import Query2Tab2CardSearch
-from src.utils import _paths_for_resource_set, preview_from_local, resolve_table_path
+from src.utils import _paths_for_resource_set, preview_from_local, read_csv_robust, resolve_table_path
 
 
 MAX_TABLE_PAGE_ROWS = 25000
@@ -171,7 +171,7 @@ def ordered_unique_paths(items: List[str]) -> List[str]:
 
 def _table_payload_from_path(path_q: str) -> Dict[str, Any]:
     resolved = resolve_table_path(path_q) or str(path_q)
-    df = pd.read_csv(resolved)
+    df = read_csv_robust(resolved)
     return {
         "columns": list(df.columns),
         "data": sanitize_for_json(df.values.tolist()),
@@ -213,7 +213,7 @@ def _load_json_if_exists(path: str) -> Optional[Dict[str, Any]]:
 
 
 def _csv_table_payload(csv_path: str) -> Dict[str, Any]:
-    df = pd.read_csv(csv_path)
+    df = read_csv_robust(csv_path)
     return {
         "columns": list(df.columns),
         "data": sanitize_for_json(df.values.tolist()),

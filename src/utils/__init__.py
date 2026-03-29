@@ -2,6 +2,7 @@
 Utility functions for modelsearch
 """
 import os
+import re
 import pandas as pd
 import duckdb
 import numpy as np
@@ -27,7 +28,59 @@ __all__ = ["get_device", "load_combined_data", "load_table", "resolve_table_path
     "table_to_markdown",
     "get_model_tables_from_db",
     "_paths_for_resource_set",
+    "read_csv_robust",
 ]
+
+
+def _maybe_fix_mojibake_utf8(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    s = value
+    if not s:
+        return s
+    if "\ufffd" in s:
+        # If replacement chars already exist, keep as-is; original bytes are gone.
+        return s
+    if not re.search(r"[ÃÂâãäå]", s):
+        return s
+    try:
+        if any(ord(ch) > 255 for ch in s):
+            return s
+        fixed = bytes((ord(ch) & 0xFF) for ch in s).decode("utf-8")
+        src_bad = len(re.findall(r"[ÃÂâãäå]", s))
+        fixed_bad = len(re.findall(r"[ÃÂâãäå]", fixed))
+        return fixed if fixed_bad < src_bad else s
+    except Exception:
+        return s
+
+
+def _normalize_text_df(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out.columns = [_maybe_fix_mojibake_utf8(str(c)) for c in out.columns]
+    for col in out.columns:
+        series = out[col]
+        if getattr(series.dtype, "kind", "") in {"O", "U", "S"}:
+            out[col] = series.map(_maybe_fix_mojibake_utf8)
+    return out
+
+
+def read_csv_robust(csv_path: str, **kwargs) -> pd.DataFrame:
+    """
+    Read CSVs with a few lightweight encoding fallbacks, then normalize common
+    UTF-8 mojibake in headers / string cells.
+    """
+    last_exc: Optional[Exception] = None
+    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin1"):
+        try:
+            df = pd.read_csv(csv_path, encoding=enc, **kwargs)
+            return _normalize_text_df(df)
+        except UnicodeDecodeError as exc:
+            last_exc = exc
+            continue
+    if last_exc is not None:
+        raise last_exc
+    df = pd.read_csv(csv_path, **kwargs)
+    return _normalize_text_df(df)
 
 
 def get_device() -> str:
@@ -551,7 +604,7 @@ def load_table(csv_path: str) -> Optional[pd.DataFrame]:
     """
     resolved = resolve_table_path(csv_path)
     if resolved and os.path.exists(resolved):
-        return pd.read_csv(resolved)
+        return read_csv_robust(resolved)
     print(f"⚠️  Table not found: {csv_path}")
     return None
 
@@ -570,7 +623,7 @@ def preview_from_local(raw_path: str, *, max_rows: int, max_cols: int) -> Tuple[
     if not resolved or not os.path.isfile(resolved):
         return None, "local", bn
 
-    df = pd.read_csv(resolved, nrows=max(1, int(max_rows)))
+    df = read_csv_robust(resolved, nrows=max(1, int(max_rows)))
     if int(max_cols) > 0 and df.shape[1] > int(max_cols):
         df = df.iloc[:, : int(max_cols)]
     return df, f"csv:{resolved}", os.path.basename(resolved)
