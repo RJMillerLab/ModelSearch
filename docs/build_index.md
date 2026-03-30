@@ -162,7 +162,7 @@ python -m src.search.query2tab2card --resources hugging --query "bert base uncas
 
 # Optional controls for query2tab2card:
 #   --model_top_k 5
-#   --q2m_top_k 20 --seed_rank_index 0 --disable_query_rerank
+#   --q2m_top_k 20
 ```
 
 <details><summary>Optional 2.5 tab2tab_by_type</summary>
@@ -219,9 +219,12 @@ mimic user for batch running
 python -m src.utils.batch_run_preset_queries \
   --backend_url http://localhost:5002 \
   --preset_path config/preset_queries.json \
+  --model_top_k 3 \
   --run_integration \
   --integration_type alite \
   --integration_search_types single_column unionable keyword
+# By default, batch integration now runs both:
+#   --integration_tables_sources intermediate all_from_modelcards
 ```
 
 generate markdown for query table and retrieved tables and integrated tables
@@ -250,7 +253,6 @@ ALITE_VERBOSE=1 python -m src.integration.table_integration \
   ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/e5322d01d4_table1.csv \
   ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/0a86da9b8e_table1.csv \
   ../ModelTables/data/processed/deduped_hugging_csvs_v2_251117/5a0c87e1c5_table2.csv \
-  --table_orientations ori ori ori tr \
   --mode alite \
   --temp_dir tmp \
   --output_csv tmp/integrated_table.csv

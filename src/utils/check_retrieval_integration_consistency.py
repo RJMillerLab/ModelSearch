@@ -49,6 +49,16 @@ from src.config import MODEL_TO_TABLES_EXPLODE_PARQUET, QUERY2MODELCARD_RETRIEVA
 DEFAULT_SEARCH_TYPES = ["single_column", "unionable", "keyword"]
 DEFAULT_INTEGRATION_TYPE = "alite"
 DEFAULT_JOB_MARKDOWN_FILENAME = "integration_review.md"
+TABLES_SOURCES = ["intermediate", "all_from_modelcards"]
+
+
+def _tables_source_label(tables_source: str) -> str:
+    source = str(tables_source or "").strip()
+    if source == "all_from_modelcards":
+        return "all tables from modelcards"
+    if source == "intermediate":
+        return "intermediate retrieved tables"
+    return source or "tables"
 
 
 @dataclass
@@ -541,9 +551,10 @@ def _render_query2card_summary(preview: Dict[str, Any], *, heading_level: int = 
     return lines
 
 
-def _render_query2tab2card_summary(preview: Dict[str, Any]) -> List[str]:
+def _render_query2tab2card_summary(preview: Dict[str, Any], *, tables_source: str) -> List[str]:
     stats = preview.get("stats", {}) or {}
-    lines = [f"## Query2Tab2Card Summary ({preview.get('search_type', '')})", ""]
+    source_label = _tables_source_label(tables_source)
+    lines = [f"## Query2Tab2Card Summary ({preview.get('search_type', '')}, {source_label})", ""]
     lines.append(f"- Seed model id: `{_md_escape(preview.get('seed_model_id', ''))}`")
     lines.append(f"- UI summary header: `Model IDs (2 Query2Tab2Card Results)` ({stats.get('models_with_tables', 0)} models, {stats.get('total_unique_tables', 0)} tables)")
     lines.append("")
@@ -551,14 +562,17 @@ def _render_query2tab2card_summary(preview: Dict[str, Any]) -> List[str]:
     lines.append("")
 
     query_tables = preview.get("query_tables", []) or []
-    if query_tables:
+    if tables_source == "all_from_modelcards":
+        lines.append("- Query table(s): _(not used in all tables from modelcards mode)_")
+    elif query_tables:
         lines.append(f"- Query table(s): {', '.join(_table_label_md(t) for t in query_tables)}")
     else:
         lines.append("- Query table(s): _(missing)_")
 
     rows = preview.get("retrieved_table_model_rows", []) or []
     if not rows:
-        lines.append("- Retrieved table list: _(empty)_")
+        row_label = "Related table list" if tables_source == "all_from_modelcards" else "Retrieved table list"
+        lines.append(f"- {row_label}: _(empty)_")
         lines.append("")
         return lines
 
@@ -566,16 +580,10 @@ def _render_query2tab2card_summary(preview: Dict[str, Any]) -> List[str]:
         models = row.get("models", []) or []
         model_frag = ", ".join(_model_link_md(mid) for mid in models) if models else "_(none)_"
         table_name = row.get("table_path") or row.get("table") or ""
-        lines.append(f"- Retrieved table {idx}: {_table_label_md(table_name)} -> related models: {model_frag}")
+        row_label = "Related table" if tables_source == "all_from_modelcards" else "Retrieved table"
+        lines.append(f"- {row_label} {idx}: {_table_label_md(table_name)} -> related models: {model_frag}")
     lines.append("")
     return lines
-
-
-def _load_integrated_table(job_dir: str, filename: str) -> TableData:
-    path = os.path.join(job_dir, filename)
-    if not os.path.isfile(path):
-        return TableData(path=path, source_path="", display_name=filename, columns=[], rows=[])
-    return _read_csv_table(path)
 
 
 def _load_integrated_table_candidates(job_dir: str, filenames: Sequence[str]) -> TableData:
@@ -598,33 +606,6 @@ def _load_table_integration_payload(job_dir: str, integration_type: str, search_
     ]
     path = _resolve_existing_file(os.path.join(job_dir, name) for name in candidates)
     return _load_json_if_exists(path) if path else {}
-
-
-def _render_table_section(title: str, table: TableData, *, max_rows: Optional[int], max_cols: Optional[int]) -> List[str]:
-    lines = [f"### {title}", ""]
-    lines.append(f"- Source: {_file_link_md(table.source_path or table.path or '(missing)', label=table.display_name or 'table')}")
-    lines.append(f"- Shape: `{table.row_count} x {table.col_count}`")
-    lines.append("")
-    lines.append(_table_to_markdown(table, max_rows=max_rows, max_cols=max_cols))
-    lines.append("")
-    return lines
-
-
-def _render_retrieved_tables_section(title: str, tables: List[TableData], *, max_rows: Optional[int], max_cols: Optional[int]) -> List[str]:
-    lines = [f"### {title}", ""]
-    if not tables:
-        lines.append("_(no tables)_")
-        lines.append("")
-        return lines
-    for idx, table in enumerate(tables, start=1):
-        lines.append(f"#### {idx}. `{_md_escape(table.display_name)}`")
-        lines.append("")
-        lines.append(f"- Source: {_file_link_md(table.source_path or table.path or '(missing)', label=table.display_name or 'table')}")
-        lines.append(f"- Shape: `{table.row_count} x {table.col_count}`")
-        lines.append("")
-        lines.append(_table_to_markdown(table, max_rows=max_rows, max_cols=max_cols))
-        lines.append("")
-    return lines
 
 
 def _render_horizontal_review_section(
@@ -685,15 +666,50 @@ def _render_horizontal_review_section(
     return lines
 
 
+def _render_grouped_horizontal_review_sections(
+    title: str,
+    job_dir: str,
+    grouped_items: Sequence[Dict[str, Any]],
+    *,
+    max_rows: Optional[int],
+    max_cols: Optional[int],
+) -> List[str]:
+    lines = [f"### {title}", ""]
+    if not grouped_items:
+        lines.append("_(no grouped integrated tables)_")
+        lines.append("")
+        return lines
+    for idx, item in enumerate(grouped_items, start=1):
+        query_table_path = str(item.get("query_table_path") or "").strip()
+        retrieved_table_paths = [str(path).strip() for path in (item.get("retrieved_table_paths") or []) if str(path).strip()]
+        integrated_table_path = str(item.get("saved_path") or "").strip()
+        if integrated_table_path and not os.path.isabs(integrated_table_path):
+            integrated_table_path = os.path.join(job_dir, integrated_table_path)
+        source_tables: List[TableData] = []
+        source_labels: List[str] = []
+        if query_table_path:
+            source_tables.append(_read_csv_table(query_table_path))
+            source_labels.append("Query table")
+        for ridx, path in enumerate(retrieved_table_paths, start=1):
+            source_tables.append(_read_csv_table(path))
+            source_labels.append(f"Retrieved table {ridx}")
+        integrated_table = _read_csv_table(integrated_table_path) if integrated_table_path else TableData(path="", source_path="", display_name="(missing)", columns=[], rows=[])
+        lines.extend(
+            _render_horizontal_review_section(
+                f"{title} - Group {idx}",
+                source_tables,
+                integrated_table,
+                max_rows=max_rows,
+                max_cols=max_cols,
+                source_labels=source_labels,
+            )
+        )
+    return lines
+
+
 def _union_schema_table(name: str, tables: Sequence[TableData]) -> TableData:
     cols = _unique_keep_order(col for table in tables for col in table.columns if col)
     return TableData(path=name, source_path=name, display_name=name, columns=cols, rows=[])
-
-
-def _query_table_labels(query_tables: Sequence[TableData]) -> List[str]:
-    if len(query_tables) <= 1:
-        return ["Query table"] if query_tables else []
-    return [f"Query table {idx}" for idx in range(1, len(query_tables) + 1)]
 
 
 def build_job_markdown(
@@ -728,8 +744,10 @@ def build_job_markdown(
     for mode in QUERY2MODELCARD_RETRIEVAL_MODES:
         lines.append(f"- [Query2Card {mode}](#query2card-summary-{_slug_anchor(mode)})")
     for search_type in active_search_types:
-        anchor = _slug_anchor(search_type)
-        lines.append(f"- [Query2Tab2Card {search_type}](#query2tab2card-summary-{anchor})")
+        for tables_source in TABLES_SOURCES:
+            source_label = _tables_source_label(tables_source)
+            anchor = _slug_anchor(f"{search_type}-{source_label}")
+            lines.append(f"- [Query2Tab2Card {search_type} ({source_label})](#query2tab2card-integration-review-{anchor})")
     lines.append("")
 
     q2c_max_models = None
@@ -743,8 +761,6 @@ def build_job_markdown(
         mode: _build_query2card_preview(job_dir, mode=mode, max_models=q2c_max_models)
         for mode in QUERY2MODELCARD_RETRIEVAL_MODES
     }
-    q2c_integrated_by_mode: Dict[str, TableData] = {}
-
     for mode in QUERY2MODELCARD_RETRIEVAL_MODES:
         preview = q2c_previews_by_mode[mode]
         lines.extend(_render_query2card_summary(preview, heading_level=3))
@@ -758,7 +774,6 @@ def build_job_markdown(
                 f"integrated_model_search_{integration_type}.csv" if mode == "dense" else "",
             ],
         )
-        q2c_integrated_by_mode[mode] = integrated_table
         lines.extend(
             _render_horizontal_review_section(
                 f"Query2Card Integration Review ({mode})",
@@ -779,59 +794,20 @@ def build_job_markdown(
             lines.append("")
             continue
 
-        preview = _build_query2tab2card_preview(job_dir, search_type, max_models=None)
-        lines.extend(_render_query2tab2card_summary(preview))
-
-        query_tables = [_read_csv_table(p) for p in preview.get("query_tables", [])]
-        integration_payload = _load_table_integration_payload(job_dir, integration_type, search_type, "intermediate")
-        retrieved_table_paths = integration_payload.get("table_paths") or preview.get("table_paths", []) or []
-        retrieved_tables = [_read_csv_table(p) for p in retrieved_table_paths]
-        integration_input_paths = integration_payload.get("integration_input_table_paths") or []
-        integration_input_tables: List[TableData] = []
-        integration_input_labels: List[str] = []
-        if integration_input_paths:
-            normalized_query_paths = {str(p).strip() for p in (preview.get("query_tables", []) or []) if str(p).strip()}
-            query_table_count = len(preview.get("query_tables", []) or [])
-            query_label_by_path: Dict[str, str] = {}
-            for idx, qpath in enumerate(preview.get("query_tables", []) or [], start=1):
-                qpath_s = str(qpath).strip()
-                if not qpath_s:
-                    continue
-                query_label_by_path[qpath_s] = "Query table" if query_table_count == 1 else f"Query table {idx}"
-            retrieved_idx = 0
-            for path in integration_input_paths:
-                path_s = str(path).strip()
-                if not path_s:
-                    continue
-                integration_input_tables.append(_read_csv_table(path_s))
-                if path_s in normalized_query_paths:
-                    integration_input_labels.append(query_label_by_path.get(path_s, "Query table"))
-                else:
-                    retrieved_idx += 1
-                    label_prefix = "Related table" if integration_payload.get("tables_source") == "all_from_modelcards" else "Retrieved table"
-                    integration_input_labels.append(f"{label_prefix} {retrieved_idx}")
-        else:
-            integration_input_tables = list(query_tables) + list(retrieved_tables)
-            label_prefix = "Related table" if integration_payload.get("tables_source") == "all_from_modelcards" else "Retrieved table"
-            integration_input_labels = _query_table_labels(query_tables) + [f"{label_prefix} {idx}" for idx in range(1, len(retrieved_tables) + 1)]
-        integrated_table = _load_integrated_table_candidates(
-            job_dir,
-            [
-                f"integrated_table_search_{integration_type}_{search_type}_intermediate.csv",
-                f"integrated_table_search_{integration_type}_{search_type}.csv",
-            ],
-        )
-
-        lines.extend(
-            _render_horizontal_review_section(
-                f"Query2Tab2Card Integration Review ({search_type})",
-                integration_input_tables,
-                integrated_table,
-                max_rows=preview_max_rows,
-                max_cols=preview_max_cols,
-                source_labels=integration_input_labels,
+        for tables_source in TABLES_SOURCES:
+            preview = _build_query2tab2card_preview(job_dir, search_type, max_models=None, tables_source=tables_source)
+            lines.extend(_render_query2tab2card_summary(preview, tables_source=tables_source))
+            integration_payload = _load_table_integration_payload(job_dir, integration_type, search_type, tables_source)
+            grouped_integrated_tables = integration_payload.get("grouped_integrated_tables") or []
+            lines.extend(
+                _render_grouped_horizontal_review_sections(
+                    f"Query2Tab2Card Integration Review ({search_type}, {_tables_source_label(tables_source)})",
+                    job_dir,
+                    grouped_integrated_tables,
+                    max_rows=preview_max_rows,
+                    max_cols=preview_max_cols,
+                )
             )
-        )
 
     return "\n".join(lines)
 

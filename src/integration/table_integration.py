@@ -11,7 +11,7 @@ import io
 import os
 import sys
 from contextlib import redirect_stderr, redirect_stdout
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -254,6 +254,68 @@ class TableIntegrater:
         if parent:
             os.makedirs(parent, exist_ok=True)
         df.to_csv(path, index=False)
+
+
+class GroupTableIntegrater:
+    def __init__(self, integrater: Optional[TableIntegrater] = None):
+        self.integrater = integrater or TableIntegrater()
+
+    def run(
+        self,
+        query_to_retrieved_tables: Dict[str, List[str]],
+        *,
+        mode: str = "alite",
+        k: Optional[int] = None,
+        temp_dir: Optional[str] = None,
+        reorder_columns: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        limit = None if k is None else max(0, int(k))
+        for query_table_path, retrieved_table_paths in query_to_retrieved_tables.items():
+            query_path = str(query_table_path).strip()
+            if not query_path:
+                continue
+            retrieved_paths = [str(path).strip() for path in (retrieved_table_paths or []) if str(path).strip()]
+            if limit is not None:
+                retrieved_paths = retrieved_paths[:limit]
+            integration_input_table_paths = [query_path] + retrieved_paths
+            integrated_df = self.integrater.run(
+                integration_input_table_paths,
+                mode=mode,
+                temp_dir=temp_dir,
+                reorder_columns=reorder_columns,
+            )
+            if integrated_df is None:
+                raise RuntimeError(f"Integration returned None for query table: {query_path}")
+            results.append(
+                {
+                    "query_table_path": query_path,
+                    "retrieved_table_paths": retrieved_paths,
+                    "integration_input_table_paths": integration_input_table_paths,
+                    "integrated_df": integrated_df,
+                }
+            )
+        return results
+
+    def save(
+        self,
+        grouped_results: List[Dict[str, Any]],
+        *,
+        output_dir: str,
+    ) -> List[Dict[str, Any]]:
+        saved_results: List[Dict[str, Any]] = []
+        target_dir = os.path.abspath(output_dir)
+        os.makedirs(target_dir, exist_ok=True)
+        for idx, result in enumerate(grouped_results, start=1):
+            query_table_path = str(result["query_table_path"]).strip()
+            basename = os.path.basename(query_table_path) or f"query_table_{idx:02d}.csv"
+            output_name = f"group_{idx:02d}_{basename}"
+            output_path = os.path.join(target_dir, output_name)
+            self.integrater.save_table(result["integrated_df"], output_path)
+            saved = dict(result)
+            saved["saved_path"] = output_path
+            saved_results.append(saved)
+        return saved_results
 
 
 def main() -> None:

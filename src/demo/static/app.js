@@ -63,6 +63,11 @@
             }
             return `${baseTablesCount} ${baseLabel}`;
         }
+
+        function getGroupedIntegratedTables(run) {
+            if (!run || !Array.isArray(run.grouped_integrated_tables)) return [];
+            return run.grouped_integrated_tables.filter(group => group && group.integrated_table && Array.isArray(group.integrated_table.columns));
+        }
         
         /** Open full HTML table view; label defaults to file basename. */
         function integrationTablePathLink(fullPath, displayLabel) {
@@ -85,6 +90,42 @@
             if (!p) return '';
             const href = integrationTablePageHref(p);
             return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#0056b3;text-decoration:none;"><code style="background: #f1f3f5; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${escapeHtmlIntegration(p)}</code></a>`;
+        }
+
+        function renderGroupedIntegrationTables(groups, options) {
+            const opts = options || {};
+            const title = opts.title || 'Integration';
+            const successColor = opts.successColor || '#28a745';
+            const extraHtml = opts.extraHtml || '';
+            const downloadPrefix = opts.downloadPrefix || 'grouped-table';
+            const validGroups = (groups || []).filter(group => group && group.integrated_table);
+            if (!validGroups.length) {
+                return `<div style="padding: 15px; background: #fff; border-radius: 4px; border: 1px solid #dee2e6;">${extraHtml}<div style="color:#6c757d;">No grouped integration tables.</div></div>`;
+            }
+            const sections = validGroups.map((group, idx) => {
+                const queryPath = String(group.query_table_path || '').trim();
+                const retrievedPaths = Array.isArray(group.retrieved_table_paths) ? group.retrieved_table_paths : [];
+                const savedPath = String(group.saved_path || '').trim();
+                const groupLabel = queryPath
+                    ? `Group ${idx + 1}: ${integrationBasename(queryPath)}`
+                    : `Group ${idx + 1}`;
+                const headerLines = [
+                    `<div style="font-weight:600;color:${successColor};margin-bottom:4px;">${escapeHtmlIntegration(groupLabel)}</div>`,
+                ];
+                if (queryPath) {
+                    headerLines.push(`<div style="font-size:12px;color:#495057;margin-bottom:4px;"><strong>Query table:</strong> ${integrationTablePathLink(queryPath, integrationBasename(queryPath))}</div>`);
+                }
+                headerLines.push(`<div style="font-size:12px;color:#495057;margin-bottom:8px;"><strong>Retrieved tables:</strong> ${retrievedPaths.length ? integrationTablePathLinksRow(retrievedPaths, ', ') : '<span style="color:#999;">—</span>'}</div>`);
+                return `<div style="margin-top:${idx === 0 ? '0' : '14px'};">${renderIntegrationTable(group.integrated_table, group.integrated_table.stats || {}, {
+                    title,
+                    successColor,
+                    extraHtml: `<div style="margin-bottom:10px;padding:8px;background:#f8f9fa;border-radius:4px;">${headerLines.join('')}</div>`,
+                    savedPath,
+                    downloadId: `${downloadPrefix}-${idx + 1}`,
+                    omitSectionTitle: idx > 0,
+                })}</div>`;
+            }).join('');
+            return `${extraHtml}${sections}`;
         }
         
         function integrationBasename(p) {
@@ -519,7 +560,7 @@
                 syncBothIntegrationDisplays();
             } else {
             const hasModel = data.integration_model_search && data.integration_model_search.status === 'success' && data.integration_model_search.integrated_table;
-            const hasTable = data.integration_table_search && data.integration_table_search.status === 'success' && data.integration_table_search.integrated_table;
+            const hasTable = data.integration_table_search && data.integration_table_search.status === 'success' && getGroupedIntegratedTables(data.integration_table_search).length > 0;
             if (hasModel || hasTable) {
                 container.style.display = 'block';
                 if (hasModel) {
@@ -1179,9 +1220,12 @@
             const modelKey = getModelSearchKey(integrationType, retrievalMode);
             const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
             const modelRun = (window.__modelSearchRuns || []).find(r => modelRunMatchesKey(r, modelKey));
-            const tablePath = (tableRun && tableRun.saved_path) ? tableRun.saved_path : '';
+            const grouped = getGroupedIntegratedTables(tableRun);
+            const tablePath = grouped.length === 1 ? (grouped[0].saved_path || '') : '';
             const modelPath = (modelRun && modelRun.saved_path) ? modelRun.saved_path : '';
-            const tableHtml = tablePath ? integrationSavedPathLink(tablePath) : '<span style="color:#999;">N/A</span>';
+            const tableHtml = grouped.length > 1
+                ? grouped.map((group, idx) => `${idx + 1}. ${integrationSavedPathLink(group.saved_path || '')}`).join('<br>')
+                : (tablePath ? integrationSavedPathLink(tablePath) : '<span style="color:#999;">N/A</span>');
             const modelHtml = modelPath ? integrationSavedPathLink(modelPath) : '<span style="color:#999;">N/A</span>';
             target.innerHTML = `
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
@@ -1256,7 +1300,8 @@
             const modelKey = getModelSearchKey(integrationType, retrievalMode);
             const tableRun = (window.__tableSearchRuns || []).find(r => (r.key || getTableSearchKey(r.integration_type, r.search_type, r.tables_source)) === tableKey);
             const modelRun = (window.__modelSearchRuns || []).find(r => modelRunMatchesKey(r, modelKey));
-            const tableT = tableRun && tableRun.integrated_table;
+            const groupedTableRuns = getGroupedIntegratedTables(tableRun);
+            const tableT = groupedTableRuns.length === 1 ? groupedTableRuns[0].integrated_table : null;
             const modelT = modelRun && modelRun.integrated_table;
             if (!tableT || !modelT || !tableT.columns || !modelT.columns) {
                 container.style.display = 'none';
@@ -1344,7 +1389,8 @@
             });
             const placeholder = '<div style="padding: 12px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 6px; color: #6c757d; font-size: 13px;">No result for this combination. Click <strong>Integrated</strong> to run.</div>';
             const noResultMsg = placeholder;
-            if (run && run.status === 'success' && run.integrated_table) {
+            const groupedRuns = getGroupedIntegratedTables(run);
+            if (run && run.status === 'success' && groupedRuns.length > 0) {
                 let extra = '';
                 const modelIds = run.models_with_tables || [];
                 const tablePathsList = run.table_paths || [];
@@ -1379,12 +1425,12 @@
                 } else {
                     extra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Query2Tab2Card Results): — (none or not available)</div>';
                 }
-                rightDiv.innerHTML = renderIntegrationTable(run.integrated_table, run.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: run.saved_path || '', downloadId: 'table-search-' + key });
+                rightDiv.innerHTML = renderGroupedIntegrationTables(groupedRuns, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, downloadPrefix: 'table-search-' + key });
             } else if (run && run.single_table_preview && run.single_table_preview.columns) {
                 const single = run.single_table_preview;
                 const extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;">Only one table is available for this setting, so no integration was needed. Showing that table directly.</div>`;
                 rightDiv.innerHTML = renderIntegrationTable(single, single.stats || {}, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: single.path || '', downloadId: 'table-search-single-preview-' + key });
-            } else if (run && !run.integrated_table && (run.pipeline_trace || run.tab2tab_trace_rows || run.query_tables || run.model_to_table_paths || run.models_with_tables)) {
+            } else if (run && groupedRuns.length === 0 && (run.pipeline_trace || run.tab2tab_trace_rows || run.query_tables || run.model_to_table_paths || run.models_with_tables)) {
                 // Pre-integration preview (already have retrieval relationship info, but integration not run yet).
                 const modelIds = run.models_with_tables || [];
                 const tablePathsList = run.table_paths || [];
@@ -1695,7 +1741,7 @@
 
                 if (tableRes.status === 'success') {
                     const stats = tableRes.stats || {};
-                    const table = tableRes.integrated_table;
+                    const groupedTables = getGroupedIntegratedTables(tableRes);
                     let tableExtra = '';
                     const tableModelIds = tableRes.models_with_tables || [];
                     if (tableModelIds.length > 0) {
@@ -1729,7 +1775,7 @@
                     } else {
                         tableExtra = '<div style="margin-bottom: 10px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; color: #6c757d;">Model IDs (2 Query2Tab2Card Results): — (none or not available)</div>';
                     }
-                    rightDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: tableExtra, savedPath: tableRes.saved_path || '', downloadId: 'table-search' });
+                    rightDiv.innerHTML = renderGroupedIntegrationTables(groupedTables, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: tableExtra, downloadPrefix: 'table-search' });
                 } else {
                     let debugHtml = '';
                     if (tableRes.model_to_table_paths) {
@@ -1864,8 +1910,7 @@
                 });
                 const data = await response.json();
                 if (data.status === 'success') {
-                    const stats = data.stats || {};
-                    const table = data.integrated_table;
+                    const groupedTables = getGroupedIntegratedTables(data);
                     const modelIds = data.models_with_tables || [];
                     let extra = '';
                     if (modelIds.length > 0) {
@@ -1886,7 +1931,7 @@
                         });
                         extra = `<div style="margin-bottom: 10px; padding: 8px; background: #d4edda; border-radius: 4px; font-size: 12px;"><details style="margin:0;"><summary style="cursor:pointer;font-weight:600;">${INT_MODEL_IDS_C2T2C}</summary><div style="margin-top:6px;font-size:11px;">${traceHtml}</div></details></div>`;
                     }
-                    resultsDiv.innerHTML = renderIntegrationTable(table, stats, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, savedPath: data.saved_path || '', downloadId: 'table-search-single' });
+                    resultsDiv.innerHTML = renderGroupedIntegrationTables(groupedTables, { title: INT_TITLE_C2T2C_HTML, successColor: '#28a745', extraHtml: extra, downloadPrefix: 'table-search-single' });
                     initTablePanZoom(resultsDiv);
                 } else {
                     resultsDiv.innerHTML = `<div style="padding: 15px; border: 1px solid #dc3545; color: #dc3545;">❌ ${data.message || 'Unknown error'}</div>`;

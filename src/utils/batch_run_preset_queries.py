@@ -86,6 +86,7 @@ def run_one_query(
     query: str,
     mode: str = "query",
     top_k: int = 100,
+    model_top_k: int = 3,
     table_search_k: int = 3,
     use_by_type: bool = False,
     run_integration: bool = False,
@@ -94,6 +95,7 @@ def run_one_query(
     integration_max_models: Optional[int] = None,
     integration_model_modes: Optional[List[str]] = None,
     integration_search_types: Optional[List[str]] = None,
+    integration_tables_sources: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Run search (and optional integration) for a single query."""
     search_url = f"{backend_url}/api/search"
@@ -103,6 +105,7 @@ def run_one_query(
         "search_mode": "new",
         "mode": mode,
         "top_k": top_k,
+        "model_top_k": model_top_k,
         "tab2tab_mode": "search",
         "table_search_k": table_search_k,
         "use_by_type": use_by_type,
@@ -181,32 +184,35 @@ def run_one_query(
     # Table Search integration
     if not integration_search_types:
         integration_search_types = list(CARD2TAB2CARD_TYPES)
+    if not integration_tables_sources:
+        integration_tables_sources = ["intermediate", "all_from_modelcards"]
 
     table_int_res_by_type: Dict[str, Any] = {}
     for st in integration_search_types:
-        table_payload = {
-            "job_id": job_id,
-            "search_type": st,
-            "integration_type": integration_type,
-            "k": integration_k,
-            "max_models": effective_integration_max_models,
-            # For batch use we stick to 'intermediate' to avoid very heavy all_from_modelcards scans.
-            "tables_source": "intermediate",
-        }
-        try:
-            res = _post_json(table_int_url, table_payload)
-            table_int_res_by_type[st] = res
-            status = res.get("status")
-            if status == "success":
-                print(f"      ✓ Table Search integration success (search_type={st})")
-            else:
-                print(
-                    f"      ⚠ Table Search integration status={status} "
-                    f"(search_type={st}) message={res.get('message')}"
-                )
-        except Exception as e:
-            table_int_res_by_type[st] = {"status": "error", "message": str(e)}
-            print(f"      ✖ Table Search integration failed (search_type={st}): {e}")
+        table_int_res_by_type[st] = {}
+        for tables_source in integration_tables_sources:
+            table_payload = {
+                "job_id": job_id,
+                "search_type": st,
+                "integration_type": integration_type,
+                "k": integration_k,
+                "max_models": effective_integration_max_models,
+                "tables_source": tables_source,
+            }
+            try:
+                res = _post_json(table_int_url, table_payload)
+                table_int_res_by_type[st][tables_source] = res
+                status = res.get("status")
+                if status == "success":
+                    print(f"      ✓ Table Search integration success (search_type={st}, tables_source={tables_source})")
+                else:
+                    print(
+                        f"      ⚠ Table Search integration status={status} "
+                        f"(search_type={st}, tables_source={tables_source}) message={res.get('message')}"
+                    )
+            except Exception as e:
+                table_int_res_by_type[st][tables_source] = {"status": "error", "message": str(e)}
+                print(f"      ✖ Table Search integration failed (search_type={st}, tables_source={tables_source}): {e}")
 
     outcome["integration_model_search"] = model_int_res_by_mode
     outcome["integration_table_search"] = table_int_res_by_type
@@ -244,6 +250,12 @@ def main() -> int:
         type=int,
         default=100,
         help="Model card top_k for Card2Card (frontend hidden slider, default 100).",
+    )
+    parser.add_argument(
+        "--model_top_k",
+        type=int,
+        default=3,
+        help="Final reranked model_top_k for query search jobs (default: 3).",
     )
     parser.add_argument(
         "--use_by_type",
@@ -291,6 +303,12 @@ def main() -> int:
             f"Default: {' '.join(CARD2TAB2CARD_TYPES)}"
         ),
     )
+    parser.add_argument(
+        "--integration_tables_sources",
+        nargs="+",
+        default=["intermediate", "all_from_modelcards"],
+        help="tables_source values to integrate via /api/integrate (default: intermediate all_from_modelcards).",
+    )
 
     args = parser.parse_args()
 
@@ -327,6 +345,7 @@ def main() -> int:
                 query=q_text,
                 mode="query",
                 top_k=args.top_k,
+                model_top_k=args.model_top_k,
                 table_search_k=args.table_search_k,
                 use_by_type=bool(args.use_by_type),
                 run_integration=bool(args.run_integration),
@@ -335,6 +354,7 @@ def main() -> int:
                 integration_max_models=args.integration_max_models,
                 integration_model_modes=(args.integration_model_modes or None),
                 integration_search_types=(args.integration_search_types or None),
+                integration_tables_sources=(args.integration_tables_sources or None),
             )
             all_outcomes.append({"id": q_id, "query": q_text, **outcome})
         except Exception as e:

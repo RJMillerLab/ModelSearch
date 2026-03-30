@@ -23,7 +23,7 @@ from flask_cors import CORS
 
 from src.config import *
 from src.demo.job_schema import JobMeta, JobPaths, Query2ModelCardFile, Query2Tab2CardFullMap
-from src.integration.table_integration import TableIntegrater
+from src.integration.table_integration import GroupTableIntegrater, TableIntegrater
 from src.search.ir_searcher import DenseSearcher, SparseSearcher
 from src.search.query2modelcard import Query2ModelCardSearch
 from src.search.query2tab2card import Query2Tab2CardSearch
@@ -169,6 +169,18 @@ def ordered_unique_paths(items: List[str]) -> List[str]:
     return ordered_unique(items)
 
 
+def _table_payload_from_dataframe(df: pd.DataFrame, *, input_tables: int) -> Dict[str, Any]:
+    return {
+        "columns": list(df.columns),
+        "data": sanitize_for_json(df.values.tolist()),
+        "stats": {
+            "input_tables": int(input_tables),
+            "output_rows": int(len(df)),
+            "output_columns": int(df.shape[1]),
+        },
+    }
+
+
 def _table_payload_from_path(path_q: str) -> Dict[str, Any]:
     resolved = resolve_table_path(path_q) or str(path_q)
     df = read_csv_robust(resolved)
@@ -275,15 +287,52 @@ def _build_table_run_from_csv(job_id: str, csv_path: str) -> Optional[Dict[str, 
         "integration_type": integration_type,
         "search_type": search_type,
         "tables_source": tables_source,
-        "integrated_table": _csv_table_payload(csv_path),
+        "grouped_integrated_tables": [
+            {
+                "query_table_path": "",
+                "retrieved_table_paths": [],
+                "integration_input_table_paths": [],
+                "saved_path": f"jobs_251117/{job_id}/{basename}",
+                "integrated_table": _csv_table_payload(csv_path),
+            }
+        ],
         "saved_path": f"jobs_251117/{job_id}/{basename}",
     }
     json_path = os.path.join(JOBS_DIR, job_id, f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json")
     saved_json = _load_json_if_exists(json_path) or {}
     if saved_json:
         payload.update(saved_json)
-        payload["integrated_table"] = payload.get("integrated_table") or _csv_table_payload(csv_path)
+        if not payload.get("grouped_integrated_tables"):
+            payload["grouped_integrated_tables"] = [
+                {
+                    "query_table_path": "",
+                    "retrieved_table_paths": [],
+                    "integration_input_table_paths": [],
+                    "saved_path": payload.get("saved_path") or f"jobs_251117/{job_id}/{basename}",
+                    "integrated_table": _csv_table_payload(csv_path),
+                }
+            ]
         payload["saved_path"] = payload.get("saved_path") or f"jobs_251117/{job_id}/{basename}"
+    return payload
+
+
+def _build_table_run_from_json(job_id: str, json_path: str) -> Optional[Dict[str, Any]]:
+    basename = os.path.basename(json_path)
+    prefix = "integration_table_search_"
+    suffix = ".json"
+    if not (basename.startswith(prefix) and basename.endswith(suffix)):
+        return None
+    payload = _load_json_if_exists(json_path)
+    if not payload:
+        return None
+    if payload.get("status") != "success":
+        return None
+    if str(payload.get("integration_type") or "").strip().lower() != "alite":
+        return None
+    search_type = str(payload.get("search_type") or "").strip()
+    if search_type not in CARD2TAB2CARD_TYPES:
+        return None
+    payload["tables_source"] = str(payload.get("tables_source") or "intermediate").strip() or "intermediate"
     return payload
 
 
@@ -323,8 +372,6 @@ def _enrich_table_run_from_job(job_id: str, run: Dict[str, Any]) -> Dict[str, An
         )
         out = {**preview, **run}
         stats = dict(preview.get("stats") or {})
-        integrated_stats = ((run.get("integrated_table") or {}).get("stats") or {})
-        stats.update(integrated_stats)
         integration_input_paths = run.get("integration_input_table_paths") or []
         if integration_input_paths:
             stats["input_tables"] = int(len(integration_input_paths))
@@ -724,13 +771,61 @@ def integrate():
     )
     payload = Query2Tab2CardFullMap(paths.card2tab2card_path(search_type)).build_preview(search_type=search_type, max_models=max_models, tables_source=tables_source)
     payload = _attach_single_table_preview(payload)
-    query_table_paths = [str(p).strip() for p in (payload.get("query_tables") or []) if str(p).strip()]
-    retrieved_table_paths = [str(p).strip() for p in (payload.get("table_paths") or []) if str(p).strip()]
-    integration_input_table_paths = ordered_unique_paths(query_table_paths + retrieved_table_paths[:k])
-    df = TableIntegrater().run(local_table_paths(integration_input_table_paths), mode=integration_type)
-    csv_name = f"integrated_table_search_{integration_type}_{search_type}_{tables_source}.csv"
-    csv_path = os.path.join(paths.job_dir, csv_name)
-    df.to_csv(csv_path, index=False, encoding="utf-8")
+    grouped_integrated_tables: List[Dict[str, Any]] = []
+    integration_input_table_paths: List[str] = []
+
+    if tables_source == "intermediate":
+        query_to_retrieved = {
+            str(query_path).strip(): [str(path).strip() for path in (retrieved_paths or []) if str(path).strip()]
+            for query_path, retrieved_paths in (payload.get("query_table_to_retrieved_table_paths") or {}).items()
+            if str(query_path).strip()
+        }
+        group_integrater = GroupTableIntegrater()
+        grouped_results = group_integrater.run(query_to_retrieved, mode=integration_type, k=k)
+        saved_grouped_results = group_integrater.save(
+            grouped_results,
+            output_dir=os.path.join(paths.job_dir, "table_integration_groups"),
+        )
+        integration_input_table_paths = ordered_unique_paths(
+            path
+            for result in saved_grouped_results
+            for path in result["integration_input_table_paths"]
+        )
+        grouped_integrated_tables = [
+            {
+                "query_table_path": result["query_table_path"],
+                "retrieved_table_paths": list(result["retrieved_table_paths"]),
+                "integration_input_table_paths": list(result["integration_input_table_paths"]),
+                "saved_path": os.path.relpath(str(result["saved_path"]), paths.job_dir),
+                "integrated_table": _table_payload_from_dataframe(
+                    result["integrated_df"],
+                    input_tables=len(result["integration_input_table_paths"]),
+                ),
+            }
+            for result in saved_grouped_results
+        ]
+    else:
+        retrieved_table_paths = [str(p).strip() for p in (payload.get("table_paths") or []) if str(p).strip()]
+        integration_input_table_paths = ordered_unique_paths(retrieved_table_paths[:k])
+        df = TableIntegrater().run(local_table_paths(integration_input_table_paths), mode=integration_type)
+        if df is None:
+            raise ValueError("Table integration returned no output.")
+        csv_name = f"integrated_table_search_{integration_type}_{search_type}_{tables_source}.csv"
+        csv_path = os.path.join(paths.job_dir, csv_name)
+        df.to_csv(csv_path, index=False, encoding="utf-8")
+        grouped_integrated_tables = [
+            {
+                "query_table_path": "",
+                "retrieved_table_paths": retrieved_table_paths[:k],
+                "integration_input_table_paths": integration_input_table_paths,
+                "saved_path": f"jobs_251117/{job_id}/{csv_name}",
+                "integrated_table": _table_payload_from_dataframe(
+                    df,
+                    input_tables=len(integration_input_table_paths),
+                ),
+            }
+        ]
+
     response_payload = {
         "status": "success",
         "integration_type": integration_type,
@@ -739,8 +834,7 @@ def integrate():
         "max_models": max_models,
         "tables_source": payload["tables_source"],
         "integration_input_table_paths": integration_input_table_paths,
-        "integrated_table": {"columns": list(df.columns), "data": sanitize_for_json(df.values.tolist())},
-        "saved_path": f"jobs_251117/{job_id}/{csv_name}",
+        "grouped_integrated_tables": grouped_integrated_tables,
         **payload,
     }
     _save_json(os.path.join(paths.job_dir, f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json"), response_payload)
@@ -758,15 +852,20 @@ def integration_runs(job_id: str):
 
     for basename in sorted(os.listdir(paths.job_dir)):
         full_path = os.path.join(paths.job_dir, basename)
-        if not os.path.isfile(full_path) or not basename.endswith(".csv"):
+        if not os.path.isfile(full_path):
             continue
-        if basename.startswith("integrated_model_search_"):
+        if basename.endswith(".csv") and basename.startswith("integrated_model_search_"):
             payload = _build_model_run_from_csv(job_id, full_path)
             if payload:
                 key = f"{payload['integration_type']}::{payload['query2modelcard_retrieval_mode']}"
                 model_runs_by_key[key] = payload
-        elif basename.startswith("integrated_table_search_"):
+        elif basename.endswith(".csv") and basename.startswith("integrated_table_search_"):
             payload = _build_table_run_from_csv(job_id, full_path)
+            if payload:
+                key = f"{payload['integration_type']}::{payload['search_type']}::{payload['tables_source']}"
+                table_runs_by_key[key] = payload
+        elif basename.endswith(".json") and basename.startswith("integration_table_search_"):
+            payload = _build_table_run_from_json(job_id, full_path)
             if payload:
                 key = f"{payload['integration_type']}::{payload['search_type']}::{payload['tables_source']}"
                 table_runs_by_key[key] = payload

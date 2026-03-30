@@ -223,6 +223,7 @@ class Query2Tab2CardFullMap:
         model_ids = list(self.reranked)
         if max_models is not None:
             model_ids = model_ids[:max(0, int(max_models))]
+        preview_query_tables = [] if tables_source == "all_from_modelcards" else list(self.query_tables)
         tab2tab_trace_rows = self.tab2tab_rows()
         after_model_cap_trace_rows = []
         allowed_models = set(model_ids)
@@ -243,11 +244,23 @@ class Query2Tab2CardFullMap:
             model_to_table_paths = {mid: list(dict.fromkeys(paths)) for mid, paths in model_to_table_paths.items() if paths}
             models_with_tables = list(model_to_table_paths.keys())
             table_paths = list(dict.fromkeys(row["table_path"] for row in after_model_cap_trace_rows))
+        query_table_to_retrieved_table_paths: Dict[str, List[str]] = {}
+        if tables_source == "intermediate":
+            allowed_models = set(model_ids)
+            for query_table in self.query_tables:
+                raw_retrieved = [str(p).strip() for p in (self.tab2tab.get(query_table, []) or []) if str(p).strip()]
+                filtered_retrieved = []
+                for table_path in raw_retrieved:
+                    mapped_models = [str(mid).strip() for mid in (self.tab2card.get(table_path, []) or []) if str(mid).strip()]
+                    if any(mid in allowed_models for mid in mapped_models):
+                        filtered_retrieved.append(table_path)
+                query_table_to_retrieved_table_paths[query_table] = list(dict.fromkeys(filtered_retrieved))
         return {
             "preview_format_version": 1,
             "search_type": search_type,
             "tables_source": tables_source,
-            "query_tables": list(self.query_tables),
+            "query_tables": preview_query_tables,
+            "query_table_to_retrieved_table_paths": query_table_to_retrieved_table_paths,
             "model_ids": list(model_ids),
             "models_with_tables": models_with_tables,
             "model_to_table_paths": model_to_table_paths,
