@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Dict, List, Optional
@@ -28,9 +29,39 @@ class TableIntegrater:
     def load_tables(self, table_paths: List[str]) -> List[pd.DataFrame]:
         return [pd.read_csv(path) for path in table_paths]
 
+    def _maybe_fix_mojibake_utf8(self, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        text = value
+        if not text or "\ufffd" in text:
+            return text
+        if not re.search(r"[ÃÂâãäå]", text):
+            return text
+        try:
+            if any(ord(ch) > 255 for ch in text):
+                return text
+            fixed = bytes((ord(ch) & 0xFF) for ch in text).decode("utf-8")
+            src_bad = len(re.findall(r"[ÃÂâãäå]", text))
+            fixed_bad = len(re.findall(r"[ÃÂâãäå]", fixed))
+            return fixed if fixed_bad < src_bad else text
+        except Exception:
+            return text
+
+    def _normalize_text_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+        out = df.copy()
+        out.columns = [self._maybe_fix_mojibake_utf8(str(col)) for col in out.columns]
+        for col in out.columns:
+            series = out[col]
+            if getattr(series.dtype, "kind", "") in {"O", "U", "S"}:
+                out[col] = series.map(self._maybe_fix_mojibake_utf8)
+        return out
+
     def _make_columns_unique(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None or len(df.columns) == 0:
             return df
+        df = self._normalize_text_df(df)
         seen = {}
         new_cols: List[str] = []
         changed = False
@@ -253,7 +284,7 @@ class TableIntegrater:
         parent = os.path.dirname(os.path.abspath(path))
         if parent:
             os.makedirs(parent, exist_ok=True)
-        df.to_csv(path, index=False)
+        self._normalize_text_df(df).to_csv(path, index=False)
 
 
 class GroupTableIntegrater:

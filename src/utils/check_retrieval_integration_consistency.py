@@ -451,7 +451,13 @@ def _build_query2card_preview(job_dir: str, *, mode: str, max_models: Optional[i
     }
 
 
-def _build_query2tab2card_preview(job_dir: str, search_type: str, *, max_models: Optional[int]) -> Dict[str, Any]:
+def _build_query2tab2card_preview(
+    job_dir: str,
+    search_type: str,
+    *,
+    max_models: Optional[int],
+    tables_source: str = "intermediate",
+) -> Dict[str, Any]:
     path = os.path.join(job_dir, f"card2tab2card_{search_type}.json")
     data = _load_json(path)
     q2c = data.get("query2card_map", {}) or {}
@@ -474,40 +480,66 @@ def _build_query2tab2card_preview(job_dir: str, search_type: str, *, max_models:
     if max_models is not None:
         model_ids = model_ids[: max(0, int(max_models))]
     allowed = set(model_ids)
+    preview_query_tables = [] if tables_source == "all_from_modelcards" else list(query_tables)
 
     retrieved_rows: List[Dict[str, Any]] = []
-    for _query_table, retrieved_tables in tab2tab.items():
-        for table_path in retrieved_tables or []:
-            tpath = str(table_path).strip()
-            models = [str(x).strip() for x in tab2card.get(tpath, []) if str(x).strip() and str(x).strip() in allowed]
-            if not models:
-                continue
-            retrieved_rows.append(
-                {
-                    "table": _basename(tpath),
-                    "table_path": tpath,
-                    "models": models,
-                }
-            )
+    if tables_source == "all_from_modelcards":
+        model_to_all_table_paths: Dict[str, List[str]] = {}
+        for model_id in model_ids:
+            model_to_all_table_paths[model_id] = [
+                str(path).strip()
+                for path in _unique_keep_order(card2tab.get(model_id, []))
+                if str(path).strip()
+            ]
+        model_to_table_paths = {
+            mid: paths
+            for mid, paths in model_to_all_table_paths.items()
+            if paths
+        }
+        models_with_tables = [mid for mid in model_ids if mid in model_to_table_paths]
+        for mid in models_with_tables:
+            for table_path in model_to_table_paths[mid]:
+                retrieved_rows.append(
+                    {
+                        "table": _basename(table_path),
+                        "table_path": table_path,
+                        "models": [mid],
+                    }
+                )
+    else:
+        for _query_table, retrieved_tables in tab2tab.items():
+            for table_path in retrieved_tables or []:
+                tpath = str(table_path).strip()
+                models = [str(x).strip() for x in tab2card.get(tpath, []) if str(x).strip() and str(x).strip() in allowed]
+                if not models:
+                    continue
+                retrieved_rows.append(
+                    {
+                        "table": _basename(tpath),
+                        "table_path": tpath,
+                        "models": models,
+                    }
+                )
 
-    model_to_table_paths: Dict[str, List[str]] = {}
-    for row in retrieved_rows:
-        for mid in row["models"]:
-            model_to_table_paths.setdefault(mid, []).append(row["table_path"])
-    model_to_table_paths = {
-        mid: _unique_keep_order(paths)
-        for mid, paths in model_to_table_paths.items()
-        if paths
-    }
+        model_to_table_paths = {}
+        for row in retrieved_rows:
+            for mid in row["models"]:
+                model_to_table_paths.setdefault(mid, []).append(row["table_path"])
+        model_to_table_paths = {
+            mid: _unique_keep_order(paths)
+            for mid, paths in model_to_table_paths.items()
+            if paths
+        }
+        models_with_tables = [mid for mid in model_ids if mid in model_to_table_paths]
 
     table_paths = _unique_keep_order(row["table_path"] for row in retrieved_rows)
-    models_with_tables = [mid for mid in model_ids if mid in model_to_table_paths]
 
     return {
         "search_type": search_type,
+        "tables_source": tables_source,
         "query": query,
         "seed_model_id": seed_model,
-        "query_tables": query_tables,
+        "query_tables": preview_query_tables,
         "model_ids": model_ids,
         "models_with_tables": models_with_tables,
         "model_to_table_paths": model_to_table_paths,
