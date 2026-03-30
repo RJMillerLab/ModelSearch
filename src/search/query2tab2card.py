@@ -10,7 +10,7 @@ Pipeline:
 import argparse
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 import duckdb
 
 from src.config import *
@@ -46,7 +46,7 @@ class Query2Tab2CardSearch(Card2Tab2CardSearch):
         if apply_query_rerank and candidate_pool:
             self.query2model_reranker(dense, query, candidate_pool, model_top_k)
         else:
-            ranked = candidate_pool
+            ranked = self._postprocess_reranked_models(candidate_pool)
             mtk = int(model_top_k)
             if mtk > 0:
                 ranked = ranked[:mtk]
@@ -56,9 +56,50 @@ class Query2Tab2CardSearch(Card2Tab2CardSearch):
         results, scores = dense_wtable.search(query, q2m_top_k)
         self.query2card_map[query] = list(results)
     
+    def _postprocess_reranked_models(self, ranked_models: List[str]) -> List[str]:
+        """
+        Enforce a simple subset cap for ambiguous tables:
+        when a retrieved table maps to multiple models, keep at most one selected
+        model for that table, using the global reranked order to decide the winner.
+        """
+        multi_model_tables: Dict[str, List[str]] = {
+            str(table_path).strip(): [str(mid).strip() for mid in (model_ids or []) if str(mid).strip()]
+            for table_path, model_ids in (self.tab2card_map or {}).items()
+            if str(table_path).strip() and len([str(mid).strip() for mid in (model_ids or []) if str(mid).strip()]) > 1
+        }
+        if not multi_model_tables:
+            return list(ranked_models)
+
+        model_to_multi_tables: Dict[str, List[str]] = {}
+        for table_path, model_ids in multi_model_tables.items():
+            for model_id in model_ids:
+                model_to_multi_tables.setdefault(model_id, []).append(table_path)
+
+        kept: List[str] = []
+        seen_models: Set[str] = set()
+        claimed_tables: Set[str] = set()
+        for model_id in ranked_models:
+            mid = str(model_id).strip()
+            if not mid or mid in seen_models:
+                continue
+            related_tables = model_to_multi_tables.get(mid, [])
+            if related_tables and all(table_path in claimed_tables for table_path in related_tables):
+                continue
+            kept.append(mid)
+            seen_models.add(mid)
+            for table_path in related_tables:
+                claimed_tables.add(table_path)
+        return kept
+
     def query2model_reranker(self, dense: DenseSearcher, query: str, candidate_pool: List[str], model_top_k: int) -> List[str]:
-        results, scores = dense.search_subset(query, candidate_pool, model_top_k)
-        self.model_rerank_map = results
+        full_k = max(1, len(candidate_pool))
+        results, scores = dense.search_subset(query, candidate_pool, full_k)
+        postprocessed = self._postprocess_reranked_models(list(results))
+        mtk = int(model_top_k)
+        if mtk > 0:
+            postprocessed = postprocessed[:mtk]
+        self.model_rerank_map = postprocessed
+        return postprocessed
 
     def save_full_json(self, path: str):
         os.makedirs(os.path.dirname(path), exist_ok=True)
