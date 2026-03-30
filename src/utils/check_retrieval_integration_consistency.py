@@ -730,7 +730,6 @@ def build_job_markdown(
     for search_type in active_search_types:
         anchor = _slug_anchor(search_type)
         lines.append(f"- [Query2Tab2Card {search_type}](#query2tab2card-summary-{anchor})")
-        lines.append(f"- [Comparison {search_type}](#comparison-{anchor})")
     lines.append("")
 
     q2c_max_models = None
@@ -770,10 +769,6 @@ def build_job_markdown(
                 source_label="Related table",
             )
         )
-
-    q2c_compare_reference = q2c_integrated_by_mode.get("dense")
-    if not q2c_compare_reference or not q2c_compare_reference.columns:
-        q2c_compare_reference = next((tbl for tbl in q2c_integrated_by_mode.values() if tbl.columns), TableData("", "", "(missing)", [], []))
 
     for search_type in active_search_types:
         c2t2c_path = os.path.join(job_dir, f"card2tab2card_{search_type}.json")
@@ -827,12 +822,6 @@ def build_job_markdown(
             ],
         )
 
-        if len(query_tables) == 1:
-            lines.extend(_render_table_section(f"Query Table ({search_type})", query_tables[0], max_rows=preview_max_rows, max_cols=preview_max_cols))
-        elif query_tables:
-            lines.extend(_render_retrieved_tables_section(f"Query Tables ({search_type})", query_tables, max_rows=preview_max_rows, max_cols=preview_max_cols))
-        else:
-            lines.extend(_render_table_section(f"Query Table ({search_type})", TableData("", "", "(missing)", [], []), max_rows=preview_max_rows, max_cols=preview_max_cols))
         lines.extend(
             _render_horizontal_review_section(
                 f"Query2Tab2Card Integration Review ({search_type})",
@@ -843,24 +832,6 @@ def build_job_markdown(
                 source_labels=integration_input_labels,
             )
         )
-
-        lines.append(f"## Comparison ({search_type})")
-        lines.append("")
-
-        if query_tables:
-            query_compare_table = query_tables[0] if len(query_tables) == 1 else _union_schema_table(f"query-union-{search_type}", query_tables)
-            left_name = "query table" if len(query_tables) == 1 else "query tables union"
-            stats = _compare_columns(query_compare_table, integrated_table)
-            lines.extend(_render_compare_block("Query Table vs Integrated Table", stats, left_name=left_name, right_name="integrated"))
-
-        if retrieved_tables:
-            union_table = _union_schema_table(f"retrieved-union-{search_type}", retrieved_tables)
-            stats = _compare_columns(union_table, integrated_table)
-            lines.extend(_render_compare_block("Retrieved Tables Union Schema vs Integrated Table", stats, left_name="retrieved union", right_name="integrated"))
-
-        if q2c_compare_reference.columns and integrated_table.columns:
-            stats = _compare_columns(q2c_compare_reference, integrated_table)
-            lines.extend(_render_compare_block("Query2Card Integrated vs Query2Tab2Card Integrated", stats, left_name="q2c integrated (dense if available)", right_name=f"{search_type} integrated"))
 
     return "\n".join(lines)
 
