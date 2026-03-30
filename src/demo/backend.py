@@ -169,6 +169,52 @@ def ordered_unique_paths(items: List[str]) -> List[str]:
     return ordered_unique(items)
 
 
+def _resolve_required_table_path(path_q: str) -> str:
+    raw = str(path_q or "").strip()
+    resolved = resolve_table_path(raw) if raw else ""
+    if not resolved or not os.path.isfile(resolved):
+        raise FileNotFoundError(f"Could not resolve table path: {raw}")
+    return resolved
+
+
+def _resolve_grouped_query_mapping(query_to_retrieved: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    resolved_mapping: Dict[str, List[str]] = {}
+    for query_table_path, retrieved_table_paths in (query_to_retrieved or {}).items():
+        query_path = str(query_table_path or "").strip()
+        if not query_path:
+            continue
+        resolved_mapping[_resolve_required_table_path(query_path)] = [
+            _resolve_required_table_path(path)
+            for path in (retrieved_table_paths or [])
+            if str(path or "").strip()
+        ]
+    return resolved_mapping
+
+
+def _table_group_output_prefix(*, integration_type: str, search_type: str, tables_source: str) -> str:
+    return f"integrated_table_search_{integration_type}_{search_type}_{tables_source}"
+
+
+def _serialize_grouped_integrated_tables(
+    grouped_results: List[Dict[str, Any]],
+    *,
+    job_dir: str,
+) -> List[Dict[str, Any]]:
+    return [
+        {
+            "query_table_path": result["query_table_path"],
+            "retrieved_table_paths": list(result["retrieved_table_paths"]),
+            "integration_input_table_paths": list(result["integration_input_table_paths"]),
+            "saved_path": os.path.relpath(str(result["saved_path"]), job_dir),
+            "integrated_table": _table_payload_from_dataframe(
+                result["integrated_df"],
+                input_tables=len(result["integration_input_table_paths"]),
+            ),
+        }
+        for result in grouped_results
+    ]
+
+
 def _table_payload_from_dataframe(df: pd.DataFrame, *, input_tables: int) -> Dict[str, Any]:
     return {
         "columns": list(df.columns),
@@ -773,6 +819,12 @@ def integrate():
     payload = _attach_single_table_preview(payload)
     grouped_integrated_tables: List[Dict[str, Any]] = []
     integration_input_table_paths: List[str] = []
+    group_output_dir = os.path.join(paths.job_dir, "table_integration_groups")
+    group_output_prefix = _table_group_output_prefix(
+        integration_type=integration_type,
+        search_type=search_type,
+        tables_source=tables_source,
+    )
 
     if tables_source == "intermediate":
         query_to_retrieved = {
@@ -780,51 +832,55 @@ def integrate():
             for query_path, retrieved_paths in (payload.get("query_table_to_retrieved_table_paths") or {}).items()
             if str(query_path).strip()
         }
+        original_groups = list(query_to_retrieved.items())
         group_integrater = GroupTableIntegrater()
-        grouped_results = group_integrater.run(query_to_retrieved, mode=integration_type, k=k)
+        grouped_results = group_integrater.run(
+            _resolve_grouped_query_mapping(query_to_retrieved),
+            mode=integration_type,
+            k=k,
+        )
+        for result, (query_path, retrieved_paths) in zip(grouped_results, original_groups):
+            limited_retrieved_paths = list(retrieved_paths[:k])
+            result["query_table_path"] = query_path
+            result["retrieved_table_paths"] = limited_retrieved_paths
+            result["integration_input_table_paths"] = [query_path] + limited_retrieved_paths
         saved_grouped_results = group_integrater.save(
             grouped_results,
-            output_dir=os.path.join(paths.job_dir, "table_integration_groups"),
+            output_dir=group_output_dir,
+            output_name_prefix=group_output_prefix,
         )
         integration_input_table_paths = ordered_unique_paths(
             path
             for result in saved_grouped_results
             for path in result["integration_input_table_paths"]
         )
-        grouped_integrated_tables = [
-            {
-                "query_table_path": result["query_table_path"],
-                "retrieved_table_paths": list(result["retrieved_table_paths"]),
-                "integration_input_table_paths": list(result["integration_input_table_paths"]),
-                "saved_path": os.path.relpath(str(result["saved_path"]), paths.job_dir),
-                "integrated_table": _table_payload_from_dataframe(
-                    result["integrated_df"],
-                    input_tables=len(result["integration_input_table_paths"]),
-                ),
-            }
-            for result in saved_grouped_results
-        ]
+        grouped_integrated_tables = _serialize_grouped_integrated_tables(
+            saved_grouped_results,
+            job_dir=paths.job_dir,
+        )
     else:
         retrieved_table_paths = [str(p).strip() for p in (payload.get("table_paths") or []) if str(p).strip()]
         integration_input_table_paths = ordered_unique_paths(retrieved_table_paths[:k])
         df = TableIntegrater().run(local_table_paths(integration_input_table_paths), mode=integration_type)
         if df is None:
             raise ValueError("Table integration returned no output.")
-        csv_name = f"integrated_table_search_{integration_type}_{search_type}_{tables_source}.csv"
-        csv_path = os.path.join(paths.job_dir, csv_name)
-        df.to_csv(csv_path, index=False, encoding="utf-8")
-        grouped_integrated_tables = [
+        flat_grouped_results = [
             {
                 "query_table_path": "",
                 "retrieved_table_paths": retrieved_table_paths[:k],
                 "integration_input_table_paths": integration_input_table_paths,
-                "saved_path": f"jobs_251117/{job_id}/{csv_name}",
-                "integrated_table": _table_payload_from_dataframe(
-                    df,
-                    input_tables=len(integration_input_table_paths),
-                ),
+                "integrated_df": df,
             }
         ]
+        saved_grouped_results = GroupTableIntegrater().save(
+            flat_grouped_results,
+            output_dir=group_output_dir,
+            output_name_prefix=group_output_prefix,
+        )
+        grouped_integrated_tables = _serialize_grouped_integrated_tables(
+            saved_grouped_results,
+            job_dir=paths.job_dir,
+        )
 
     response_payload = {
         "status": "success",

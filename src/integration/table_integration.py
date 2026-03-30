@@ -333,14 +333,14 @@ class GroupTableIntegrater:
         grouped_results: List[Dict[str, Any]],
         *,
         output_dir: str,
+        output_name_prefix: str = "integrated_table_group",
     ) -> List[Dict[str, Any]]:
         saved_results: List[Dict[str, Any]] = []
         target_dir = os.path.abspath(output_dir)
         os.makedirs(target_dir, exist_ok=True)
         for idx, result in enumerate(grouped_results, start=1):
-            query_table_path = str(result["query_table_path"]).strip()
-            basename = os.path.basename(query_table_path) or f"query_table_{idx:02d}.csv"
-            output_name = f"group_{idx:02d}_{basename}"
+            prefix = str(output_name_prefix or "integrated_table_group").strip().rstrip("_")
+            output_name = f"{prefix}_{idx}.csv"
             output_path = os.path.join(target_dir, output_name)
             self.integrater.save_table(result["integrated_df"], output_path)
             saved = dict(result)
