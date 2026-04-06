@@ -287,7 +287,7 @@
             toggleLoadPrevious();
             
             const diagramImg = document.getElementById('search-diagram');
-            if (diagramImg) diagramImg.src = '/static/fig/modelsearch_wquery.png';
+            if (diagramImg) diagramImg.src = '/static/docs/modelsearch_wquery.png';
             
             loadPresetQueries();
         });

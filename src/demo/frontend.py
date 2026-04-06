@@ -447,7 +447,7 @@ RAW_HTML_TEMPLATE = """
             
             <div id="new-search-inputs">
             <div id="diagram-section" class="pdf-section" style="margin-bottom: 10px; padding: 8px;">
-                <img id="search-diagram" src="/static/fig/modelsearch.png" alt="ModelSearch Overview" style="height: 160px;" />
+                <img id="search-diagram" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" style="height: 160px;" />
             </div>
             
             <div class="mode-input active" id="query-input">
@@ -612,16 +612,16 @@ def serve_app_js():
     return Response(content, mimetype='application/javascript')
 
 
-@app.route('/static/fig/<path:filename>')
-def serve_fig(filename):
-    """Serve files from fig directory (PDF, PNG, etc.)"""
-    FIG_DIR = os.path.join(REPO_ROOT, 'fig')
-    os.makedirs(FIG_DIR, exist_ok=True)
-    
-    file_path = os.path.join(FIG_DIR, filename)
+@app.route('/static/docs/<path:filename>')
+def serve_docs_asset(filename):
+    """Serve documentation assets (PDF, PNG, etc.) from docs/."""
+    docs_dir = os.path.join(REPO_ROOT, 'docs')
+    os.makedirs(docs_dir, exist_ok=True)
+
+    file_path = os.path.join(docs_dir, filename)
     if os.path.exists(file_path):
         print(f"✅ Serving file from: {file_path}")
-        return send_from_directory(FIG_DIR, filename)
+        return send_from_directory(docs_dir, filename)
 
     print(f"❌ File not found. Tried paths: {file_path}")
     return jsonify({"error": "File not found", "filename": filename}), 404

@@ -61,7 +61,7 @@ CARD2CARD_SPARSE_CORPUS                   = os.path.join(OUTPUT_DIR, "card2card_
 CARD2CARD_NEIGHBORS_JSON                  = os.path.join(OUTPUT_DIR, "card2card_neighbors.json")
 #MODEL_CSVS_PARQUET                        = os.path.join(OUTPUT_DIR, "model_csvs.parquet")
 
-PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "config", "preset_queries.json")
+PRESET_QUERIES_PATH = os.path.join(REPO_ROOT, "docs", "preset_queries.json")
 
 CARD2TAB2CARD_TIMEOUT = 600
 

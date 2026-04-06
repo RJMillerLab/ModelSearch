@@ -3,7 +3,7 @@
 Batch runner for ModelSearch Demo preset queries.
 
 Simulates the frontend behavior:
-  1) Reads queries from config/preset_queries.json
+  1) Reads queries from docs/preset_queries.json
   2) For each query, calls /api/search on the backend
   3) Waits for the job to finish
   4) Optionally runs table-search + model-search integrations
@@ -11,7 +11,7 @@ Simulates the frontend behavior:
 Usage (from repo root):
   python scripts/batch_run_preset_queries.py \
     --backend_url http://localhost:5002 \
-    --preset_path config/preset_queries.json \
+    --preset_path docs/preset_queries.json \
     --run_integration
 
 Note:
@@ -113,7 +113,7 @@ def run_one_query(
     if mode == "query":
         req_body["query"] = query
     else:
-        # For completeness; not used when driving from preset_queries.json
+        # For completeness; not used when driving from docs/preset_queries.json
         req_body["model_id"] = query
 
     start = time.time()
@@ -230,8 +230,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--preset_path",
-        default=os.path.join("config", "preset_queries.json"),
-        help="Path to preset_queries.json (default: config/preset_queries.json)",
+        default=os.path.join("docs", "preset_queries.json"),
+        help="Path to preset_queries.json (default: docs/preset_queries.json)",
     )
     parser.add_argument(
         "--max_queries",

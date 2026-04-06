@@ -218,7 +218,7 @@ mimic user for batch running
 ```bash
 python -m src.utils.batch_run_preset_queries \
   --backend_url http://localhost:5002 \
-  --preset_path config/preset_queries.json \
+  --preset_path docs/preset_queries.json \
   --model_top_k 3 \
   --run_integration \
   --integration_type alite \
