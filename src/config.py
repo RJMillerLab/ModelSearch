@@ -15,6 +15,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 MODELTABLES_DATA = os.path.join(ROOT_DIR, "ModelTables", "data")
 PROCESSED_DIR = os.path.join(MODELTABLES_DATA, "processed")
 RAW_DIR = os.path.join(MODELTABLES_DATA, "raw")
+CARD_CONTENT_RAW = os.path.join(ROOT_DIR, "ModelTables", "data", "raw_251117")
+card_content_raw = CARD_CONTENT_RAW
 ENCODE_MODEL = "all-MiniLM-L6-v2"
 
 # --- Version/tag for processed artifacts ---
