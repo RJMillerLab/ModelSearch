@@ -38,14 +38,14 @@ PYTHONNOUSERSITE=1 python extract_corpus_hf_links.py \
   --output_parquet corpus_hf_links.parquet \
   --keep_full_text \
   --full_text_dir fulltexts \
-  --num_workers 8 \
-  --limit 2
+  --num_workers 8
 ```
 Analysis on corpus_hf_links.parquet
 ```bash
 python3 -m src.query.stats_litsearch_corpus_links \
   --parquet corpus_hf_links.parquet \
-  --query_jsonl src/query/data/query/litsearch_query.jsonl
+  --query_jsonl src/query/data/query/litsearch_query.jsonl \
+  --plot_path tmp/corpus_hf_links_funnel.png
 ```
 
 
@@ -65,4 +65,28 @@ python -m src.llm.batch \
 python -m src.query.batch_query_rewrite parse \
   --input src/query/data/query/query_rewrite_batch_output.jsonl \
   --output src/query/data/query/query_rewrite_polished.jsonl
+```
+```bash
+python3 -m src.query.test_query_rewrite_compare --limit 5
+```
+
+## Query labeling
+Label queries in 100-query chunks with one prompt per chunk:
+
+```bash
+python -m src.query.query_label_once \
+  --input src/query/data/query/query_rewrite_batch_output.jsonl \
+  --output src/query/data/query/query_label_once.jsonl \
+  --scheme six \
+  --start 0 \
+  --chunk-size 100
+```
+
+The default six labels are `evidence-based`, `comparison`, `experience`, `reason`, `instruction`, and `debate`. The output file includes `label`, `reason`, and an estimated input token count per chunk. Plot the label distribution with the same mini bar-chart style:
+
+```bash
+python -m src.query.stats_query_label_once \
+  --input src/query/data/query/query_label_once.jsonl \
+  --plot_path src/query/data/query/query_label_once_distribution.png \
+  --scheme six
 ```

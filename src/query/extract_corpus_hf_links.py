@@ -449,12 +449,9 @@ def main() -> None:
         default=1,
         help="Number of worker threads to read corpus files in parallel",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Optional row limit for quick testing")
     args = parser.parse_args()
 
     input_df = load_input_ids(args.ids_file)
-    if args.limit is not None:
-        input_df = input_df.head(args.limit).copy()
 
     unique_ids = input_df["corpusid"].dropna().astype(str).unique().tolist()
     print(f"Loaded {len(input_df)} input rows, {len(unique_ids)} unique corpusids")
