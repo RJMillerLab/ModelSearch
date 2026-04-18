@@ -7,18 +7,18 @@ Build OpenAI Batch input for polishing LitSearch-style queries.
 Workflow:
   1) Generate batch input:
      python -m src.query.batch_query_rewrite \
-       --input src/query/data/query/litsearch_query.jsonl \
-       --output src/query/data/query/query_rewrite_batch_input.jsonl
+       --input others/query/litsearch_query.jsonl \
+       --output data_251117/query/query_rewrite_batch_input.jsonl
 
   2) Submit with existing batch runner:
      python -m src.llm.batch \
-       src/query/data/query/query_rewrite_batch_input.jsonl \
-       src/query/data/query/query_rewrite_batch_output.jsonl
+       data_251117/query/query_rewrite_batch_input.jsonl \
+       data_251117/query/query_rewrite_batch_output.jsonl
 
   3) Parse batch output:
      python -m src.query.batch_query_rewrite parse \
-       --input src/query/data/query/query_rewrite_batch_output.jsonl \
-       --output src/query/data/query/query_rewrite_polished.jsonl
+       --input data_251117/query/query_rewrite_batch_output.jsonl \
+       --output data_251117/query/query_rewrite_polished.jsonl
 """
 
 import argparse
@@ -143,14 +143,14 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
 
     build = subparsers.add_parser("build", help="Build batch input JSONL")
-    build.add_argument("--input", type=Path, default=Path("src/query/data/query/litsearch_query.jsonl"))
-    build.add_argument("--output", type=Path, default=Path("src/query/data/query/query_rewrite_batch_input.jsonl"))
+    build.add_argument("--input", type=Path, default=Path("others/query/litsearch_query.jsonl"))
+    build.add_argument("--output", type=Path, default=Path("data_251117/query/query_rewrite_batch_input.jsonl"))
     build.add_argument("--model", default="gpt-4o-mini")
     build.add_argument("--limit", type=int, default=None)
 
     parse = subparsers.add_parser("parse", help="Parse OpenAI batch output JSONL")
     parse.add_argument("--input", type=Path, required=True)
-    parse.add_argument("--output", type=Path, default=Path("src/query/data/query/query_rewrite_polished.jsonl"))
+    parse.add_argument("--output", type=Path, default=Path("data_251117/query/query_rewrite_polished.jsonl"))
 
     args = parser.parse_args()
 

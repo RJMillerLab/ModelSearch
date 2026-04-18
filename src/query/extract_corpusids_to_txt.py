@@ -34,13 +34,13 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("src/query/data/query/litsearch_query.jsonl"),
+        default=Path("others/query/litsearch_query.jsonl"),
         help="Path to the LitSearch query JSONL file.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("src/query/data/query/new_corpusids.txt"),
+        default=Path("data_251117/query/new_corpusids.txt"),
         help="Path to the output TXT file.",
     )
     args = parser.parse_args()

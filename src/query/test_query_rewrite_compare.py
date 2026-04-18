@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_INPUT = Path("src/query/data/query/query_rewrite_batch_input.jsonl")
-DEFAULT_OUTPUT = Path("src/query/data/query/query_rewrite_batch_output.jsonl")
-DEFAULT_MD = Path("src/query/data/query/query_rewrite_compare_sample.md")
+DEFAULT_INPUT = Path("data_251117/query/query_rewrite_batch_input.jsonl")
+DEFAULT_OUTPUT = Path("data_251117/query/query_rewrite_batch_output.jsonl")
+DEFAULT_MD = Path("data_251117/query/query_rewrite_compare_sample.md")
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:

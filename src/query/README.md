@@ -2,7 +2,7 @@
 
 | title | link | note |
 | --- | --- | --- |
-| UniDocBench | [`query_example_unidocbench.py`](./query_example_unidocbench.py) | QA query synthesis template for scientific documents; we only keep a small filtered subset for model selection, and most generated queries are unrelated. |
+| UniDocBench | [`query_example_unidocbench.py`](../../others/unidoc/query_example_unidocbench.py) | QA query synthesis template for scientific documents; we only keep a small filtered subset for model selection, and most generated queries are unrelated. |
 | LitSearch | https://aclanthology.org/2024.emnlp-main.840/ | Closest explicit literature-search query benchmark; for our task we reuse the query text and replace `paper` / `studies` with `models`. |
 | LitSearch query subset | https://huggingface.co/datasets/yale-nlp/LitSearch-NLP-Class/viewer/query?row=6 | Query-only subset we can reuse directly as recommendation-style query data. |
 | SPRD / Scholarly Paper Recommendation Dataset | https://link.springer.com/article/10.1007/s00799-022-00339-w | Manual relevance judgments for scholarly paper recommendation; good for evaluation, not a natural-language query benchmark. |
@@ -16,7 +16,7 @@
 Download the LitSearch query subset `query` and save it locally as JSONL:
 
 ```bash
-python -c "from datasets import load_dataset; ds = load_dataset('yale-nlp/LitSearch-NLP-Class', split='query'); ds.to_json('data/query/litsearch_nlp_class_query.jsonl')"
+python -c "from datasets import load_dataset; ds = load_dataset('yale-nlp/LitSearch-NLP-Class', split='query'); ds.to_json('others/query/litsearch_query.jsonl')"
 ```
 
 ## Analysis on groundtruth for extracting model from paper corpusid
@@ -24,8 +24,8 @@ Extract unique `corpusids` into a plain text file:
 
 ```bash
 python -m src.query.extract_corpusids_to_txt \
-  --input src/query/data/query/litsearch_query.jsonl \
-  --output src/query/data/query/new_corpusids.txt
+  --input others/query/litsearch_query.jsonl \
+  --output data_251117/query/new_corpusids.txt
 ```
 
 Test whether we could extract hf links from full text, if so we could infer model recommendation from paper recommendation
@@ -44,7 +44,7 @@ Analysis on corpus_hf_links.parquet
 ```bash
 python3 -m src.query.stats_litsearch_corpus_links \
   --parquet corpus_hf_links.parquet \
-  --query_jsonl src/query/data/query/litsearch_query.jsonl \
+  --query_jsonl others/query/litsearch_query.jsonl \
   --plot_path tmp/corpus_hf_links_funnel.png
 ```
 
@@ -52,19 +52,19 @@ python3 -m src.query.stats_litsearch_corpus_links \
 ## Query substitution
 ```bash
 python -m src.query.batch_query_rewrite build \
-  --input src/query/data/query/litsearch_query.jsonl \
-  --output src/query/data/query/query_rewrite_batch_input.jsonl \
+  --input others/query/litsearch_query.jsonl \
+  --output data_251117/query/query_rewrite_batch_input.jsonl \
   --model gpt-4o-mini
 
 # Submit batch input and download the output:
 python -m src.llm.batch \
-  src/query/data/query/query_rewrite_batch_input.jsonl \
-  src/query/data/query/query_rewrite_batch_output.jsonl
+  data_251117/query/query_rewrite_batch_input.jsonl \
+  data_251117/query/query_rewrite_batch_output.jsonl
 
 # Parse the batch output into a clean rewrite file:
 python -m src.query.batch_query_rewrite parse \
-  --input src/query/data/query/query_rewrite_batch_output.jsonl \
-  --output src/query/data/query/query_rewrite_polished.jsonl
+  --input data_251117/query/query_rewrite_batch_output.jsonl \
+  --output data_251117/query/query_rewrite_polished.jsonl
 ```
 ```bash
 python3 -m src.query.test_query_rewrite_compare --limit 5
@@ -75,8 +75,8 @@ Label queries in 100-query chunks with one prompt per chunk:
 
 ```bash
 python -m src.query.query_label_once \
-  --input src/query/data/query/query_rewrite_batch_output.jsonl \
-  --output src/query/data/query/query_label_once.jsonl \
+  --input data_251117/query/query_rewrite_batch_output.jsonl \
+  --output data_251117/query/query_label_once.jsonl \
   --scheme six \
   --start 0 \
   --chunk-size 100
@@ -86,7 +86,7 @@ The default six labels are `evidence-based`, `comparison`, `experience`, `reason
 
 ```bash
 python -m src.query.stats_query_label_once \
-  --input src/query/data/query/query_label_once.jsonl \
-  --plot_path src/query/data/query/query_label_once_distribution.png \
+  --input data_251117/query/query_label_once.jsonl \
+  --plot_path data_251117/query/query_label_once_distribution.png \
   --scheme six
 ```

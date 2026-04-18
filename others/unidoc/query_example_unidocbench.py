@@ -1,4 +1,3 @@
-
 TEMPLATES_ENG_SCI = """
 **Factual Retrieval:**
     1. What are the key components, inputs, or modules used in [System/Design]?

@@ -71,13 +71,13 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("src/query/data/query/query_label_once.jsonl"),
+        default=Path("data_251117/query/query_label_once.jsonl"),
         help="Path to query_label_once JSONL.",
     )
     parser.add_argument(
         "--plot_path",
         type=Path,
-        default=Path("src/query/data/query/query_label_once_distribution.png"),
+        default=Path("data_251117/query/query_label_once_distribution.png"),
         help="Path to save the bar chart.",
     )
     parser.add_argument(

@@ -9,18 +9,11 @@
 
 ## 1. Model Card Extract Nuggets
 
-Input:
-
-- `src.config.CARD_CONTENT_RAW`
-- `../ModelTables/data/raw_251117/train-0000*-of-00006.parquet`
-- columns: `modelId`, `card`
 
 Single-card test:
 
 ```bash
-python -m src.evaluate.card2nugget_extraction single \
-  --model-id test-model \
-  --card "paste one model card here"
+python -m src.evaluate.card2nugget_extraction --model-id google/bert_uncased_L-12_H-768_A-12
 ```
 
 Single output:
@@ -76,7 +69,7 @@ python -m src.evaluate.evaluate_pyndeval \
   --cutoff 20
 ```
 
-## 4. Reference
+## 4. Repo I tested
 
 | Name | Tested | Why Not Used / Issue | Year | Type |
 | --- | --- | --- | --- | --- |

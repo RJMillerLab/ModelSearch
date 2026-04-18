@@ -15,8 +15,8 @@ Default behavior:
 
 Example:
   python -m src.query.query_label_once \
-    --input src/query/data/query/query_rewrite_batch_output.jsonl \
-    --output src/query/data/query/query_label_once.jsonl \
+    --input data_251117/query/query_rewrite_batch_output.jsonl \
+    --output data_251117/query/query_label_once.jsonl \
     --scheme six
 """
 
@@ -289,8 +289,8 @@ def _estimate_chat_tokens(system_prompt: str, user_prompt: str, model: str) -> i
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Label queries with one prompt per chunk.")
-    parser.add_argument("--input", type=Path, default=Path("src/query/data/query/query_rewrite_batch_output.jsonl"))
-    parser.add_argument("--output", type=Path, default=Path("src/query/data/query/query_label_once.jsonl"))
+    parser.add_argument("--input", type=Path, default=Path("data_251117/query/query_rewrite_batch_output.jsonl"))
+    parser.add_argument("--output", type=Path, default=Path("data_251117/query/query_label_once.jsonl"))
     parser.add_argument("--prompt-out-dir", type=Path, default=None)
     parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--scheme", choices=["six", "four"], default="six")
