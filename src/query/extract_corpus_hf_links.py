@@ -21,7 +21,7 @@ Input formats supported for `--ids_file`:
   - .parquet: a column named corpusid or corpusId
 
 Output columns include:
-  - corpusid, title, filename, line_index
+  - corpusid, title, paper_title, filename, line_index
   - full_text_len, openaccessurl
   - hf_links, hf_models, hf_datasets, hf_spaces
   - hf_link_snippets
@@ -396,6 +396,32 @@ def build_output_rows(
         records.append(record)
 
     out_df = pd.DataFrame(records)
+    if "title" in out_df.columns and "paper_title" not in out_df.columns:
+        out_df["paper_title"] = out_df["title"]
+    elif "paper_title" not in out_df.columns:
+        out_df["paper_title"] = None
+
+    preferred_order = [
+        "corpusid",
+        "title",
+        "paper_title",
+        "filename",
+        "line_index",
+        "status",
+        "full_text_len",
+        "openaccessurl",
+        "hf_links",
+        "hf_models",
+        "hf_datasets",
+        "hf_spaces",
+        "hf_link_snippets",
+        "full_text_path",
+        "full_text",
+    ]
+    existing = [col for col in preferred_order if col in out_df.columns]
+    remaining = [col for col in out_df.columns if col not in existing]
+    out_df = out_df[existing + remaining]
+
     if "hf_link_snippets" in out_df.columns:
         out_df["hf_link_snippets"] = out_df["hf_link_snippets"].apply(
             lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, list) else x

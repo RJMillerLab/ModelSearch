@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+python -m src.query.query_rewrite_batch \
+  --input src/query/data/query/litsearch_query.jsonl \
+  --output src/query/data/query/query_rewrite_batch_input.jsonl \
+  --mode batch_input \
+  --model gpt-4o-mini
+"""
 from __future__ import annotations
 
 import argparse
@@ -12,21 +19,12 @@ from src.llm.model import query_openai, setup_openai
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You rewrite scientific literature search queries into model-oriented queries. "
-    "Keep each rewrite as short and natural as possible. "
-    "Minimize token changes. If a query already sounds natural for the target, keep it unchanged. "
-    "Do not add explanations."
+    "Rewrite scientific search queries into model-oriented queries. "
+    "Use the smallest natural edit. "
+    "Return JSON only: {\"query\":\"...\"}."
 )
 
-DEFAULT_USER_TEMPLATE = """Rewrite the query below by following these rules:
-1. Replace or adapt words like paper/studies/research papers/publications/articles/literature into one of: model, method, approach, benchmark, or task.
-2. Choose the smallest possible edit that keeps the sentence fluent.
-3. Do not change the meaning more than needed.
-4. If the query already reads naturally for model-oriented retrieval, keep it as-is.
-5. Output JSON only in the form: {{"query": "<rewritten query>"}}.
-
-Query: {query}
-"""
+DEFAULT_USER_TEMPLATE = "Query: {query}"
 
 
 def load_queries(path: Path) -> list[dict[str, Any]]:
@@ -152,7 +150,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("src/llm/query_rewrite_output.jsonl"),
+        default=Path("src/query/data/query/query_rewrite_output.jsonl"),
         help="Output JSONL for rewritten queries, or batch input file when --mode batch_input.",
     )
     parser.add_argument(

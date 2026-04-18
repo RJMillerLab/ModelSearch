@@ -31,7 +31,15 @@ python -m src.query.extract_corpusids_to_txt \
 Test whether we could extract hf links from full text, if so we could infer model recommendation from paper recommendation
 ```bash
 # go to z6dong@watgpu:~/shared_data/se_s2orc_250218, where we store se_s2orc_corpus data
-PYTHONNOUSERSITE=1 python extract_corpus_hf_links.py   --ids_file new_corpusids.txt   --db_path paper_index_mini.db   --data_directory ./   --output_parquet corpus_hf_links.parquet --keep_full_text --full_text_dir fulltexts --limit 20
+PYTHONNOUSERSITE=1 python extract_corpus_hf_links.py \
+  --ids_file new_corpusids.txt \
+  --db_path paper_index_mini.db \
+  --data_directory ./ \
+  --output_parquet corpus_hf_links.parquet \
+  --keep_full_text \
+  --full_text_dir fulltexts \
+  --num_workers 8 \
+  --limit 2
 ```
 Analysis on corpus_hf_links.parquet
 ```bash
@@ -43,5 +51,18 @@ python3 -m src.query.stats_litsearch_corpus_links \
 
 ## Query substitution
 ```bash
+python -m src.query.batch_query_rewrite build \
+  --input src/query/data/query/litsearch_query.jsonl \
+  --output src/query/data/query/query_rewrite_batch_input.jsonl \
+  --model gpt-4o-mini
 
+# Submit batch input and download the output:
+python -m src.llm.batch \
+  src/query/data/query/query_rewrite_batch_input.jsonl \
+  src/query/data/query/query_rewrite_batch_output.jsonl
+
+# Parse the batch output into a clean rewrite file:
+python -m src.query.batch_query_rewrite parse \
+  --input src/query/data/query/query_rewrite_batch_output.jsonl \
+  --output src/query/data/query/query_rewrite_polished.jsonl
 ```

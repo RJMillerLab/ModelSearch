@@ -4,6 +4,7 @@ Date: 2025-04-01
 Description: This script demonstrates how to use OpenAI Batch API for submitting multiple chat completions asynchronously.
 """
 
+import argparse
 import os
 import time
 from dotenv import load_dotenv
@@ -84,7 +85,8 @@ def main_batch_query(input_path: str, output_path: str):
     print(f"🕒 Total time: {time.time() - t1:.2f} seconds")
 
 if __name__ == "__main__":
-    # ---------- Load API Key and Create Client ----------
-    input_path = "batch_input_eg.jsonl"
-    output_path = "batch_output_eg.jsonl"
-    main_batch_query(input_path, output_path)
+    parser = argparse.ArgumentParser(description="Submit an OpenAI Batch input file and download the output.")
+    parser.add_argument("input_path", nargs="?", default="batch_input_eg.jsonl", help="Batch input JSONL file")
+    parser.add_argument("output_path", nargs="?", default="batch_output_eg.jsonl", help="Batch output JSONL file")
+    args = parser.parse_args()
+    main_batch_query(args.input_path, args.output_path)
