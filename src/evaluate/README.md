@@ -14,24 +14,14 @@ Single-card test:
 
 ```bash
 python -m src.evaluate.card2nugget_extraction --model-id google/bert_uncased_L-12_H-768_A-12
-
-python src/evaluate/card2nugget_extraction.py single --model-id google/bert_uncased_L-12_H-768_A-12
 ```
 
-Single output:
+Outputs:
 
-- `data_251117/evaluate/single_modelcard_nuggets.json`
+- `data_251117/evaluate/single_modelcard_llm.csv` — parsed tuples table (columns: `Model`, `Base_model`, `Dataset`, `Train_dataset`, `Test_dataset`, `Model_hyperparameters`, `Model_variant_type`, `Metric`, `Metric_value`, `keep_or_not`)
+- `data_251117/evaluate/single_modelcard_llm_meta.yaml` — metadata + full `prompt` + raw `response`
 
-Batch:
-
-```bash
-python -m src.evaluate.card2nugget_extraction batch
-```
-
-Batch outputs:
-
-- `data_251117/evaluate/modelcard_nuggets.jsonl`
-- `data_251117/evaluate/modelcard_nuggets.json`
+Optional: `python -m src.evaluate.card2nugget_extraction --read-csv` prints character counts for the default CSV path.
 
 ## 2. Get Query-Nuggets List Mapping
 

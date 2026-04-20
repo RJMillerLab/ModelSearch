@@ -1,104 +1,98 @@
-card_remaining_nugget_extraction: |
-  You are given model card text after tables and citation sections have been removed.
-  Extract short raw nuggets that are worth standardizing later.
-  Return YAML only.
-
-  Response format:
-  nuggets:
-    - raw_mention: short exact span
-      context: short surrounding context
-      reference_doc: short base reference doc name
-
-  Rules:
-  - Keep nuggets short and atomic.
-  - Prefer mentions that look like model names, base models, model variants, datasets, metrics, or scores.
-  - Ignore citations, references, licenses, acknowledgements, and long prose.
-  - If nothing useful is found, return:
-    nuggets: []
-
-  Fixed schema:
-  [[SCHEMA_DEFINITION]]
-
-  Card remaining:
-  [[CARD_REMAINING]]
-
 nugget_schema_mapping: |
-  You are given model card text after tables and citation sections have been removed.
-  Map information into fixed standardized feature cells.
-  Return YAML only.
+  You are extracting **atomic nugget tuples** from a Hugging Face model card.
 
-  Response format:
-  rows:
-    - Model: model name or empty string
-      Base_model: base model name or empty string
-      Dataset: dataset or benchmark name or empty string
-      Train_dataset: train dataset name or empty string
-      Test_dataset: test/eval dataset name or empty string
-      Model_hyperparameters: architecture/hparam text or empty string
-      Model_variant_type: variant type text or empty string
-      Metric: metric name or empty string
-      Metric_value: score/value text or empty string
-      Other_features: other useful info or empty string
+  Inputs:
+  - **TABLE PART**: raw table text. It may include irrelevant tables such as links, examples, formatting artifacts, or navigation content.
+  - **TEXT PART**: the remaining narrative text.
 
-  Rules:
-  - Use the fixed schema only.
-  - Keep output concise and deterministic.
-  - Fill feature cells directly; do not output entity_type/entity_name.
-  - Do not output source, csv_basename, row, col, confidence, or rule_id in the response.
-  - Treat pretrained, quantized, quantization, int8, 8-bit, 4-bit, fp16, bf16, pruned, distilled, merged, adapter, finetuned, fine-tuned as model_variant_type.
-  - Treat architecture/hyperparameter mentions like L=12, H=768, A=12, hidden size, number of layers, number of heads, params as model_hyperparameters when they are model settings.
-  - Never treat quantization-related words as metric.
-  - Benchmark and dataset are treated as the same bucket: use dataset.
-  - Use train_dataset for training data or train set mentions.
-  - Use test_dataset for test data, eval data, or validation set mentions.
-  - Use metric for measures like accuracy, F1, BLEU, ROUGE, mAP, latency, throughput, memory, model size, params, MACs, MAdds, recall@k, precision@k, perplexity.
-  - Use score for numeric values attached to metrics.
-  - Use model for the current model mention if it is explicitly mentioned in the nugget.
-  - Use base_model for the parent or source model if the nugget states a base model.
-  - If nothing matches, return:
-    rows: []
+  Goal:
+  - Extract tuples about model settings, variants, datasets, metrics, and scores.
+  - A **tuple is atomic**: for tables, it should usually represent **one meaningful cell value together with its aligned row header and column header**.
+  - For result/performance tables, **do not summarize a whole row into one tuple** when it contains multiple useful cells. Instead, create **one tuple per valid cell**.
 
-  Fixed schema:
-  [[SCHEMA_DEFINITION]]
+  Extraction rules:
+  1. **Each output row = one extracted tuple.**
+  2. For performance/result tables, one valid tuple is usually:
+     - the **cell value**
+     - plus its **row name**
+     - plus its **column name**
+     - plus any necessary higher-level header context.
+  3. If a row has many metric cells, produce **many tuples**, one per meaningful cell.
+  4. If table cell mapping is partial, still keep the tuple and leave unknown fields empty.
+  5. For config/specification tables, also extract **one meaningful cell per tuple** when it describes a useful structured fact.
+  6. If **TEXT PART** contains useful structured config or results, including YAML-like blocks, bullet lists, or explicit benchmark statements, you may add tuples from text. Keep them **atomic** as well.
+  6.1 If TEXT PART provides **global training hyperparameters** (e.g., epochs, batch sizes, learning rates), extract them as one dedicated tuple row in `Model_hyperparameters`.
+  6.2 Do not repeat the same global hyperparameter string in every performance row.
+  7. Ignore clearly irrelevant tables/content, such as navigation links, toy examples, pure URLs, decorative markdown, or unrelated code snippets.
+  8. Use empty string for unknown fields.
+  9. Do not invent unsupported values.
 
-  Card remaining:
+  Field guidance:
+  - `Model`: model or checkpoint name.
+  - `Base_model`: parent/base architecture if stated.
+  - `Dataset`: benchmark or dataset name when applicable.
+  - `Train_dataset`: training dataset or split if explicitly known.
+  - `Test_dataset`: evaluation dataset or split if explicitly known.
+  - `Model_hyperparameters`: concrete config such as epochs, learning rate, batch size, layers, hidden size, parameter count, and similar settings.
+  - `Model_variant_type`: variant label such as Tiny, Base, Large, multilingual, distilled, quantized, finetuned, and similar categories.
+  - `Metric`: metric or attribute name implied by the cell, header, or context.
+  - `Metric_value`: the extracted cell value.
+  Important:
+  - Prefer **more atomic rows** over fewer aggregated rows.
+  - Example: if row = `BERT-Tiny`, column = `SST-2`, value = `83.2`, that should be **one tuple**.
+  - Another cell in the same row, such as `MNLI = 70.2`, should usually be **another tuple**.
+
+  TABLE PART:
+  [[TABLE_CONTEXT]]
+
+  TEXT PART:
   [[CARD_REMAINING]]
 
-table_nugget_schema_mapping: |
-  You are given table nuggets from model-card tables.
-  Map each table nugget into fixed standardized feature cells.
-  Return YAML only.
+  Please return the response in the following format, and do not return anything else:
+  ```markdown
+  | Model | Base_model | Dataset | Train_dataset | Test_dataset | Model_hyperparameters | Model_variant_type | Metric | Metric_value |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+  ```
 
-  Input nuggets are:
-  - row: table row label
-  - col: table column name
-  - value: table cell value
+nugget_schema_mapping_text_only: |
+  You are extracting **atomic nugget tuples** from a Hugging Face model card.
 
-  Response format:
-  rows:
-    - Model: model name or empty string
-      Base_model: base model name or empty string
-      Dataset: dataset or benchmark name or empty string
-      Train_dataset: train dataset name or empty string
-      Test_dataset: test/eval dataset name or empty string
-      Model_hyperparameters: architecture/hparam text or empty string
-      Model_variant_type: variant type text or empty string
-      Metric: metric name or empty string
-      Metric_value: score/value text or empty string
-      Other_features: other useful info or empty string
+  Inputs:
+  - TABLE PART: unavailable or empty for this sample.
+  - TEXT PART: the only source of facts.
 
-  Rules:
-  - Use the fixed schema only.
-  - Keep output concise and deterministic.
-  - Prefer row as entity_name when it is meaningful.
-  - Treat table architecture settings like L=12, H=768, A=12 as model_hyperparameters.
-  - Use col/value to infer metric/score when needed.
-  - Do not output source, csv_basename, row, col, confidence, or rule_id in the response.
-  - If nothing matches, return:
-    rows: []
+  Goal:
+  - Extract tuples about model settings, variants, datasets, metrics, and scores from TEXT PART only.
+  - Keep tuples atomic and grounded in explicit text evidence.
+  - Filter out weak, decorative, or unsupported statements.
 
-  Fixed schema:
-  [[SCHEMA_DEFINITION]]
+  Text-only extraction rules:
+  1. Each output row = one extracted tuple.
+  2. You may extract from prose, bullets, and yaml-like / config-like blocks.
+  3. If one logical tuple is written across multiple lines (for example yaml-like key/value lines), merge those lines into one tuple.
+  4. If multiple metrics are listed, output multiple tuples (one metric/value per row when possible).
+  5. Use empty string for unknown fields.
+  6. Do not invent values not present in text.
+  7. If text contains global hyperparameters (epochs, batch sizes, learning rates), extract them into `Model_hyperparameters`.
 
-  Raw nuggets:
-  [[RAW_NUGGETS]]
+  Field guidance:
+  - `Model`: model or checkpoint name.
+  - `Base_model`: parent/base architecture if stated.
+  - `Dataset`: benchmark or dataset name.
+  - `Train_dataset`: training dataset/split if explicit.
+  - `Test_dataset`: evaluation dataset/split if explicit.
+  - `Model_hyperparameters`: explicit settings such as epochs, lr, batch size, layers, hidden size, params.
+  - `Model_variant_type`: Tiny/Base/Large/distilled/quantized/finetuned/etc.
+  - `Metric`: metric name.
+  - `Metric_value`: metric value.
+
+  TEXT PART:
+  [[CARD_REMAINING]]
+
+  Please return the response in the following format, and do not return anything else:
+  ```markdown
+  | Model | Base_model | Dataset | Train_dataset | Test_dataset | Model_hyperparameters | Model_variant_type | Metric | Metric_value |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+  ```
