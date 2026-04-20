@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""HF model card → one LLM call → parse markdown table and save tuples to CSV."""
+"""HF model card (full text) → one LLM call → parse markdown table → CSV."""
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import re
 import sys
@@ -13,7 +14,6 @@ from typing import Any
 
 import duckdb
 import yaml
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -22,17 +22,17 @@ if _repo_root not in sys.path:
 load_dotenv(os.path.join(_repo_root, ".env"), override=False)
 
 from src.config import CARD_CONTENT_RAW, OUTPUT_DIR
+from src.llm.batch import main_batch_query
 from src.llm.model import query_openai, setup_openai
-from src.utils import load_modelid_to_csvlist, read_csv_robust, resolve_table_path
 
 SHARD_GLOB = "train-0000*-of-00006.parquet"
 EVAL_DIR = Path(OUTPUT_DIR) / "evaluate"
-META_YAML = EVAL_DIR / "single_modelcard_llm_meta.yaml"
-LLM_CSV = EVAL_DIR / "single_modelcard_llm.csv"
+BATCH_DIR = EVAL_DIR / "batch"
 PROMPT_PATH = Path("src/evaluate/card2nugget_prompts.yaml")
 PROMPT_KEY = "nugget_schema_mapping"
-PROMPT_KEY_TEXT_ONLY = "nugget_schema_mapping_text_only"
 TEXT_EXTRACTION_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-4o-mini")
+CARD_MAX_CHARS = int(os.getenv("MODELSEARCHDEMO_CARD_MAX_CHARS", "100000"))
+
 OUTPUT_HEADERS = [
     "Model",
     "Base_model",
@@ -43,7 +43,6 @@ OUTPUT_HEADERS = [
     "Model_variant_type",
     "Metric",
     "Metric_value",
-    "keep_or_not",
 ]
 
 
@@ -74,45 +73,6 @@ def _read_card_by_model_id(model_id: str) -> str:
     return str(row[0])
 
 
-def _remove_html_tables(text: str) -> str:
-    if not isinstance(text, str) or "<table" not in text.lower():
-        return text if isinstance(text, str) else ""
-    try:
-        soup = BeautifulSoup(text, "lxml")
-    except Exception:
-        soup = BeautifulSoup(text, "html.parser")
-    for table in soup.find_all("table"):
-        table.decompose()
-    return str(soup)
-
-
-def _remove_markdown_tables(text: str) -> str:
-    if not isinstance(text, str):
-        return ""
-    lines = _remove_html_tables(text).splitlines()
-    kept: list[str] = []
-    in_table = False
-
-    def is_separator(line: str) -> bool:
-        return bool(re.fullmatch(r"[\s:\-\|]*", line.strip())) and "|" in line
-
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            in_table = False
-            kept.append(raw_line)
-            continue
-        if "|" in line:
-            in_table = True
-            continue
-        if in_table and is_separator(line):
-            continue
-        if in_table:
-            in_table = False
-        kept.append(raw_line)
-    return "\n".join(kept)
-
-
 def _remove_citation_part(text: str) -> str:
     if not isinstance(text, str):
         return ""
@@ -138,56 +98,21 @@ def _remove_citation_part(text: str) -> str:
     return "\n".join(kept)
 
 
-def _extract_markdown_table_blocks(card: str, max_chars: int = 12000) -> str:
-    if not isinstance(card, str):
-        return ""
-    lines = _remove_html_tables(card).splitlines()
-    blocks: list[str] = []
-    buf: list[str] = []
-    for raw in lines:
-        if "|" in raw.strip() and raw.strip():
-            buf.append(raw.rstrip())
-        else:
-            if len(buf) >= 2:
-                blocks.append("\n".join(buf))
-            buf = []
-    if len(buf) >= 2:
-        blocks.append("\n".join(buf))
-    out = "\n\n---\n\n".join(blocks)
-    return out[:max_chars] if out else ""
-
-
-def _linked_csv_as_tsv(paths: list[str], max_rows: int = 80) -> str:
-    parts: list[str] = []
-    for p in paths:
-        resolved = resolve_table_path(p) or (p if os.path.exists(p) else "")
-        if not resolved:
-            continue
-        df = read_csv_robust(resolved)
-        if df is None or df.empty:
-            continue
-        name = os.path.basename(resolved)
-        chunk = df.head(max_rows).to_csv(index=False, sep="\t")
-        parts.append(f"=== {name} ===\n{chunk.rstrip()}")
-    return "\n\n".join(parts) if parts else ""
-
-
-def _build_table_context(card: str, related_tables: list[str]) -> str:
-    md = _extract_markdown_table_blocks(card)
-    csv_txt = _linked_csv_as_tsv(related_tables)
-    chunks = []
-    if md:
-        chunks.append("MARKDOWN TABLES (from card):\n" + md)
-    if csv_txt:
-        chunks.append("LINKED CSV TABLES (tsv):\n" + csv_txt)
-    return "\n\n".join(chunks) if chunks else "(no table text)"
-
-
-def _load_prompt_template(prompt_key: str) -> str:
+def _load_prompt_template() -> str:
     if not PROMPT_PATH.exists():
         return ""
     data = yaml.safe_load(PROMPT_PATH.read_text(encoding="utf-8")) or {}
-    return str(data.get(prompt_key, "")).strip()
+    return str(data.get(PROMPT_KEY, "")).strip()
+
+
+def _safe_model_id(model_id: str) -> str:
+    return _norm(model_id).replace("/", "__")
+
+
+def _output_paths_for_model(model_id: str, use_batch_dir: bool = False) -> tuple[Path, Path]:
+    base = _safe_model_id(model_id)
+    out_dir = BATCH_DIR if use_batch_dir else EVAL_DIR
+    return out_dir / f"{base}.csv", out_dir / f"{base}_meta.yaml"
 
 
 def _split_pipe_row(line: str) -> list[str]:
@@ -258,14 +183,13 @@ def _extract_global_hparams(text: str) -> str:
     return "; ".join(parts)
 
 
-def _apply_hparam_fallback(rows: list[dict[str, str]], card_remaining: str) -> tuple[list[dict[str, str]], str]:
-    global_hparams = _extract_global_hparams(card_remaining)
+def _apply_hparam_fallback(rows: list[dict[str, str]], card_text: str) -> tuple[list[dict[str, str]], str]:
+    global_hparams = _extract_global_hparams(card_text)
     if not global_hparams:
         return rows, ""
     out: list[dict[str, str]] = [dict(r) for r in rows]
     exists = any(_norm(r.get("Model_hyperparameters", "")) == global_hparams for r in out)
     if not exists:
-        # Add one dedicated row for global training hyperparameters.
         out.append(
             {
                 "Model": "",
@@ -277,7 +201,6 @@ def _apply_hparam_fallback(rows: list[dict[str, str]], card_remaining: str) -> t
                 "Model_variant_type": "",
                 "Metric": "",
                 "Metric_value": "",
-                "keep_or_not": "keep",
             }
         )
     return out, global_hparams
@@ -293,8 +216,137 @@ def _write_llm_csv(path: Path, rows: list[dict[str, str]]) -> None:
             w.writerow({k: row.get(k, "") for k in fieldnames})
 
 
+def _prepare_model_input(model_id: str) -> dict[str, Any]:
+    card_raw = _read_card_by_model_id(model_id)
+    card_clean = _remove_citation_part(card_raw)
+    card_for_hparam = _norm(card_clean)
+    truncated = False
+    card_in_prompt = card_for_hparam
+    if CARD_MAX_CHARS > 0 and len(card_in_prompt) > CARD_MAX_CHARS:
+        card_in_prompt = card_in_prompt[:CARD_MAX_CHARS] + "\n\n[TRUNCATED: card exceeded MODELSEARCHDEMO_CARD_MAX_CHARS]"
+        truncated = True
+
+    template = _load_prompt_template()
+    if not template:
+        raise RuntimeError(f"Missing prompt key {PROMPT_KEY} in {PROMPT_PATH}")
+    prompt = template.replace("[[MODEL_CARD]]", card_in_prompt)
+    return {
+        "model_id": model_id,
+        "prompt_key": PROMPT_KEY,
+        "prompt": prompt,
+        "card_for_hparam": card_for_hparam,
+        "card_truncated": truncated,
+        "card_chars_total": len(card_for_hparam),
+        "card_chars_in_prompt": len(card_in_prompt),
+    }
+
+
+def _save_model_outputs(
+    prepared: dict[str, Any],
+    response: str,
+    note: str,
+    use_batch_dir: bool = False,
+) -> tuple[Path, Path]:
+    model_id = prepared["model_id"]
+    prompt = prepared["prompt"]
+    prompt_key = prepared["prompt_key"]
+    card_for_hparam = prepared["card_for_hparam"]
+    csv_path, meta_path = _output_paths_for_model(model_id, use_batch_dir=use_batch_dir)
+
+    parsed_rows = _parse_markdown_table(response)
+    parsed_rows, global_hparams = _apply_hparam_fallback(parsed_rows, card_for_hparam)
+    _write_llm_csv(csv_path, parsed_rows)
+
+    meta = {
+        "modelId": model_id,
+        "llm_model": TEXT_EXTRACTION_MODEL,
+        "prompt_key": prompt_key,
+        "llm_csv": str(csv_path.resolve()),
+        "prompt": prompt,
+        "raw_response": response,
+        "parsed_rows": len(parsed_rows),
+        "global_hparams_fallback": global_hparams,
+        "card_truncated": prepared.get("card_truncated", False),
+        "card_chars_total": prepared.get("card_chars_total", 0),
+        "card_chars_in_prompt": prepared.get("card_chars_in_prompt", 0),
+        "uses_local_table_files": False,
+        "llm_turns": [{"turn_index": 1, "note": note}],
+    }
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(meta_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(meta, f, sort_keys=False, allow_unicode=True)
+    return csv_path, meta_path
+
+
+def _extract_text_from_batch_line(item: dict[str, Any]) -> tuple[str, str]:
+    resp = item.get("response") or {}
+    body = resp.get("body") if isinstance(resp, dict) else {}
+    if isinstance(body, dict):
+        choices = body.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content, ""
+            if isinstance(content, list):
+                parts = []
+                for c in content:
+                    if isinstance(c, dict) and c.get("type") == "text":
+                        parts.append(str(c.get("text", "")))
+                return "\n".join(parts), ""
+    err = item.get("error")
+    return "", _norm(err) or "batch_output_parse_error"
+
+
+def _run_batch_query(prepared_items: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    ts = int(time.time())
+    input_path = BATCH_DIR / f"batch_input_{ts}.jsonl"
+    output_path = BATCH_DIR / f"batch_output_{ts}.jsonl"
+    BATCH_DIR.mkdir(parents=True, exist_ok=True)
+
+    with open(input_path, "w", encoding="utf-8") as f:
+        for item in prepared_items:
+            payload = {
+                "custom_id": item["model_id"],
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": TEXT_EXTRACTION_MODEL,
+                    "messages": [{"role": "user", "content": item["prompt"]}],
+                    "max_tokens": 4096,
+                    "temperature": 0.0,
+                },
+            }
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    main_batch_query(str(input_path), str(output_path))
+
+    out: dict[str, tuple[str, str]] = {}
+    if not output_path.exists():
+        for item in prepared_items:
+            out[item["model_id"]] = ("", "batch_no_output_file")
+        return out
+    with open(output_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            custom_id = _norm(obj.get("custom_id", ""))
+            if not custom_id:
+                continue
+            text, note = _extract_text_from_batch_line(obj)
+            out[custom_id] = (text, note)
+    for item in prepared_items:
+        if item["model_id"] not in out:
+            out[item["model_id"]] = ("", "batch_missing_custom_id")
+    return out
+
+
 def read_llm_csv(path: str | Path) -> list[dict[str, str]]:
-    """Load parsed tuple rows from CSV."""
     p = Path(path)
     with open(p, encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
@@ -311,31 +363,9 @@ def run_single(model_id: str) -> dict[str, Any]:
         t_last = now
 
     print(f"[start] model_id={model_id}")
-    card = _read_card_by_model_id(model_id)
-    _tick("read_card_by_model_id")
-    table_csvs = load_modelid_to_csvlist(model_id, resources=["hugging"])
-    _tick("load_modelid_to_csvlist")
-    related_tables: list[str] = []
-    for csv_path in table_csvs:
-        resolved = resolve_table_path(csv_path) or (csv_path if os.path.exists(csv_path) else "")
-        if resolved:
-            related_tables.append(resolved)
-    _tick(f"resolve_related_tables(count={len(related_tables)})")
-
-    card_remaining = _norm(_remove_citation_part(_remove_markdown_tables(card)))
-    _tick("build_card_remaining")
-    table_context = _build_table_context(card, related_tables)
-    _tick("build_table_context")
-
-    has_table_context = bool(table_context and table_context != "(no table text)")
-    prompt_key = PROMPT_KEY if has_table_context else PROMPT_KEY_TEXT_ONLY
-    template = _load_prompt_template(prompt_key)
-    if not template:
-        raise RuntimeError(f"Missing prompt key {prompt_key} in {PROMPT_PATH}")
-    _tick("load_prompt_template")
-    prompt = template.replace("[[TABLE_CONTEXT]]", table_context).replace("[[CARD_REMAINING]]", card_remaining)
-    print(f"[prompt] selected={prompt_key}")
-    _tick("compose_prompt")
+    prepared = _prepare_model_input(model_id)
+    print(f"[prompt] key={prepared['prompt_key']} card_chars={prepared['card_chars_in_prompt']} truncated={prepared['card_truncated']}")
+    _tick("prepare_prompt_input")
 
     response = ""
     note = ""
@@ -347,7 +377,7 @@ def run_single(model_id: str) -> dict[str, Any]:
         _tick("setup_openai")
         print("[llm] querying openai...")
         response = query_openai(
-            prompt,
+            prepared["prompt"],
             mode="openai",
             model=TEXT_EXTRACTION_MODEL,
             max_tokens=4096,
@@ -355,41 +385,46 @@ def run_single(model_id: str) -> dict[str, Any]:
         ) or ""
         _tick(f"query_openai(response_chars={len(response)})")
 
-    parsed_rows = _parse_markdown_table(response)
-    parsed_rows, global_hparams = _apply_hparam_fallback(parsed_rows, card_remaining)
-    _write_llm_csv(LLM_CSV, parsed_rows)
-    _tick(f"write_llm_csv(path={LLM_CSV})")
+    csv_path, meta_path = _save_model_outputs(prepared, response, note, use_batch_dir=False)
+    _tick("save_csv_and_meta")
+    return {"csv_path": str(csv_path.resolve()), "meta_path": str(meta_path.resolve())}
 
-    meta = {
-        "modelId": model_id,
-        "llm_model": TEXT_EXTRACTION_MODEL,
-        "prompt_key": prompt_key,
-        "llm_csv": str(LLM_CSV.resolve()),
-        "prompt": prompt,
-        "raw_response": response,
-        "parsed_rows": len(parsed_rows),
-        "global_hparams_fallback": global_hparams,
-        "related_tables": related_tables,
-        "llm_turns": [
+
+def run_batch(model_ids: list[str]) -> list[dict[str, str]]:
+    clean_ids = [_norm(m) for m in model_ids if _norm(m)]
+    if not clean_ids:
+        return []
+    print(f"[batch] preparing {len(clean_ids)} model prompts...")
+    prepared_items = [_prepare_model_input(m) for m in clean_ids]
+    print("[batch] submitting OpenAI Batch job...")
+    response_map = _run_batch_query(prepared_items)
+    outputs: list[dict[str, str]] = []
+    for item in prepared_items:
+        model_id = item["model_id"]
+        response, note = response_map.get(model_id, ("", "batch_missing_custom_id"))
+        csv_path, meta_path = _save_model_outputs(item, response, note, use_batch_dir=True)
+        outputs.append(
             {
-                "turn_index": 1,
+                "model_id": model_id,
+                "csv_path": str(csv_path.resolve()),
+                "meta_path": str(meta_path.resolve()),
                 "note": note,
             }
-        ],
-    }
-    _tick("assemble_meta_payload")
-    return meta
+        )
+    return outputs
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Model card → LLM; parse markdown response table and save tuples to CSV.")
-    parser.add_argument("--model-id", default=None, help="Hugging Face model id (required unless --read-csv).")
+    parser = argparse.ArgumentParser(description="Model card extraction: full card text → LLM → CSV (single or batch).")
+    parser.add_argument("--model-id", default=None, help="Single Hugging Face model id.")
+    parser.add_argument("--model-ids", nargs="*", default=None, help="Multiple model ids for batch mode.")
+    parser.add_argument("--model-ids-file", default=None, help="Text file with one model id per line.")
     parser.add_argument(
         "--read-csv",
         nargs="?",
-        const=str(LLM_CSV),
+        const=str(EVAL_DIR / "single_modelcard_llm.csv"),
         metavar="PATH",
-        help="Print stats for parsed tuple CSV; PATH defaults to the standard single_modelcard_llm.csv.",
+        help="Print stats for parsed tuple CSV.",
     )
     args = parser.parse_args()
 
@@ -408,17 +443,32 @@ def main() -> None:
         print(f"headers = {headers}")
         return
 
-    if not args.model_id:
-        parser.error("--model-id is required unless using --read-csv")
+    model_ids: list[str] = []
+    if args.model_id:
+        model_ids.append(args.model_id)
+    if args.model_ids:
+        model_ids.extend(args.model_ids)
+    if args.model_ids_file:
+        p = Path(args.model_ids_file)
+        if not p.is_file():
+            parser.error(f"--model-ids-file not found: {p}")
+        with open(p, encoding="utf-8") as f:
+            model_ids.extend([line.strip() for line in f if line.strip()])
+    model_ids = [_norm(m) for m in model_ids if _norm(m)]
+    if not model_ids:
+        parser.error("Provide --model-id, or --model-ids, or --model-ids-file")
 
-    meta = run_single(args.model_id)
-    EVAL_DIR.mkdir(parents=True, exist_ok=True)
-    t_write = time.time()
-    with open(META_YAML, "w", encoding="utf-8") as f:
-        yaml.safe_dump(meta, f, sort_keys=False, allow_unicode=True)
-    print(f"[stage] write_meta_yaml | +{time.time() - t_write:.3f}s")
-    print(f"saved_csv = {LLM_CSV.resolve()}")
-    print(f"saved_meta_yaml = {META_YAML.resolve()}")
+    if len(model_ids) == 1:
+        result = run_single(model_ids[0])
+        print(f"saved_csv = {result['csv_path']}")
+        print(f"saved_meta_yaml = {result['meta_path']}")
+    else:
+        outputs = run_batch(model_ids)
+        print(f"[batch] saved models = {len(outputs)}")
+        for out in outputs:
+            print(
+                f"model_id = {out['model_id']}  |  csv = {out['csv_path']}  |  meta = {out['meta_path']}  |  note = {out['note'] or 'ok'}"
+            )
 
 
 if __name__ == "__main__":

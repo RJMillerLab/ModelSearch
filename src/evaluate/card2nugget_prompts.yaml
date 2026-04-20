@@ -1,96 +1,37 @@
+# Single input: full Hugging Face model card (HTML / markdown / UI text). No separate local CSV tables.
+
 nugget_schema_mapping: |
-  You are extracting **atomic nugget tuples** from a Hugging Face model card.
+  You extract **nugget tuples** from a **Hugging Face model card** pasted below.
 
-  Inputs:
-  - **TABLE PART**: raw table text. It may include irrelevant tables such as links, examples, formatting artifacts, or navigation content.
-  - **TEXT PART**: the remaining narrative text.
+  The card mixes **narrative text** and **tables** (HTML `<table>`, pipe markdown, tab blocks). **Do not compress** multiple relations into one row (no long `k=v; k=v; ...` blobs in `Metric_value`, no “summary” cells that glue many facts together). **Each distinct relation → exactly one output row.**
 
-  Goal:
-  - Extract tuples about model settings, variants, datasets, metrics, and scores.
-  - A **tuple is atomic**: for tables, it should usually represent **one meaningful cell value together with its aligned row header and column header**.
-  - For result/performance tables, **do not summarize a whole row into one tuple** when it contains multiple useful cells. Instead, create **one tuple per valid cell**.
+  **Relations from tables**
+  - **Cell + row/column headers** (typical result grids): one tuple per **non-empty cell**, with the cell’s **row label** and **column label** reflected in fields: usually `Model` (or row entity), `Metric` (column header / metric name), `Metric_value` (cell). If the row is not a model name, put the row label in `Model` or the most appropriate field and keep `Metric`/`Metric_value` aligned to the column.
+  - **Row-oriented tables** (one table row = one primary entity, columns are attributes or scores): still output **one tuple per attribute cell**—repeat the same row-entity in `Model` (or equivalent) on each tuple so the **row association** is clear. Do **not** merge an entire table row into a single tuple.
+  - **Column-oriented** layouts: same rule—**one tuple per (entity, attribute, value)** pair implied by headers and cells; never fuse a whole column into one string.
 
-  Extraction rules:
-  1. **Each output row = one extracted tuple.**
-  2. For performance/result tables, one valid tuple is usually:
-     - the **cell value**
-     - plus its **row name**
-     - plus its **column name**
-     - plus any necessary higher-level header context.
-  3. If a row has many metric cells, produce **many tuples**, one per meaningful cell.
-  4. If table cell mapping is partial, still keep the tuple and leave unknown fields empty.
-  5. For config/specification tables, also extract **one meaningful cell per tuple** when it describes a useful structured fact.
-  6. If **TEXT PART** contains useful structured config or results, including YAML-like blocks, bullet lists, or explicit benchmark statements, you may add tuples from text. Keep them **atomic** as well.
-  6.1 If TEXT PART provides **global training hyperparameters** (e.g., epochs, batch sizes, learning rates), extract them as one dedicated tuple row in `Model_hyperparameters`.
-  6.2 Do not repeat the same global hyperparameter string in every performance row.
-  7. Ignore clearly irrelevant tables/content, such as navigation links, toy examples, pure URLs, decorative markdown, or unrelated code snippets.
-  8. Use empty string for unknown fields.
-  9. Do not invent unsupported values.
+  **Model ↔ dataset (or split) relations**
+  - Whenever the card states **which data** a model was trained on, fine-tuned on, or evaluated on, emit **separate tuple(s)** with `Model` + `Dataset` and/or `Train_dataset` / `Test_dataset` filled from the text (even if the same fact also appears in a table). Use `Metric` only if it helps (e.g. `trained_on`, `evaluated_on`); otherwise leave `Metric` / `Metric_value` empty for that link row.
+
+  **Prose / bullets / YAML-like blocks**
+  - One tuple per **clear, separate** fact. Multi-line YAML that describes **one** composite fact can be one tuple with fields filled consistently—still **no** stuffing unrelated pairs into one `Metric_value`.
+
+  **Global training hyperparameters** (epochs, batch sizes, learning rates, steps) shared across many results: **one dedicated row** with only `Model_hyperparameters` filled (other fields empty unless the card ties them to a specific model/dataset). Do not duplicate that blob into every metric tuple.
+
+  Unknown fields: empty string. Do not invent values.
 
   Field guidance:
-  - `Model`: model or checkpoint name.
-  - `Base_model`: parent/base architecture if stated.
-  - `Dataset`: benchmark or dataset name when applicable.
-  - `Train_dataset`: training dataset or split if explicitly known.
-  - `Test_dataset`: evaluation dataset or split if explicitly known.
-  - `Model_hyperparameters`: concrete config such as epochs, learning rate, batch size, layers, hidden size, parameter count, and similar settings.
-  - `Model_variant_type`: variant label such as Tiny, Base, Large, multilingual, distilled, quantized, finetuned, and similar categories.
-  - `Metric`: metric or attribute name implied by the cell, header, or context.
-  - `Metric_value`: the extracted cell value.
-  Important:
-  - Prefer **more atomic rows** over fewer aggregated rows.
-  - Example: if row = `BERT-Tiny`, column = `SST-2`, value = `83.2`, that should be **one tuple**.
-  - Another cell in the same row, such as `MNLI = 70.2`, should usually be **another tuple**.
+  - `Model`: checkpoint or row entity when applicable.
+  - `Base_model`: parent/base if stated.
+  - `Dataset` / `Train_dataset` / `Test_dataset`: benchmark or data source / split when applicable.
+  - `Model_hyperparameters`: training/preproc settings.
+  - `Model_variant_type`: Tiny/Base/Large/etc. if stated.
+  - `Metric` / `Metric_value`: one metric name and one value per tuple (from a column header and cell, or from prose).
 
-  TABLE PART:
-  [[TABLE_CONTEXT]]
+  MODEL CARD:
+  [[MODEL_CARD]]
 
-  TEXT PART:
-  [[CARD_REMAINING]]
-
-  Please return the response in the following format, and do not return anything else:
-  ```markdown
-  | Model | Base_model | Dataset | Train_dataset | Test_dataset | Model_hyperparameters | Model_variant_type | Metric | Metric_value |
-  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-  | ... | ... | ... | ... | ... | ... | ... | ... | ... |
-  ```
-
-nugget_schema_mapping_text_only: |
-  You are extracting **atomic nugget tuples** from a Hugging Face model card.
-
-  Inputs:
-  - TABLE PART: unavailable or empty for this sample.
-  - TEXT PART: the only source of facts.
-
-  Goal:
-  - Extract tuples about model settings, variants, datasets, metrics, and scores from TEXT PART only.
-  - Keep tuples atomic and grounded in explicit text evidence.
-  - Filter out weak, decorative, or unsupported statements.
-
-  Text-only extraction rules:
-  1. Each output row = one extracted tuple.
-  2. You may extract from prose, bullets, and yaml-like / config-like blocks.
-  3. If one logical tuple is written across multiple lines (for example yaml-like key/value lines), merge those lines into one tuple.
-  4. If multiple metrics are listed, output multiple tuples (one metric/value per row when possible).
-  5. Use empty string for unknown fields.
-  6. Do not invent values not present in text.
-  7. If text contains global hyperparameters (epochs, batch sizes, learning rates), extract them into `Model_hyperparameters`.
-
-  Field guidance:
-  - `Model`: model or checkpoint name.
-  - `Base_model`: parent/base architecture if stated.
-  - `Dataset`: benchmark or dataset name.
-  - `Train_dataset`: training dataset/split if explicit.
-  - `Test_dataset`: evaluation dataset/split if explicit.
-  - `Model_hyperparameters`: explicit settings such as epochs, lr, batch size, layers, hidden size, params.
-  - `Model_variant_type`: Tiny/Base/Large/distilled/quantized/finetuned/etc.
-  - `Metric`: metric name.
-  - `Metric_value`: metric value.
-
-  TEXT PART:
-  [[CARD_REMAINING]]
-
-  Please return the response in the following format, and do not return anything else:
+  Return **only** this markdown table (fenced). No other text.
   ```markdown
   | Model | Base_model | Dataset | Train_dataset | Test_dataset | Model_hyperparameters | Model_variant_type | Metric | Metric_value |
   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
