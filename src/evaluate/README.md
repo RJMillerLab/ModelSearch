@@ -14,15 +14,11 @@ Single-card test:
 
 ```bash
 python -m src.evaluate.card2nugget_extraction --model-id google-bert/bert-base-uncased
-```
 
-Batch test (multiple model ids in one OpenAI Batch job):
+# Batch test (multiple model ids in one OpenAI Batch job):
+#python -m src.evaluate.card2nugget_extraction --model-ids google/bert_uncased_L-12_H-768_A-12 baidu/ERNIE-4.5-VL-424B-A47B-Base-Paddle
 
-```bash
-python -m src.evaluate.card2nugget_extraction \
-  --model-ids google/bert_uncased_L-12_H-768_A-12 baidu/ERNIE-4.5-VL-424B-A47B-Base-Paddle
-
-# from file
+# from file 
 # python -m src.evaluate.card2nugget_extraction --model-ids-file path/to/model_ids.txt
 ```
 
@@ -36,23 +32,27 @@ The LLM sees the **full model card text** from parquet (tables + prose mixed). *
 
 Optional: `python -m src.evaluate.card2nugget_extraction --read-csv` prints stats for a CSV path.
 
-## 2. Get Query-Nuggets List Mapping
+## 2. Query → nugget schema headers (LLM)
 
-Input:
+Map a **search query** to the same column headers as `card2nugget_extraction` (`Model`, `Dataset`, `Metric`, …). The LLM returns, for each relevant header, a **keyword list** explaining how the query ties to that field.
 
-- `data_251117/evaluate/modelcard_nuggets.jsonl`
-
-Run:
+Prompt: `src/evaluate/query2nugget_prompts.yaml` (`query_to_nugget_headers`).
 
 ```bash
-python -m src.evaluate.query2nugget_layer_mapping
+python -m src.evaluate.query2nugget_layer_mapping --query "Which models achieve the best performance on the Spider benchmark for text-to-SQL?"
+# several queries
+python -m src.evaluate.query2nugget_layer_mapping --queries-file path/to/queries.txt
 ```
 
-Outputs:
+Default output: `data_251117/evaluate/query_header_keyword_mapping.json` (one object per run for a single `--query`; or `{"queries": [...]}` for multiple).
 
-- `data_251117/evaluate/query_nugget_mapping.json`
-- `data_251117/evaluate/real_subtopic.qrels`
-- `data_251117/evaluate/real_initial.run`
+Legacy stub (empty mapping + qrels/run placeholders):
+
+```bash
+python -m src.evaluate.query2nugget_layer_mapping --legacy-nuggets
+```
+
+Uses `data_251117/evaluate/modelcard_nuggets.jsonl` and writes `query_nugget_mapping.json`, `real_subtopic.qrels`, `real_initial.run`.
 
 ## 3. Evaluate
 

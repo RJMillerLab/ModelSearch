@@ -1,0 +1,29 @@
+# Map a user search query to nugget schema columns (which fields are relevant + short link phrases).
+
+query_to_nugget_headers: |
+  You align a **user search query** with a fixed **nugget schema** (column headers from model-card extraction).
+
+  Task:
+  - Decide which headers are **relevant** to answering or retrieving information for this query.
+  - For each relevant header, give a **short keyword list** (1–5 short phrases) that states **how / why** this query relates to that column (not generic filler).
+
+  Allowed headers (exact strings only):
+  [[HEADERS_YAML]]
+
+  Rules:
+  - Only use headers from the list above. Do not invent new column names.
+  - If the query is broad (e.g. "BERT model"), you may mark several fields (Model, Base_model, Dataset, Metric, …) with concise reasons.
+  - If the query is narrow (e.g. "GLUE MNLI score"), prefer Metric, Metric_value, Dataset; add Model only if the query names a model.
+  - Output **valid JSON only**, no markdown fences, no commentary.
+
+  JSON shape (example structure, replace with real query):
+  {
+    "query": "<exact user query>",
+    "related": [
+      { "header": "Metric", "keywords": ["GLUE", "benchmark scores", "accuracy"] },
+      { "header": "Dataset", "keywords": ["MNLI", "glue benchmark"] }
+    ]
+  }
+
+  User query:
+  [[USER_QUERY]]
