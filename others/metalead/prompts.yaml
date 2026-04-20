@@ -1,0 +1,21 @@
+first_extraction: |
+  You are given several parts of a research paper as input.
+  Extract these tuples for all experimental results.
+  Each tuple must contain:
+  - a single task, single train dataset, single test dataset, single metric, single numeric result, experiment-type label
+
+  Ensure tuples are not aggregated and contain a single value for each field.
+
+  Use the following JSON format:
+  [
+      {
+          "Task": "Task name",
+          "Train-Dataset": "Train dataset name",
+          "Test-Dataset": "Test dataset name",
+          "Metric": "Metric name",
+          "Result": "Result score",
+          "Experiment-Type": "Experiment type label (\"proposed method\", \"baseline\", or \"variation of proposed method\")"
+      }
+  ]
+
+  Paper Text: {paper_text}

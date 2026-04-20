@@ -14,6 +14,8 @@ Single-card test:
 
 ```bash
 python -m src.evaluate.card2nugget_extraction --model-id google/bert_uncased_L-12_H-768_A-12
+
+python src/evaluate/card2nugget_extraction.py single --model-id google/bert_uncased_L-12_H-768_A-12
 ```
 
 Single output:

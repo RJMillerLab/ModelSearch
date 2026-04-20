@@ -1,0 +1,104 @@
+card_remaining_nugget_extraction: |
+  You are given model card text after tables and citation sections have been removed.
+  Extract short raw nuggets that are worth standardizing later.
+  Return YAML only.
+
+  Response format:
+  nuggets:
+    - raw_mention: short exact span
+      context: short surrounding context
+      reference_doc: short base reference doc name
+
+  Rules:
+  - Keep nuggets short and atomic.
+  - Prefer mentions that look like model names, base models, model variants, datasets, metrics, or scores.
+  - Ignore citations, references, licenses, acknowledgements, and long prose.
+  - If nothing useful is found, return:
+    nuggets: []
+
+  Fixed schema:
+  [[SCHEMA_DEFINITION]]
+
+  Card remaining:
+  [[CARD_REMAINING]]
+
+nugget_schema_mapping: |
+  You are given model card text after tables and citation sections have been removed.
+  Map information into fixed standardized feature cells.
+  Return YAML only.
+
+  Response format:
+  rows:
+    - Model: model name or empty string
+      Base_model: base model name or empty string
+      Dataset: dataset or benchmark name or empty string
+      Train_dataset: train dataset name or empty string
+      Test_dataset: test/eval dataset name or empty string
+      Model_hyperparameters: architecture/hparam text or empty string
+      Model_variant_type: variant type text or empty string
+      Metric: metric name or empty string
+      Metric_value: score/value text or empty string
+      Other_features: other useful info or empty string
+
+  Rules:
+  - Use the fixed schema only.
+  - Keep output concise and deterministic.
+  - Fill feature cells directly; do not output entity_type/entity_name.
+  - Do not output source, csv_basename, row, col, confidence, or rule_id in the response.
+  - Treat pretrained, quantized, quantization, int8, 8-bit, 4-bit, fp16, bf16, pruned, distilled, merged, adapter, finetuned, fine-tuned as model_variant_type.
+  - Treat architecture/hyperparameter mentions like L=12, H=768, A=12, hidden size, number of layers, number of heads, params as model_hyperparameters when they are model settings.
+  - Never treat quantization-related words as metric.
+  - Benchmark and dataset are treated as the same bucket: use dataset.
+  - Use train_dataset for training data or train set mentions.
+  - Use test_dataset for test data, eval data, or validation set mentions.
+  - Use metric for measures like accuracy, F1, BLEU, ROUGE, mAP, latency, throughput, memory, model size, params, MACs, MAdds, recall@k, precision@k, perplexity.
+  - Use score for numeric values attached to metrics.
+  - Use model for the current model mention if it is explicitly mentioned in the nugget.
+  - Use base_model for the parent or source model if the nugget states a base model.
+  - If nothing matches, return:
+    rows: []
+
+  Fixed schema:
+  [[SCHEMA_DEFINITION]]
+
+  Card remaining:
+  [[CARD_REMAINING]]
+
+table_nugget_schema_mapping: |
+  You are given table nuggets from model-card tables.
+  Map each table nugget into fixed standardized feature cells.
+  Return YAML only.
+
+  Input nuggets are:
+  - row: table row label
+  - col: table column name
+  - value: table cell value
+
+  Response format:
+  rows:
+    - Model: model name or empty string
+      Base_model: base model name or empty string
+      Dataset: dataset or benchmark name or empty string
+      Train_dataset: train dataset name or empty string
+      Test_dataset: test/eval dataset name or empty string
+      Model_hyperparameters: architecture/hparam text or empty string
+      Model_variant_type: variant type text or empty string
+      Metric: metric name or empty string
+      Metric_value: score/value text or empty string
+      Other_features: other useful info or empty string
+
+  Rules:
+  - Use the fixed schema only.
+  - Keep output concise and deterministic.
+  - Prefer row as entity_name when it is meaningful.
+  - Treat table architecture settings like L=12, H=768, A=12 as model_hyperparameters.
+  - Use col/value to infer metric/score when needed.
+  - Do not output source, csv_basename, row, col, confidence, or rule_id in the response.
+  - If nothing matches, return:
+    rows: []
+
+  Fixed schema:
+  [[SCHEMA_DEFINITION]]
+
+  Raw nuggets:
+  [[RAW_NUGGETS]]
