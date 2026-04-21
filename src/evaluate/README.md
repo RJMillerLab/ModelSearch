@@ -71,6 +71,16 @@ python -m src.evaluate.wrap_card_query_eval \
 
 This wrapper imports and chains the 3 modules above: `card2nugget_extraction`, `query2nugget_layer_mapping`, `query_csv_to_qrels_run`. Outputs are written under `data_251117/evaluate/pipeline/` by default, including per-cluster `.qrels`, `.run`, match debug json, and `pipeline_summary.json`.
 
+Job-id driven wrapper mode (auto read query + model_ids set from batch runs, iterative):
+
+```bash
+python -m src.evaluate.wrap_card_query_eval \
+  --jobs-batch-json jobs_251117/batch_runs/batch_preset_queries_20260330_025232.json \
+  --max-job-sets 6 \
+  --dedupe-model-sets
+# optional: --job-ids-file path/to/job_ids.txt
+```
+
 ## 3. Evaluate
 ```bash
 # Toy data:

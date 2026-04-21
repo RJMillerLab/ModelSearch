@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,11 @@ def _save_json(path: Path, payload: Any) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+def _safe_name(text: str) -> str:
+    s = re.sub(r"[^a-zA-Z0-9._-]+", "_", (text or "").strip())
+    return s.strip("_") or "item"
+
+
 def _write_qrels(path: Path, rows: list[tuple[str, str, str, int]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -72,6 +78,29 @@ def _map_queries(queries: list[str], model: str | None) -> list[dict[str, Any]]:
     if len(queries) == 1:
         print("[query2nugget] single query still uses Batch API")
     return map_queries_via_batch(queries, model=model)
+
+
+def _extract_job_sets(batch_json: Path, wanted_job_ids: set[str] | None) -> list[dict[str, Any]]:
+    payload = json.loads(batch_json.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        return []
+    sets: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        job_id = str(item.get("job_id", "")).strip()
+        if wanted_job_ids and job_id not in wanted_job_ids:
+            continue
+        query = str(item.get("query", "")).strip()
+        sparse = ((item.get("integration_model_search") or {}).get("sparse") or {})
+        model_ids_raw = sparse.get("model_ids") or sparse.get("models_with_tables") or []
+        if not isinstance(model_ids_raw, list):
+            model_ids_raw = []
+        model_ids = [str(x).strip() for x in model_ids_raw if str(x).strip()]
+        if not query or not model_ids:
+            continue
+        sets.append({"job_id": job_id, "query": query, "model_ids": model_ids})
+    return sets
 
 
 def _split_existing_batch_models(model_ids: list[str]) -> tuple[list[str], list[dict[str, str]], list[str]]:
@@ -179,6 +208,14 @@ def main() -> None:
     parser.add_argument("--eval-cutoff", type=int, default=20, help="Cutoff for evaluate_pyndeval metrics.")
     parser.add_argument("--eval-alpha", type=float, default=0.5, help="Alpha for alpha-nDCG.")
     parser.add_argument("--eval-per-query", action="store_true", help="Include per-query eval metrics.")
+    parser.add_argument("--jobs-batch-json", default=None, help="batch_runs JSON containing {job_id, query, model_ids}.")
+    parser.add_argument("--job-ids-file", default=None, help="Optional file: one job_id per line.")
+    parser.add_argument("--max-job-sets", type=int, default=6, help="Max sets to run from jobs JSON (default: 6).")
+    parser.add_argument(
+        "--dedupe-model-sets",
+        action="store_true",
+        help="Skip repeated model-id sets when iterating job sets.",
+    )
 
     parser.add_argument("--cluster-a-name", default="cluster_a", help="Label for cluster A outputs.")
     parser.add_argument("--cluster-a-model-ids", nargs="*", default=None, help="Cluster A model ids.")
@@ -195,27 +232,67 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    queries = _collect_queries(args)
-    if not queries:
-        parser.error("Provide --query and/or --queries-file.")
-
-    cluster_a_ids = _collect_model_ids(args.cluster_a_model_ids, args.cluster_a_model_ids_file)
-    cluster_b_ids = _collect_model_ids(args.cluster_b_model_ids, args.cluster_b_model_ids_file)
-    if not cluster_a_ids or not cluster_b_ids:
-        parser.error("Both cluster A and cluster B model id sets are required.")
-
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[query2nugget] mapping {len(queries)} query(ies)")
-    query_maps = _map_queries(queries, args.model)
-    query_map_path = out_dir / "query_header_keyword_mapping.json"
-    _save_json(query_map_path, {"queries": query_maps} if len(query_maps) > 1 else query_maps[0])
-    print(f"[query2nugget] saved mapping: {query_map_path.resolve()}")
-
     summaries = []
-    summaries.append(_run_cluster(args.cluster_a_name, cluster_a_ids, query_maps, out_dir, str(args.subtopic)))
-    summaries.append(_run_cluster(args.cluster_b_name, cluster_b_ids, query_maps, out_dir, str(args.subtopic)))
+    if args.jobs_batch_json:
+        jobs_path = Path(args.jobs_batch_json)
+        if not jobs_path.is_file():
+            parser.error(f"--jobs-batch-json not found: {jobs_path}")
+        wanted: set[str] | None = None
+        if args.job_ids_file:
+            p = Path(args.job_ids_file)
+            if not p.is_file():
+                parser.error(f"--job-ids-file not found: {p}")
+            wanted = set(_load_lines(p))
+
+        job_sets = _extract_job_sets(jobs_path, wanted)
+        if not job_sets:
+            parser.error("No valid job sets found in --jobs-batch-json.")
+
+        seen_signatures: set[str] = set()
+        run_count = 0
+        for item in job_sets:
+            if run_count >= max(1, int(args.max_job_sets)):
+                break
+            query = item["query"]
+            model_ids = item["model_ids"]
+            job_id = item["job_id"] or f"job_{run_count:02d}"
+            sig = "||".join(sorted(model_ids))
+            if args.dedupe_model_sets and sig in seen_signatures:
+                print(f"[jobs] skip duplicated model set for job_id={job_id}")
+                continue
+            seen_signatures.add(sig)
+
+            run_count += 1
+            cluster_name = _safe_name(f"jobset_{run_count:02d}_{job_id}")
+            print(f"[jobs] running {cluster_name} | job_id={job_id} | models={len(model_ids)}")
+            query_maps = _map_queries([query], args.model)
+            cluster_out_dir = out_dir / cluster_name
+            cluster_out_dir.mkdir(parents=True, exist_ok=True)
+            summary = _run_cluster(cluster_name, model_ids, query_maps, cluster_out_dir, str(args.subtopic))
+            summary["job_id"] = job_id
+            summary["query"] = query
+            summaries.append(summary)
+    else:
+        queries = _collect_queries(args)
+        if not queries:
+            parser.error("Provide --query and/or --queries-file.")
+
+        cluster_a_ids = _collect_model_ids(args.cluster_a_model_ids, args.cluster_a_model_ids_file)
+        cluster_b_ids = _collect_model_ids(args.cluster_b_model_ids, args.cluster_b_model_ids_file)
+        if not cluster_a_ids or not cluster_b_ids:
+            parser.error("Both cluster A and cluster B model id sets are required.")
+
+        print(f"[query2nugget] mapping {len(queries)} query(ies)")
+        query_maps = _map_queries(queries, args.model)
+        query_map_path = out_dir / "query_header_keyword_mapping.json"
+        _save_json(query_map_path, {"queries": query_maps} if len(query_maps) > 1 else query_maps[0])
+        print(f"[query2nugget] saved mapping: {query_map_path.resolve()}")
+
+        summaries.append(_run_cluster(args.cluster_a_name, cluster_a_ids, query_maps, out_dir, str(args.subtopic)))
+        summaries.append(_run_cluster(args.cluster_b_name, cluster_b_ids, query_maps, out_dir, str(args.subtopic)))
 
     for s in summaries:
         eval_result = _evaluate_cluster(
@@ -238,7 +315,7 @@ def main() -> None:
             )
 
     summary_path = out_dir / "pipeline_summary.json"
-    _save_json(summary_path, {"query_mapping": str(query_map_path.resolve()), "clusters": summaries})
+    _save_json(summary_path, {"clusters": summaries})
     print(f"[done] summary -> {summary_path.resolve()}")
     for s in summaries:
         print(
