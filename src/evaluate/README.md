@@ -40,39 +40,49 @@ Prompt: `src/evaluate/query2nugget_prompts.yaml` (`query_to_nugget_headers`).
 
 ```bash
 python -m src.evaluate.query2nugget_layer_mapping --query "Which models achieve the best performance on the Spider benchmark for text-to-SQL?"
-# several queries
+# several queries (uses OpenAI Batch API; batch jsonl under `evaluate/batch/`)
 python -m src.evaluate.query2nugget_layer_mapping --queries-file path/to/queries.txt
 ```
 
-Default output: `data_251117/evaluate/query_header_keyword_mapping.json` (one object per run for a single `--query`; or `{"queries": [...]}` for multiple).
+**Output file (`query_header_keyword_mapping.json`)** — intermediate artifact from the LLM: your search `query`, plus `related` entries (`header` + `keywords` per nugget column). Single-query runs store one JSON object; multiple queries store `{"queries": [...]}`. With `--queries-file`, entries may include `batch_input_jsonl` / `batch_output_jsonl` for Batch debugging.
 
-Legacy stub (empty mapping + qrels/run placeholders):
+**Pipeline:** run **card2nugget** first (per-model CSVs under `evaluate/` or `evaluate/batch/`), then **query2nugget** as above, then match CSV rows to keywords to build pyndeval inputs:
 
 ```bash
-python -m src.evaluate.query2nugget_layer_mapping --legacy-nuggets
+python -m src.evaluate.query_csv_to_qrels_run
+# optional: --mapping path/to/query_header_keyword_mapping.json
+# optional: --csv-root path/to/dir  (repeatable; defaults to evaluate/ + evaluate/batch/)
+# optional: --qrels / --run / --debug-json paths
 ```
 
-Uses `data_251117/evaluate/modelcard_nuggets.jsonl` and writes `query_nugget_mapping.json`, `real_subtopic.qrels`, `real_initial.run`.
+Matching rules (simple, debug-friendly): for each query, **every** `related` header must have a **nonempty** cell in the row; each header’s keywords are **OR**’d; a keyword counts if it appears as a **case-insensitive substring** in that cell (e.g. keyword `bert` matches `bert-base-uncased`). Doc ids are `{csv_stem}#{0_based_row}` (csv stem is the safe model id, e.g. `google-bert__bert-base-uncased`). Also writes `query_csv_match_debug.json` (per-query hits with row snapshots).
+
+One-shot wrapper (two model clusters, one query input):
+
+```bash
+python -m src.evaluate.wrap_card_query_eval \
+  --query "best bert on spider" \
+  --cluster-a-model-ids google-bert/bert-base-uncased google/bert_uncased_L-12_H-768_A-12 \
+  --cluster-b-model-ids baidu/ERNIE-4.5-VL-424B-A47B-Base-Paddle
+```
+
+This wrapper imports and chains the 3 modules above: `card2nugget_extraction`, `query2nugget_layer_mapping`, `query_csv_to_qrels_run`. Outputs are written under `data_251117/evaluate/pipeline/` by default, including per-cluster `.qrels`, `.run`, match debug json, and `pipeline_summary.json`.
 
 ## 3. Evaluate
-
-Toy data:
-
 ```bash
+# Toy data:
 python -m src.evaluate.evaluate_pyndeval \
-  --run src/evaluate/toy_data/toy_initial.run \
-  --qrels src/evaluate/toy_data/toy_subtopic.qrels \
+  --run data_251117/toy_data/toy_initial.run \
+  --qrels data_251117/toy_data/toy_subtopic.qrels \
   --cutoff 20
-```
 
-Real data:
-
-```bash
+# Real data:
 python -m src.evaluate.evaluate_pyndeval \
   --run data_251117/evaluate/real_initial.run \
   --qrels data_251117/evaluate/real_subtopic.qrels \
   --cutoff 20
 ```
+
 
 ## 4. Repo I tested
 

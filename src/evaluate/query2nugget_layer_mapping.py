@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ if _repo_root not in sys.path:
 load_dotenv(os.path.join(_repo_root, ".env"), override=False)
 
 from src.config import OUTPUT_DIR
+from src.llm.batch import main_batch_query
 from src.llm.model import query_openai, setup_openai
 
 # Keep in sync with src/evaluate/card2nugget_extraction.py OUTPUT_HEADERS
@@ -34,24 +36,12 @@ NUGGET_SCHEMA_HEADERS = [
     "Metric_value",
 ]
 
-INPUT_NUGGETS_JSONL = os.path.join(OUTPUT_DIR, "evaluate", "modelcard_nuggets.jsonl")
-OUTPUT_MAPPING_JSON = os.path.join(OUTPUT_DIR, "evaluate", "query_nugget_mapping.json")
 OUTPUT_HEADER_KEYWORD_JSON = os.path.join(OUTPUT_DIR, "evaluate", "query_header_keyword_mapping.json")
-OUTPUT_QRELS = os.path.join(OUTPUT_DIR, "evaluate", "real_subtopic.qrels")
-OUTPUT_RUN = os.path.join(OUTPUT_DIR, "evaluate", "real_initial.run")
+BATCH_DIR = Path(OUTPUT_DIR) / "evaluate" / "batch"
 
 PROMPT_PATH = Path("src/evaluate/query2nugget_prompts.yaml")
 PROMPT_KEY = "query_to_nugget_headers"
 TEXT_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-4o-mini")
-
-
-def load_modelcard_nuggets(path: str = INPUT_NUGGETS_JSONL) -> list[dict[str, str]]:
-    records: list[dict[str, str]] = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                records.append(json.loads(line))
-    return records
 
 
 def _load_prompt_template() -> str:
@@ -79,6 +69,31 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
             except json.JSONDecodeError:
                 pass
     return None
+
+
+def _build_prompt_for_query(query: str) -> str:
+    template = _load_prompt_template()
+    if not template:
+        raise RuntimeError(f"Missing prompt key {PROMPT_KEY} in {PROMPT_PATH}")
+    headers_yaml = yaml.safe_dump(NUGGET_SCHEMA_HEADERS, allow_unicode=True).strip()
+    return template.replace("[[HEADERS_YAML]]", headers_yaml).replace("[[USER_QUERY]]", (query or "").strip())
+
+
+def _finalize_map_response(query: str, prompt: str, raw: str) -> dict[str, Any]:
+    parsed = _extract_json_object(raw)
+    if not parsed:
+        return {
+            "query": query,
+            "related": [],
+            "header_list": [],
+            "error": "parse_failed",
+            "prompt": prompt,
+            "raw_response": raw,
+        }
+    out = _validate_and_normalize(parsed, query)
+    out["prompt"] = prompt
+    out["raw_response"] = raw
+    return out
 
 
 def _validate_and_normalize(
@@ -113,24 +128,173 @@ def _validate_and_normalize(
     }
 
 
+def _extract_text_from_batch_line(item: dict[str, Any]) -> tuple[str, str]:
+    resp = item.get("response") or {}
+    body = resp.get("body") if isinstance(resp, dict) else {}
+    if isinstance(body, dict):
+        choices = body.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content, ""
+            if isinstance(content, list):
+                parts = []
+                for c in content:
+                    if isinstance(c, dict) and c.get("type") == "text":
+                        parts.append(str(c.get("text", "")))
+                return "\n".join(parts), ""
+    err = item.get("error")
+    return "", (str(err).strip() if err else "") or "batch_output_parse_error"
+
+
+def map_queries_via_batch(queries: list[str], *, model: str | None = None) -> list[dict[str, Any]]:
+    """OpenAI Batch API: one chat completion per query. Writes input/output jsonl under evaluate/batch/."""
+    clean = [(q or "").strip() for q in queries if (q or "").strip()]
+    if not clean:
+        return []
+
+    if not os.getenv("OPENAI_API_KEY"):
+        out: list[dict[str, Any]] = []
+        for q in clean:
+            try:
+                prompt = _build_prompt_for_query(q)
+            except RuntimeError as e:
+                prompt = ""
+                out.append(
+                    {
+                        "query": q,
+                        "related": [],
+                        "header_list": [],
+                        "error": str(e),
+                        "prompt": prompt,
+                        "raw_response": "",
+                    }
+                )
+                continue
+            out.append(
+                {
+                    "query": q,
+                    "related": [],
+                    "header_list": [],
+                    "error": "skip_no_api_key",
+                    "prompt": prompt,
+                    "raw_response": "",
+                }
+            )
+        return out
+
+    BATCH_DIR.mkdir(parents=True, exist_ok=True)
+    ts = int(time.time())
+    in_path = BATCH_DIR / f"query2nugget_batch_input_{ts}.jsonl"
+    out_path = BATCH_DIR / f"query2nugget_batch_output_{ts}.jsonl"
+
+    prompts: list[str] = []
+    with open(in_path, "w", encoding="utf-8") as f:
+        for i, q in enumerate(clean):
+            prompt = _build_prompt_for_query(q)
+            prompts.append(prompt)
+            payload = {
+                "custom_id": f"{i:06d}",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": model or TEXT_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 800,
+                    "temperature": 0.0,
+                },
+            }
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    main_batch_query(str(in_path), str(out_path))
+
+    by_idx: dict[int, tuple[str, str]] = {}
+    if out_path.is_file():
+        with open(out_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cid = str(obj.get("custom_id", "")).strip()
+                if not cid.isdigit():
+                    continue
+                idx = int(cid)
+                text, note = _extract_text_from_batch_line(obj)
+                by_idx[idx] = (text, note)
+
+    results: list[dict[str, Any]] = []
+    for i, q in enumerate(clean):
+        prompt = prompts[i]
+        if i not in by_idx:
+            results.append(
+                {
+                    "query": q,
+                    "related": [],
+                    "header_list": [],
+                    "error": "batch_missing_line",
+                    "prompt": prompt,
+                    "raw_response": "",
+                }
+            )
+            continue
+        raw, err_note = by_idx[i]
+        if err_note:
+            results.append(
+                {
+                    "query": q,
+                    "related": [],
+                    "header_list": [],
+                    "error": err_note,
+                    "prompt": prompt,
+                    "raw_response": raw,
+                }
+            )
+            continue
+        if not (raw or "").strip():
+            results.append(
+                {
+                    "query": q,
+                    "related": [],
+                    "header_list": [],
+                    "error": "batch_empty_response",
+                    "prompt": prompt,
+                    "raw_response": raw,
+                }
+            )
+            continue
+        row = _finalize_map_response(q, prompt, raw)
+        row["batch_input_jsonl"] = str(in_path.resolve())
+        row["batch_output_jsonl"] = str(out_path.resolve())
+        results.append(row)
+    return results
+
+
 def map_query_to_nugget_headers(
     query: str,
     *,
     model: str | None = None,
 ) -> dict[str, Any]:
-    """Call LLM: query + fixed headers → JSON with related headers and keyword lists."""
+    """Sync chat: query + fixed headers → JSON with related headers and keyword lists."""
     query = (query or "").strip()
     if not query:
         raise ValueError("query is empty")
 
-    template = _load_prompt_template()
-    if not template:
-        raise RuntimeError(f"Missing prompt key {PROMPT_KEY} in {PROMPT_PATH}")
-
-    headers_yaml = yaml.safe_dump(NUGGET_SCHEMA_HEADERS, allow_unicode=True).strip()
-    prompt = (
-        template.replace("[[HEADERS_YAML]]", headers_yaml).replace("[[USER_QUERY]]", query)
-    )
+    try:
+        prompt = _build_prompt_for_query(query)
+    except RuntimeError as e:
+        return {
+            "query": query,
+            "related": [],
+            "header_list": [],
+            "error": str(e),
+            "prompt": "",
+            "raw_response": "",
+        }
 
     if not os.getenv("OPENAI_API_KEY"):
         return {
@@ -151,49 +315,7 @@ def map_query_to_nugget_headers(
         temperature=0.0,
     ) or ""
 
-    parsed = _extract_json_object(raw)
-    if not parsed:
-        return {
-            "query": query,
-            "related": [],
-            "header_list": [],
-            "error": "parse_failed",
-            "prompt": prompt,
-            "raw_response": raw,
-        }
-
-    out = _validate_and_normalize(parsed, query)
-    out["prompt"] = prompt
-    out["raw_response"] = raw
-    return out
-
-
-def map_query_to_nuggets(nuggets: list[dict[str, str]]) -> dict[str, dict[str, object]]:
-    """Legacy stub (jsonl pipeline). Not used by LLM header mapping CLI."""
-    _ = nuggets
-    return {}
-
-
-def mapping_to_qrels_rows(mapping: dict[str, dict[str, object]]) -> list[tuple[str, str, str, int]]:
-    return []
-
-
-def mapping_to_run_rows(mapping: dict[str, dict[str, object]]) -> list[tuple[str, str, str, int, float, str]]:
-    return []
-
-
-def save_outputs(mapping: dict[str, dict[str, object]]) -> None:
-    Path(OUTPUT_MAPPING_JSON).parent.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_MAPPING_JSON, "w", encoding="utf-8") as f:
-        json.dump(mapping, f, ensure_ascii=False, indent=2)
-
-    with open(OUTPUT_QRELS, "w", encoding="utf-8") as f:
-        for qid, subtopic, doc_id, rel in mapping_to_qrels_rows(mapping):
-            f.write(f"{qid} {subtopic} {doc_id} {rel}\n")
-
-    with open(OUTPUT_RUN, "w", encoding="utf-8") as f:
-        for qid, q0, doc_id, rank, score, tag in mapping_to_run_rows(mapping):
-            f.write(f"{qid} {q0} {doc_id} {rank} {score} {tag}\n")
+    return _finalize_map_response(query, prompt, raw)
 
 
 def main() -> None:
@@ -208,21 +330,7 @@ def main() -> None:
         help=f"JSON output path (default: {OUTPUT_HEADER_KEYWORD_JSON})",
     )
     parser.add_argument("--model", default=None, help="OpenAI chat model (default from env or gpt-4o-mini).")
-    parser.add_argument(
-        "--legacy-nuggets",
-        action="store_true",
-        help="Run legacy jsonl → mapping stub (writes empty qrels/run).",
-    )
     args = parser.parse_args()
-
-    if args.legacy_nuggets:
-        nuggets = load_modelcard_nuggets()
-        mapping = map_query_to_nuggets(nuggets)
-        save_outputs(mapping)
-        print(f"saved_mapping_json = {OUTPUT_MAPPING_JSON}")
-        print(f"saved_qrels = {OUTPUT_QRELS}")
-        print(f"saved_run = {OUTPUT_RUN}")
-        return
 
     queries: list[str] = []
     if args.query:
@@ -235,11 +343,14 @@ def main() -> None:
             queries.extend(line.strip() for line in f if line.strip())
     queries = [q for q in queries if q]
     if not queries:
-        parser.error("Provide --query and/or --queries-file (or use --legacy-nuggets).")
+        parser.error("Provide --query and/or --queries-file.")
 
-    results: list[dict[str, Any]] = []
-    for q in queries:
-        results.append(map_query_to_nugget_headers(q, model=args.model))
+    use_batch = args.queries_file is not None
+    if use_batch:
+        print("[mode] OpenAI Batch (--queries-file)")
+        results = map_queries_via_batch(queries, model=args.model)
+    else:
+        results = [map_query_to_nugget_headers(q, model=args.model) for q in queries]
 
     payload: dict[str, Any] = {"queries": results} if len(results) > 1 else results[0]
 
