@@ -21,7 +21,7 @@ load_dotenv(os.path.join(_repo_root, ".env"), override=False)
 
 from src.config import OUTPUT_DIR
 from src.llm.batch import main_batch_query
-from src.llm.model import query_openai, setup_openai
+from src.evaluate.query_csv_to_qrels_run import build_qrels_and_run, discover_csv_paths
 
 # Keep in sync with src/evaluate/card2nugget_extraction.py OUTPUT_HEADERS
 NUGGET_SCHEMA_HEADERS = [
@@ -37,7 +37,11 @@ NUGGET_SCHEMA_HEADERS = [
 ]
 
 OUTPUT_HEADER_KEYWORD_JSON = os.path.join(OUTPUT_DIR, "evaluate", "query_header_keyword_mapping.json")
+OUTPUT_QRELS = os.path.join(OUTPUT_DIR, "evaluate", "real_subtopic.qrels")
+OUTPUT_RUN = os.path.join(OUTPUT_DIR, "evaluate", "real_initial.run")
+OUTPUT_MATCH_DEBUG_JSON = os.path.join(OUTPUT_DIR, "evaluate", "query_csv_match_debug.json")
 BATCH_DIR = Path(OUTPUT_DIR) / "evaluate" / "batch"
+EVAL_DIR = Path(OUTPUT_DIR) / "evaluate"
 
 PROMPT_PATH = Path("src/evaluate/query2nugget_prompts.yaml")
 PROMPT_KEY = "query_to_nugget_headers"
@@ -274,48 +278,34 @@ def map_queries_via_batch(queries: list[str], *, model: str | None = None) -> li
     return results
 
 
-def map_query_to_nugget_headers(
-    query: str,
+def _save_qrels_and_run(
     *,
-    model: str | None = None,
-) -> dict[str, Any]:
-    """Sync chat: query + fixed headers → JSON with related headers and keyword lists."""
-    query = (query or "").strip()
-    if not query:
-        raise ValueError("query is empty")
+    mapping_results: list[dict[str, Any]],
+    csv_roots: list[Path],
+    qrels_path: Path,
+    run_path: Path,
+    debug_path: Path,
+    subtopic: str,
+) -> tuple[int, int]:
+    csv_paths = discover_csv_paths(csv_roots)
+    if not csv_paths:
+        raise RuntimeError(f"No CSV files found under: {[str(x) for x in csv_roots]}")
+    qrels_rows, run_rows, debug = build_qrels_and_run(mapping_results, csv_paths, subtopic=subtopic)
 
-    try:
-        prompt = _build_prompt_for_query(query)
-    except RuntimeError as e:
-        return {
-            "query": query,
-            "related": [],
-            "header_list": [],
-            "error": str(e),
-            "prompt": "",
-            "raw_response": "",
-        }
+    qrels_path.parent.mkdir(parents=True, exist_ok=True)
+    run_path.parent.mkdir(parents=True, exist_ok=True)
+    debug_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not os.getenv("OPENAI_API_KEY"):
-        return {
-            "query": query,
-            "related": [],
-            "header_list": [],
-            "error": "skip_no_api_key",
-            "prompt": prompt,
-            "raw_response": "",
-        }
+    with open(qrels_path, "w", encoding="utf-8") as f:
+        for qid, st, doc_id, rel in qrels_rows:
+            f.write(f"{qid} {st} {doc_id} {rel}\n")
+    with open(run_path, "w", encoding="utf-8") as f:
+        for qid, q0, doc_id, rank, score, tag in run_rows:
+            f.write(f"{qid} {q0} {doc_id} {rank} {score} {tag}\n")
+    with open(debug_path, "w", encoding="utf-8") as f:
+        json.dump({"csv_paths": [str(p) for p in csv_paths], "queries": debug}, f, ensure_ascii=False, indent=2)
 
-    setup_openai("", mode="openai")
-    raw = query_openai(
-        prompt,
-        mode="openai",
-        model=model or TEXT_MODEL,
-        max_tokens=800,
-        temperature=0.0,
-    ) or ""
-
-    return _finalize_map_response(query, prompt, raw)
+    return len(qrels_rows), len(run_rows)
 
 
 def main() -> None:
@@ -330,6 +320,25 @@ def main() -> None:
         help=f"JSON output path (default: {OUTPUT_HEADER_KEYWORD_JSON})",
     )
     parser.add_argument("--model", default=None, help="OpenAI chat model (default from env or gpt-4o-mini).")
+    parser.add_argument(
+        "--build-qrels-run",
+        action="store_true",
+        help="Also build qrels/run by matching mapping JSON against card2nugget CSV files.",
+    )
+    parser.add_argument(
+        "--csv-root",
+        action="append",
+        default=None,
+        help="Directory to scan for card2nugget CSV files (repeatable). Default: evaluate/ and evaluate/batch/.",
+    )
+    parser.add_argument("--qrels-output", default=OUTPUT_QRELS, help=f"Qrels output path (default: {OUTPUT_QRELS})")
+    parser.add_argument("--run-output", default=OUTPUT_RUN, help=f"Run output path (default: {OUTPUT_RUN})")
+    parser.add_argument(
+        "--match-debug-output",
+        default=OUTPUT_MATCH_DEBUG_JSON,
+        help=f"Debug JSON for CSV matching (default: {OUTPUT_MATCH_DEBUG_JSON})",
+    )
+    parser.add_argument("--subtopic", default="1", help="Subtopic id written into qrels (default: 1).")
     args = parser.parse_args()
 
     queries: list[str] = []
@@ -345,12 +354,8 @@ def main() -> None:
     if not queries:
         parser.error("Provide --query and/or --queries-file.")
 
-    use_batch = args.queries_file is not None
-    if use_batch:
-        print("[mode] OpenAI Batch (--queries-file)")
-        results = map_queries_via_batch(queries, model=args.model)
-    else:
-        results = [map_query_to_nugget_headers(q, model=args.model) for q in queries]
+    print("[mode] OpenAI Batch (always)")
+    results = map_queries_via_batch(queries, model=args.model)
 
     payload: dict[str, Any] = {"queries": results} if len(results) > 1 else results[0]
 
@@ -364,6 +369,20 @@ def main() -> None:
         err = r.get("error", "")
         hl = r.get("header_list", [])
         print(f"query = {r.get('query', '')!r}  |  headers = {hl}  |  note = {err or 'ok'}")
+
+    if args.build_qrels_run:
+        roots = [Path(p) for p in args.csv_root] if args.csv_root else [EVAL_DIR, BATCH_DIR]
+        qrels_lines, run_lines = _save_qrels_and_run(
+            mapping_results=results,
+            csv_roots=roots,
+            qrels_path=Path(args.qrels_output),
+            run_path=Path(args.run_output),
+            debug_path=Path(args.match_debug_output),
+            subtopic=str(args.subtopic),
+        )
+        print(f"saved_qrels = {Path(args.qrels_output).resolve()}  | lines = {qrels_lines}")
+        print(f"saved_run = {Path(args.run_output).resolve()}  | lines = {run_lines}")
+        print(f"saved_match_debug = {Path(args.match_debug_output).resolve()}")
 
 
 if __name__ == "__main__":

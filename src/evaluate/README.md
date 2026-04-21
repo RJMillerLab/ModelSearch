@@ -10,16 +10,10 @@
 ## 1. Model Card Extract Nuggets
 
 
-Single-card test:
+Batch mode (recommended):
 
 ```bash
-python -m src.evaluate.card2nugget_extraction --model-id google-bert/bert-base-uncased
-
-# Batch test (multiple model ids in one OpenAI Batch job):
-#python -m src.evaluate.card2nugget_extraction --model-ids google/bert_uncased_L-12_H-768_A-12 baidu/ERNIE-4.5-VL-424B-A47B-Base-Paddle
-
-# from file 
-# python -m src.evaluate.card2nugget_extraction --model-ids-file path/to/model_ids.txt
+python -m src.evaluate.card2nugget_extraction --model-ids-file data_251117/query/toy_data/model_ids.txt
 ```
 
 Outputs:
@@ -39,12 +33,12 @@ Map a **search query** to the same column headers as `card2nugget_extraction` (`
 Prompt: `src/evaluate/query2nugget_prompts.yaml` (`query_to_nugget_headers`).
 
 ```bash
-python -m src.evaluate.query2nugget_layer_mapping --query "Which models achieve the best performance on the Spider benchmark for text-to-SQL?"
-# several queries (uses OpenAI Batch API; batch jsonl under `evaluate/batch/`)
-python -m src.evaluate.query2nugget_layer_mapping --queries-file path/to/queries.txt
+python -m src.evaluate.query2nugget_layer_mapping --queries-file data_251117/query/toy_data/queries.txt
 ```
 
-**Output file (`query_header_keyword_mapping.json`)** — intermediate artifact from the LLM: your search `query`, plus `related` entries (`header` + `keywords` per nugget column). Single-query runs store one JSON object; multiple queries store `{"queries": [...]}`. With `--queries-file`, entries may include `batch_input_jsonl` / `batch_output_jsonl` for Batch debugging.
+`query2nugget_layer_mapping` now always uses OpenAI Batch API.  
+
+**Output file (`query_header_keyword_mapping.json`)** — intermediate artifact from the LLM: your search `query`, plus `related` entries (`header` + `keywords` per nugget column). Single-query runs store one JSON object; multiple queries store `{"queries": [...]}`. Entries may include `batch_input_jsonl` / `batch_output_jsonl` for Batch debugging.
 
 **Pipeline:** run **card2nugget** first (per-model CSVs under `evaluate/` or `evaluate/batch/`), then **query2nugget** as above, then match CSV rows to keywords to build pyndeval inputs:
 
@@ -55,15 +49,24 @@ python -m src.evaluate.query_csv_to_qrels_run
 # optional: --qrels / --run / --debug-json paths
 ```
 
+Or do the same matching directly from query2nugget in one command:
+
+```bash
+python -m src.evaluate.query2nugget_layer_mapping \
+  --queries-file data_251117/query/toy_data/queries.txt \
+  --build-qrels-run
+# optional: --csv-root (repeatable), --qrels-output, --run-output, --match-debug-output
+```
+
 Matching rules (simple, debug-friendly): for each query, **every** `related` header must have a **nonempty** cell in the row; each header’s keywords are **OR**’d; a keyword counts if it appears as a **case-insensitive substring** in that cell (e.g. keyword `bert` matches `bert-base-uncased`). Doc ids are `{csv_stem}#{0_based_row}` (csv stem is the safe model id, e.g. `google-bert__bert-base-uncased`). Also writes `query_csv_match_debug.json` (per-query hits with row snapshots).
 
-One-shot wrapper (two model clusters, one query input):
+One-shot wrapper (two model clusters, query file input):
 
 ```bash
 python -m src.evaluate.wrap_card_query_eval \
-  --query "best bert on spider" \
-  --cluster-a-model-ids google-bert/bert-base-uncased google/bert_uncased_L-12_H-768_A-12 \
-  --cluster-b-model-ids baidu/ERNIE-4.5-VL-424B-A47B-Base-Paddle
+  --queries-file data_251117/query/toy_data/queries.txt \
+  --cluster-a-model-ids-file data_251117/query/toy_data/cluster_a_model_ids.txt \
+  --cluster-b-model-ids-file data_251117/query/toy_data/cluster_b_model_ids.txt
 ```
 
 This wrapper imports and chains the 3 modules above: `card2nugget_extraction`, `query2nugget_layer_mapping`, `query_csv_to_qrels_run`. Outputs are written under `data_251117/evaluate/pipeline/` by default, including per-cluster `.qrels`, `.run`, match debug json, and `pipeline_summary.json`.
@@ -71,16 +74,10 @@ This wrapper imports and chains the 3 modules above: `card2nugget_extraction`, `
 ## 3. Evaluate
 ```bash
 # Toy data:
-python -m src.evaluate.evaluate_pyndeval \
-  --run data_251117/toy_data/toy_initial.run \
-  --qrels data_251117/toy_data/toy_subtopic.qrels \
-  --cutoff 20
+python -m src.evaluate.evaluate_pyndeval --run data_251117/toy_data/toy_initial.run --qrels data_251117/toy_data/toy_subtopic.qrels --cutoff 20
 
 # Real data:
-python -m src.evaluate.evaluate_pyndeval \
-  --run data_251117/evaluate/real_initial.run \
-  --qrels data_251117/evaluate/real_subtopic.qrels \
-  --cutoff 20
+python -m src.evaluate.evaluate_pyndeval --run data_251117/evaluate/real_initial.run --qrels data_251117/evaluate/real_subtopic.qrels --cutoff 20
 ```
 
 

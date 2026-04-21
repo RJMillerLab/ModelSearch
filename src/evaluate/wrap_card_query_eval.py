@@ -11,7 +11,7 @@ import pyndeval
 from src.config import OUTPUT_DIR
 from src.evaluate.card2nugget_extraction import run_batch, _safe_model_id
 from src.evaluate.evaluate_pyndeval import load_run, load_subtopic_qrels, mean
-from src.evaluate.query2nugget_layer_mapping import map_queries_via_batch, map_query_to_nugget_headers
+from src.evaluate.query2nugget_layer_mapping import map_queries_via_batch
 from src.evaluate.query_csv_to_qrels_run import build_qrels_and_run
 
 EVAL_DIR = Path(OUTPUT_DIR) / "evaluate"
@@ -70,7 +70,7 @@ def _write_run(path: Path, rows: list[tuple[str, str, str, int, float, str]]) ->
 
 def _map_queries(queries: list[str], model: str | None) -> list[dict[str, Any]]:
     if len(queries) == 1:
-        return [map_query_to_nugget_headers(queries[0], model=model)]
+        print("[query2nugget] single query still uses Batch API")
     return map_queries_via_batch(queries, model=model)
 
 
