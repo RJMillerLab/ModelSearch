@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -21,7 +22,6 @@ load_dotenv(os.path.join(_repo_root, ".env"), override=False)
 
 from src.config import OUTPUT_DIR
 from src.llm.batch import main_batch_query
-from src.evaluate.query_csv_to_qrels_run import build_qrels_and_run, discover_csv_paths
 
 # Keep in sync with src/evaluate/card2nugget_extraction.py OUTPUT_HEADERS
 NUGGET_SCHEMA_HEADERS = [
@@ -130,6 +130,134 @@ def _validate_and_normalize(
         "related": normalized,
         "header_list": [x["header"] for x in normalized],
     }
+
+
+def _norm_cell(v: Any) -> str:
+    if v is None:
+        return ""
+    text = str(v).strip()
+    if text.lower() in {"", "nan", "none", "null"}:
+        return ""
+    return re.sub(r"\s+", " ", text)
+
+
+def _norm_key(s: str) -> str:
+    return (s or "").strip()
+
+
+def discover_csv_paths(roots: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in sorted(root.rglob("*.csv")):
+            rp = p.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            out.append(p)
+    return out
+
+
+def _row_dict(row: dict[str, Any]) -> dict[str, str]:
+    raw = {_norm_key(k): _norm_cell(v) for k, v in row.items() if k is not None}
+    out: dict[str, str] = {}
+    for h in NUGGET_SCHEMA_HEADERS:
+        v = raw.get(h) or raw.get(_norm_key(h))
+        if v is None:
+            for k, val in raw.items():
+                if k.replace("_", "").lower() == h.replace("_", "").lower():
+                    v = val
+                    break
+        out[h] = v or ""
+    return out
+
+
+def row_match_score(related: list[dict[str, Any]], cells: dict[str, str]) -> tuple[bool, int]:
+    allowed = set(NUGGET_SCHEMA_HEADERS)
+    items = [x for x in related if isinstance(x, dict) and str(x.get("header", "")).strip() in allowed]
+    if not items:
+        return False, 0
+    score = 0
+    for item in items:
+        h = str(item.get("header", "")).strip()
+        kws = item.get("keywords")
+        if isinstance(kws, str):
+            kws = [kws]
+        elif not isinstance(kws, list):
+            kws = []
+        keywords = [str(x).strip() for x in kws if str(x).strip()]
+        cell = cells.get(h, "")
+        if not cell:
+            return False, 0
+        cl = cell.lower()
+        if not keywords:
+            score += 1
+            continue
+        if not any(kw.lower() in cl for kw in keywords):
+            return False, 0
+        score += sum(1 for kw in keywords if kw.lower() in cl)
+    return True, score
+
+
+def build_qrels_and_run(
+    queries: list[dict[str, Any]],
+    csv_paths: list[Path],
+    *,
+    subtopic: str = "1",
+) -> tuple[list[tuple[str, str, str, int]], list[tuple[str, str, str, int, float, str]], list[dict[str, Any]]]:
+    qrels: list[tuple[str, str, str, int]] = []
+    run_rows: list[tuple[str, str, str, int, float, str]] = []
+    debug: list[dict[str, Any]] = []
+    for qi, block in enumerate(queries):
+        qid = f"q{qi:04d}"
+        qtext = str(block.get("query", "")).strip()
+        related = block.get("related")
+        if not isinstance(related, list):
+            related = []
+        related = [x for x in related if isinstance(x, dict)]
+        if block.get("error"):
+            debug.append({"qid": qid, "query": qtext, "skipped": str(block.get("error")), "hits": []})
+            continue
+        if not related:
+            debug.append({"qid": qid, "query": qtext, "skipped": "no_related_headers", "hits": []})
+            continue
+        hits: list[dict[str, Any]] = []
+        csv_errors: list[str] = []
+        for csv_path in csv_paths:
+            table = csv_path.stem
+            try:
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for ri, row in enumerate(reader):
+                        cells = _row_dict(row)
+                        ok, sc = row_match_score(related, cells)
+                        if not ok:
+                            continue
+                        doc_id = f"{table}#{ri}"
+                        hits.append(
+                            {
+                                "doc_id": doc_id,
+                                "table": table,
+                                "row_idx": ri,
+                                "score": sc,
+                                "cells": {h: cells[h] for h in NUGGET_SCHEMA_HEADERS if cells.get(h)},
+                            }
+                        )
+            except OSError as e:
+                csv_errors.append(f"{csv_path}: {e}")
+        hits.sort(key=lambda x: (-x["score"], x["doc_id"]))
+        for h in hits:
+            qrels.append((qid, subtopic, h["doc_id"], 1))
+        for rank, h in enumerate(hits, start=1):
+            run_rows.append((qid, "Q0", h["doc_id"], rank, float(max(1, h["score"])), "match"))
+        entry: dict[str, Any] = {"qid": qid, "query": qtext, "hits": hits}
+        if csv_errors:
+            entry["csv_errors"] = csv_errors
+        debug.append(entry)
+    run_rows.sort(key=lambda x: (x[0], x[3]))
+    return qrels, run_rows, debug
 
 
 def _extract_text_from_batch_line(item: dict[str, Any]) -> tuple[str, str]:

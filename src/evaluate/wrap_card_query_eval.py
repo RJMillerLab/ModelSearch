@@ -12,8 +12,7 @@ import pyndeval
 from src.config import OUTPUT_DIR
 from src.evaluate.card2nugget_extraction import run_batch, _safe_model_id
 from src.evaluate.evaluate_pyndeval import load_run, load_subtopic_qrels, mean
-from src.evaluate.query2nugget_layer_mapping import map_queries_via_batch
-from src.evaluate.query_csv_to_qrels_run import build_qrels_and_run
+from src.evaluate.query2nugget_layer_mapping import map_queries_via_batch, build_qrels_and_run
 
 EVAL_DIR = Path(OUTPUT_DIR) / "evaluate"
 BATCH_DIR = EVAL_DIR / "batch"
@@ -199,7 +198,7 @@ def _evaluate_cluster(run_path: Path, qrels_path: Path, *, cutoff: int, alpha: f
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Wrap card2nugget + query2nugget + query_csv_to_qrels_run for two model clusters.",
+        description="Wrap card2nugget + query2nugget (+qrels/run) for two model clusters.",
     )
     parser.add_argument("--query", default=None, help="Single query text.")
     parser.add_argument("--queries-file", default=None, help="One query per line.")
