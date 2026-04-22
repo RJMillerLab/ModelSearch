@@ -46,6 +46,8 @@ QUERY_MAP_HEADERS = list(NUGGET_SCHEMA_HEADERS)
 SOURCE_MODEL_ID_COLUMN = "source_model_id"
 MODEL_ROW_COLUMNS = frozenset({"Model", "Base_model", "Base_model_type"})
 DATASET_ROW_COLUMNS = frozenset({"Train_dataset", "Test_dataset"})
+METRIC_ROW_COLUMNS = frozenset({"Metric_name", "Metric_value"})
+HYPERPARAM_ROW_COLUMNS = frozenset({"Hyperparam_name", "Hyperparam_value"})
 
 OUTPUT_HEADER_KEYWORD_JSON = os.path.join(OUTPUT_DIR, "evaluate", "query_header_keyword_mapping.json")
 OUTPUT_QRELS = os.path.join(OUTPUT_DIR, "evaluate", "real_subtopic.qrels")
@@ -440,6 +442,12 @@ def row_match_score(related: list[dict[str, Any]], cells: dict[str, str]) -> tup
         keywords = [str(x).strip() for x in kws if str(x).strip()]
         if h in MODEL_ROW_COLUMNS:
             cell_candidates = [cells.get(k, "") for k in MODEL_ROW_COLUMNS]
+        elif h in METRIC_ROW_COLUMNS:
+            # Metric rows are only meaningful when the value exists.
+            cell_candidates = [cells.get("Metric_value", "")]
+        elif h in HYPERPARAM_ROW_COLUMNS:
+            # Hyperparameter rows are only meaningful when the value exists.
+            cell_candidates = [cells.get("Hyperparam_value", "")]
         elif h in ("Train_dataset", "Test_dataset"):
             cell_candidates = [cells.get(k, "") for k in DATASET_ROW_COLUMNS]
         else:
@@ -461,6 +469,10 @@ def row_match_score(related: list[dict[str, Any]], cells: dict[str, str]) -> tup
 def _haystack_for_filter_column(column: str, cells: dict[str, str]) -> str:
     if column in MODEL_ROW_COLUMNS:
         return " ".join(cells.get(k, "") for k in sorted(MODEL_ROW_COLUMNS))
+    if column in METRIC_ROW_COLUMNS:
+        return cells.get("Metric_value", "")
+    if column in HYPERPARAM_ROW_COLUMNS:
+        return cells.get("Hyperparam_value", "")
     if column in DATASET_ROW_COLUMNS:
         return " ".join(cells.get(k, "") for k in sorted(DATASET_ROW_COLUMNS))
     return cells.get(column, "")
@@ -546,6 +558,10 @@ def _clusters_effective(block: dict[str, Any]) -> list[dict[str, Any]]:
 def _header_non_empty_for_row(header: str, cells: dict[str, str]) -> bool:
     if header in MODEL_ROW_COLUMNS:
         return any(cells.get(k) for k in MODEL_ROW_COLUMNS)
+    if header in METRIC_ROW_COLUMNS:
+        return bool(cells.get("Metric_value", ""))
+    if header in HYPERPARAM_ROW_COLUMNS:
+        return bool(cells.get("Hyperparam_value", ""))
     if header in ("Train_dataset", "Test_dataset"):
         return any(cells.get(k) for k in DATASET_ROW_COLUMNS)
     return bool(cells.get(header, ""))

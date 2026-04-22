@@ -14,7 +14,7 @@ nugget_schema_mapping: |
 
   - **`Base_model`** — The **upstream** model id **only** if tags, YAML metadata, or prose **explicitly** name it (e.g. hub id “fine-tuned from …”). **Value:** hub-style id or exact name from the card; empty if not stated. **Example:** `meta-llama/Meta-Llama-3-8B`.
 
-  - **`Base_model_type`** — How this repo relates to `Base_model` (must align with `Base_model` when both are set). **Value:** exactly one of `finetuned` | `quantized` | `distilled` | `merged`, lowercase; empty if unclear. Not model **size** (Tiny/Large). **Example:** `finetuned`.
+  - **`Base_model_type`** — How this repo relates to `Base_model` (must align with `Base_model` when both are set). **Value:** exactly one of `finetuned` | `quantized` | `adaptor` | `merged`, lowercase; empty if unclear. Not model **size** (Tiny/Large). **Example:** `finetuned`.
 
   - **`Train_dataset`** — Data the model was **trained** or **fine-tuned / transfer-learned** on (stated for training, not the eval benchmark). **Value:** dataset or mix name/id as on the card. **Example:** `OpenOrca`.
 

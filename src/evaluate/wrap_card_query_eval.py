@@ -14,6 +14,7 @@ from src.config import OUTPUT_DIR
 from src.evaluate.card2nugget_extraction import CARD2NUGGET_DIR, run_batch, _safe_model_id
 from src.evaluate.evaluate_pyndeval import load_run, load_subtopic_qrels, mean
 from src.evaluate.query2nugget_mapping import (
+    NUGGET_SCHEMA_HEADERS,
     build_qrels_and_run_llm_rerank,
     build_qrels_and_run_structured,
     count_csv_data_rows,
@@ -229,6 +230,77 @@ def _nonempty_headers_for_csv(csv_path: Path) -> list[str]:
     return seen
 
 
+def _row_signature(cells: dict[str, str]) -> tuple[str, ...]:
+    return tuple((cells.get(h, "") or "").strip() for h in NUGGET_SCHEMA_HEADERS)
+
+
+def _write_method_dedup_csv(path: Path, method_csv_paths: list[Path], model_ids: list[str]) -> int:
+    """Merge one method's model CSVs into a deduplicated nugget CSV for inspection."""
+    by_mid = {str(mid).strip(): Path(p) for mid, p in zip(model_ids, method_csv_paths)}
+    dedup: dict[tuple[str, ...], dict[str, str]] = {}
+    provenance: dict[tuple[str, ...], list[str]] = {}
+    for mid in model_ids:
+        csv_path = by_mid.get(str(mid).strip())
+        if not csv_path or not csv_path.is_file():
+            continue
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                cells = _row_dict(row)
+                sig = _row_signature(cells)
+                if sig not in dedup:
+                    dedup[sig] = {h: cells.get(h, "") for h in NUGGET_SCHEMA_HEADERS}
+                    provenance[sig] = []
+                if mid not in provenance[sig]:
+                    provenance[sig].append(mid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["source_model_ids"] + list(NUGGET_SCHEMA_HEADERS)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
+        w.writeheader()
+        for sig, row in dedup.items():
+            out_row = {"source_model_ids": " | ".join(provenance.get(sig, []))}
+            out_row.update(row)
+            w.writerow(out_row)
+    return len(dedup)
+
+
+def _collect_method_row_stats(csv_paths: list[Path], headers: list[str]) -> dict[str, Any]:
+    raw_count = 0
+    matched_count = 0
+    raw_signatures: set[tuple[str, ...]] = set()
+    matched_signatures: set[tuple[str, ...]] = set()
+    for csv_path in csv_paths:
+        if not csv_path.is_file():
+            continue
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                cells = _row_dict(row)
+                sig = _row_signature(cells)
+                raw_count += 1
+                raw_signatures.add(sig)
+                if headers and any(_header_non_empty_for_row(h, cells) for h in headers):
+                    matched_count += 1
+                    matched_signatures.add(sig)
+    return {
+        "raw_count": raw_count,
+        "matched_count": matched_count,
+        "raw_dedup_count": len(raw_signatures),
+        "matched_dedup_count": len(matched_signatures),
+        "raw_signatures": raw_signatures,
+        "matched_signatures": matched_signatures,
+    }
+
+
+def _md_file_link(path_str: str) -> str:
+    path = str(path_str or "").strip()
+    if not path:
+        return "—"
+    name = Path(path).name.replace("|", "\\|")
+    return f"[{name}](file://{path})"
+
+
 def _format_pipeline_match_markdown(
     *,
     jobs_path: Path,
@@ -237,7 +309,6 @@ def _format_pipeline_match_markdown(
     card_rows: list[dict[str, Any]],
     query_headers: list[str],
     query_method_counts: list[dict[str, Any]],
-    method_runs: list[dict[str, Any]],
 ) -> str:
     lines = [
         "# Pipeline summary",
@@ -251,47 +322,71 @@ def _format_pipeline_match_markdown(
         "| --- | --- | ---: | --- | --- |",
     ]
     for row in card_rows:
+        csv_link = _md_file_link(str(row.get("csv_path", "")))
         lines.append(
             f"| `{row['method']}` | `{row['model_id']}` | {row['nugget_rows']} | "
-            f"`{str(row.get('csv_path', '')).replace('|', '\\|')}` | "
+            f"{csv_link} | "
             f"{str(row.get('nonempty_headers', '')).replace('|', '\\|')} |"
         )
     if not card_rows:
         lines.append("| — | — | 0 | — | — |")
 
-    method_cols = [f"`{row['method']}`" for row in query_method_counts]
     lines.extend(["", "## Query2nugget", ""])
+    lines.append(f"- Query: `{_md_query_cell(query)}`")
+    lines.append(f"- Headers: `{', '.join(query_headers) if query_headers else '[]'}`")
+    lines.append("")
     if query_method_counts:
-        header = "| query | headers | " + " | ".join(method_cols) + " |"
-        sep = "| --- | --- | " + " | ".join(["---:" for _ in method_cols]) + " |"
-        vals = " | ".join(str(row["matched_rows"]) for row in query_method_counts)
-        lines.append(header)
-        lines.append(sep)
-        lines.append(f"| {_md_query_cell(query)} | `{', '.join(query_headers) if query_headers else '[]'}` | {vals} |")
+        lines.extend(
+            [
+                "| method | model_id | original | filter |",
+                "| --- | --- | ---: | ---: |",
+            ]
+        )
+        for row in query_method_counts:
+            method = str(row.get("method", ""))
+            for model in row.get("models", []):
+                lines.append(
+                    f"| `{method}` | `{model.get('model_id', '')}` | "
+                    f"{int(model.get('raw_rows', 0))} | {int(model.get('matched_rows', 0))} |"
+                )
+            lines.append(
+                f"| `{method}` | `sum` | {int(row.get('raw_rows', 0))} | {int(row.get('matched_rows', 0))} |"
+            )
+            lines.append(
+                f"| `{method}` | `dedup` | {int(row.get('raw_dedup_count', 0))} | {int(row.get('matched_dedup_count', 0))} |"
+            )
     else:
         lines.extend([
-            "| query | headers | matched_rows |",
-            "| --- | --- | ---: |",
-            f"| {_md_query_cell(query)} | `{', '.join(query_headers) if query_headers else '[]'}` | 0 |",
+            "| method | model_id | original | filter |",
+            "| --- | --- | ---: | ---: |",
+            "| — | — | 0 | 0 |",
         ])
     lines.extend(
         [
             "",
-            "_Query2nugget counts above mean: for each method, how many card2nugget rows have **any** selected header non-empty._",
+            "_`original` = raw nugget rows from card2nugget before header filtering; `filter` = rows where any query-selected header is non-empty. `dedup` is the unique nugget count within that method after deduplicating across its model cards._",
+            "",
+            "## Method Summary",
+            "",
+            "| method | model_count | original_sum | original_dedup | filter_sum | filter_dedup | nugget_csv |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
-
-    lines.extend(["", "## Eval", "", "| method | qrels | run | alpha-nDCG | strec | note |", "| --- | ---: | ---: | ---: | ---: | --- |"])
-    for row in method_runs:
-        ev = row.get("evaluation", {})
-        if ev.get("skipped"):
-            note = str(ev.get("reason", "skipped")).replace("|", "\\|")
-            lines.append(f"| `{row['method']}` | {row['qrels_lines']} | {row['run_lines']} | — | — | {note} |")
-        else:
-            lines.append(
-                f"| `{row['method']}` | {row['qrels_lines']} | {row['run_lines']} | "
-                f"{ev.get('alpha_nDCG', 0.0):.6f} | {ev.get('strec', 0.0):.6f} | ok |"
-            )
+    for row in query_method_counts:
+        lines.append(
+            f"| `{row.get('method', '')}` | {len(row.get('models', []))} | "
+            f"{int(row.get('raw_rows', 0))} | {int(row.get('raw_dedup_count', 0))} | "
+            f"{int(row.get('matched_rows', 0))} | {int(row.get('matched_dedup_count', 0))} | "
+            f"{_md_file_link(str(row.get('nugget_csv_path', '')))} |"
+        )
+    lines.extend(
+        [
+            "",
+            "_`sum` = direct sum over model cards in that method; `dedup` = unique nugget count within that method after deduplication._",
+            "",
+            "_No alpha-nDCG / strec here: this setting is open-world and we are comparing matched nugget counts, not coverage against a fixed ground-truth set._",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -335,22 +430,34 @@ def _run_cluster(
             co = by_model_id.get(mid)
             csv_path = Path(str(co.get("csv_path", ""))) if co else Path()
             nugget_rows = count_csv_data_rows(csv_path) if csv_path.is_file() else 0
+            filtered_rows = _count_rows_with_any_header(csv_path, query_headers) if csv_path.is_file() else 0
             nonempty_headers = ", ".join(_nonempty_headers_for_csv(csv_path))
             card_rows.append(
                 {
                     "method": method,
                     "model_id": mid,
                     "nugget_rows": nugget_rows,
+                    "filtered_rows": filtered_rows,
                     "csv_path": str(csv_path.resolve()) if csv_path.is_file() else "",
                     "nonempty_headers": nonempty_headers,
                 }
             )
             if csv_path.is_file():
                 method_csv_paths.append(csv_path)
+        stats = _collect_method_row_stats(method_csv_paths, query_headers)
+        model_rows = [r for r in card_rows if r["method"] == method]
         query_method_counts.append(
             {
                 "method": method,
-                "matched_rows": sum(_count_rows_with_any_header(p, query_headers) for p in method_csv_paths),
+                "models": [
+                    {"model_id": row["model_id"], "raw_rows": row["nugget_rows"], "matched_rows": row["filtered_rows"]}
+                    for row in model_rows
+                ],
+                "raw_rows": stats["raw_count"],
+                "matched_rows": stats["matched_count"],
+                "raw_dedup_count": stats["raw_dedup_count"],
+                "matched_dedup_count": stats["matched_dedup_count"],
+                "nugget_csv_path": "",
             }
         )
         if not method_csv_paths:
@@ -365,10 +472,15 @@ def _run_cluster(
                     "run_path": "",
                     "debug_path": "",
                     "csv_paths": [],
+                    "nugget_csv_path": "",
                 }
             )
             continue
 
+        method_tag = _safe_name(method)
+        nugget_csv_path = out_dir / f"{cluster_name}_{method_tag}_nuggets_dedup.csv"
+        nugget_csv_rows = _write_method_dedup_csv(nugget_csv_path, method_csv_paths, method_model_ids)
+        query_method_counts[-1]["nugget_csv_path"] = str(nugget_csv_path.resolve())
         qrels_rows, run_rows, debug = qrels_builder(
             query_maps,
             method_csv_paths,
@@ -377,7 +489,6 @@ def _run_cluster(
             emit_match_report=False,
         )
 
-        method_tag = _safe_name(method)
         qrels_path = out_dir / f"{cluster_name}_{method_tag}_real_subtopic.qrels"
         run_path = out_dir / f"{cluster_name}_{method_tag}_real_initial.run"
         debug_path = out_dir / f"{cluster_name}_{method_tag}_query_csv_match_debug.json"
@@ -402,6 +513,8 @@ def _run_cluster(
                 "run_path": str(run_path.resolve()),
                 "debug_path": str(debug_path.resolve()),
                 "csv_paths": [str(p.resolve()) for p in method_csv_paths],
+                "nugget_csv_path": str(nugget_csv_path.resolve()),
+                "nugget_csv_rows": nugget_csv_rows,
             }
         )
 
@@ -498,7 +611,6 @@ def main() -> None:
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    match_log_md = out_dir / "pipeline_match_log.md"
 
     summaries = []
     jobs_path = Path(args.jobs_batch_json)
@@ -526,6 +638,8 @@ def main() -> None:
     query_maps = map_queries([query], model=args.model, llm_mode=args.llm_mode)
     cluster_out_dir = out_dir / cluster_name
     cluster_out_dir.mkdir(parents=True, exist_ok=True)
+    match_log_md = cluster_out_dir / "pipeline_match_log.md"
+    summary_path = cluster_out_dir / "pipeline_summary.json"
     summary = _run_cluster(
         cluster_name,
         job_id,
@@ -541,30 +655,9 @@ def main() -> None:
     summary["query"] = query
     summaries.append(summary)
 
-    for s in summaries:
-        for m in s.get("methods", []):
-            run_path = str(m.get("run_path", "")).strip()
-            qrels_path = str(m.get("qrels_path", "")).strip()
-            if not run_path or not qrels_path:
-                m["evaluation"] = {"skipped": True, "reason": m.get("note") or "no_model_csvs", "run_rows": 0, "qrels_rows": 0}
-                print(f"[eval:{s['cluster']}:{m.get('method', 'unknown')}] skipped ({m['evaluation']['reason']})")
-                continue
-            eval_result = _evaluate_cluster(Path(run_path), Path(qrels_path), cutoff=args.eval_cutoff, alpha=args.eval_alpha, per_query=bool(args.eval_per_query))
-            m["evaluation"] = eval_result
-            if eval_result.get("skipped"):
-                hint = eval_result.get("hint")
-                suf = f" | {hint}" if hint else ""
-                print(
-                    f"[eval:{s['cluster']}:{m['method']}] skipped ({eval_result.get('reason')}) "
-                    f"run_rows={eval_result.get('run_rows')} qrels_rows={eval_result.get('qrels_rows')}{suf}"
-                )
-            else:
-                print(
-                    f"[eval:{s['cluster']}:{m['method']}] "
-                    f"alpha-nDCG@{args.eval_cutoff}={eval_result['alpha_nDCG']:.6f} strec@{args.eval_cutoff}={eval_result['strec']:.6f}"
-                )
+    # Open-world setting: keep qrels/run artifacts for inspection, but do not compute alpha-nDCG/strec here.
+    # The markdown summary below reports matched nugget counts instead of fixed-ground-truth coverage metrics.
 
-    summary_path = out_dir / "pipeline_summary.json"
     _save_json(summary_path, {"clusters": summaries})
     print(f"[done] summary -> {summary_path.resolve()}")
 
@@ -577,7 +670,6 @@ def main() -> None:
             card_rows=summary.get("card_rows", []),
             query_headers=summary.get("query_headers", []),
             query_method_counts=summary.get("query_method_counts", []),
-            method_runs=summary.get("methods", []),
         ),
         encoding="utf-8",
     )
