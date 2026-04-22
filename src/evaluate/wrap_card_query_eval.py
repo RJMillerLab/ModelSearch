@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -293,16 +294,23 @@ def _collect_method_row_stats(csv_paths: list[Path], headers: list[str]) -> dict
     }
 
 
-def _md_file_link(path_str: str) -> str:
+def _md_file_link(path_str: str, *, base_dir: Path) -> str:
     path = str(path_str or "").strip()
     if not path:
         return "—"
-    name = Path(path).name.replace("|", "\\|")
-    return f"[{name}](file://{path})"
+    target = Path(path)
+    name = target.name.replace("|", "\\|").replace("`", "")
+    try:
+        rel = os.path.relpath(str(target), str(base_dir))
+    except ValueError:
+        rel = str(target)
+    rel = rel.replace("\\", "/")
+    return f"[{name}]({rel})"
 
 
 def _format_pipeline_match_markdown(
     *,
+    output_dir: Path,
     jobs_path: Path,
     job_id: str,
     query: str,
@@ -322,7 +330,7 @@ def _format_pipeline_match_markdown(
         "| --- | --- | ---: | --- | --- |",
     ]
     for row in card_rows:
-        csv_link = _md_file_link(str(row.get("csv_path", "")))
+        csv_link = _md_file_link(str(row.get("csv_path", "")), base_dir=output_dir)
         lines.append(
             f"| `{row['method']}` | `{row['model_id']}` | {row['nugget_rows']} | "
             f"{csv_link} | "
@@ -377,7 +385,7 @@ def _format_pipeline_match_markdown(
             f"| `{row.get('method', '')}` | {len(row.get('models', []))} | "
             f"{int(row.get('raw_rows', 0))} | {int(row.get('raw_dedup_count', 0))} | "
             f"{int(row.get('matched_rows', 0))} | {int(row.get('matched_dedup_count', 0))} | "
-            f"{_md_file_link(str(row.get('nugget_csv_path', '')))} |"
+            f"{_md_file_link(str(row.get('nugget_csv_path', '')), base_dir=output_dir)} |"
         )
     lines.extend(
         [
@@ -604,7 +612,17 @@ def main() -> None:
         metavar="PATH",
         help="batch_runs JSON (list): entries with job_id, query, and integration_model_search.<method>.model_ids.",
     )
-    parser.add_argument("--job-id", required=True, help="Exactly one job_id to run from the JSON (one invocation = one job).")
+    job_sel = parser.add_mutually_exclusive_group(required=True)
+    job_sel.add_argument(
+        "--job-id",
+        nargs="+",
+        help="One or more job_id values to run from the JSON. One value runs one job; multiple values run them in order.",
+    )
+    job_sel.add_argument(
+        "--all-job-ids",
+        action="store_true",
+        help="Run all valid job_id entries found in the JSON, in file order.",
+    )
 
     parser.add_argument("--output-dir", default=str(PIPELINE_DIR), help=f"Output directory (default: {PIPELINE_DIR})")
     args = parser.parse_args()
@@ -617,64 +635,74 @@ def main() -> None:
     if not jobs_path.is_file():
         parser.error(f"--jobs-json not found: {jobs_path}")
 
-    job_id_arg = str(args.job_id).strip()
-    if not job_id_arg:
-        parser.error("--job-id must be non-empty")
+    if args.all_job_ids:
+        job_sets = _extract_job_sets(jobs_path, None)
+        job_ids_arg = [str(item.get("job_id", "")).strip() for item in job_sets if str(item.get("job_id", "")).strip()]
+        job_ids_arg = _unique_keep(job_ids_arg)
+        if not job_ids_arg:
+            parser.error(f"No valid job_id entries found in {jobs_path}")
+    else:
+        job_ids_arg = _unique_keep(args.job_id or [])
+        if not job_ids_arg:
+            parser.error("--job-id must contain at least one non-empty value")
 
-    job_sets = _extract_job_sets(jobs_path, {job_id_arg})
+    job_sets = _extract_job_sets(jobs_path, set(job_ids_arg))
     if not job_sets:
-        parser.error(f"No valid job entry for job_id={job_id_arg!r} in {jobs_path}")
-    if len(job_sets) > 1:
-        parser.error(f"Multiple JSON list entries for job_id={job_id_arg!r}; expected exactly one.")
+        parser.error(f"No valid job entry for job_id(s)={job_ids_arg!r} in {jobs_path}")
 
-    item = job_sets[0]
-    query = item["query"]
-    model_ids = item["model_ids"]
-    method_model_sets = item.get("method_model_sets", [])
-    job_id = str(item["job_id"]).strip() or job_id_arg
-    cluster_name = _safe_name(job_id)
+    by_job_id = {str(item.get("job_id", "")).strip(): item for item in job_sets}
+    missing_job_ids = [jid for jid in job_ids_arg if jid not in by_job_id]
+    if missing_job_ids:
+        parser.error(f"Missing job_id(s) in JSON: {missing_job_ids}")
 
-    print(f"[jobs] job_id={job_id} | cluster_dir={cluster_name} | models={len(model_ids)}")
-    query_maps = map_queries([query], model=args.model, llm_mode=args.llm_mode)
-    cluster_out_dir = out_dir / cluster_name
-    cluster_out_dir.mkdir(parents=True, exist_ok=True)
-    match_log_md = cluster_out_dir / "pipeline_match_log.md"
-    summary_path = cluster_out_dir / "pipeline_summary.json"
-    summary = _run_cluster(
-        cluster_name,
-        job_id,
-        model_ids,
-        method_model_sets,
-        query_maps,
-        cluster_out_dir,
-        str(args.subtopic),
-        llm_mode=args.llm_mode,
-        match_build=args.match_build,
-        rerank_model=args.model,
-    )
-    summary["query"] = query
-    summaries.append(summary)
+    for job_id_arg in job_ids_arg:
+        item = by_job_id[job_id_arg]
+        query = item["query"]
+        model_ids = item["model_ids"]
+        method_model_sets = item.get("method_model_sets", [])
+        job_id = str(item["job_id"]).strip() or job_id_arg
+        cluster_name = _safe_name(job_id)
 
-    # Open-world setting: keep qrels/run artifacts for inspection, but do not compute alpha-nDCG/strec here.
-    # The markdown summary below reports matched nugget counts instead of fixed-ground-truth coverage metrics.
+        print(f"[jobs] job_id={job_id} | cluster_dir={cluster_name} | models={len(model_ids)}")
+        query_maps = map_queries([query], model=args.model, llm_mode=args.llm_mode)
+        cluster_out_dir = out_dir / cluster_name
+        cluster_out_dir.mkdir(parents=True, exist_ok=True)
+        match_log_md = cluster_out_dir / "pipeline_match_log.md"
+        summary_path = cluster_out_dir / "pipeline_summary.json"
+        summary = _run_cluster(
+            cluster_name,
+            job_id,
+            model_ids,
+            method_model_sets,
+            query_maps,
+            cluster_out_dir,
+            str(args.subtopic),
+            llm_mode=args.llm_mode,
+            match_build=args.match_build,
+            rerank_model=args.model,
+        )
+        summary["query"] = query
+        summaries.append(summary)
 
-    _save_json(summary_path, {"clusters": summaries})
-    print(f"[done] summary -> {summary_path.resolve()}")
+        # Open-world setting: keep qrels/run artifacts for inspection, but do not compute alpha-nDCG/strec here.
+        # The markdown summary below reports matched nugget counts instead of fixed-ground-truth coverage metrics.
+        _save_json(summary_path, {"clusters": [summary]})
+        print(f"[done] summary -> {summary_path.resolve()}")
 
-    summary = summaries[0]
-    match_log_md.write_text(
-        _format_pipeline_match_markdown(
-            jobs_path=jobs_path,
-            job_id=job_id,
-            query=query,
-            card_rows=summary.get("card_rows", []),
-            query_headers=summary.get("query_headers", []),
-            query_method_counts=summary.get("query_method_counts", []),
-        ),
-        encoding="utf-8",
-    )
+        match_log_md.write_text(
+            _format_pipeline_match_markdown(
+                output_dir=cluster_out_dir,
+                jobs_path=jobs_path,
+                job_id=job_id,
+                query=query,
+                card_rows=summary.get("card_rows", []),
+                query_headers=summary.get("query_headers", []),
+                query_method_counts=summary.get("query_method_counts", []),
+            ),
+            encoding="utf-8",
+        )
 
-    print(f"[done] query2nugget tables -> {match_log_md.resolve()}")
+        print(f"[done] query2nugget tables -> {match_log_md.resolve()}")
 
 
 if __name__ == "__main__":

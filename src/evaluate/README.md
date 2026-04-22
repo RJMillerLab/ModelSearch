@@ -29,7 +29,14 @@ End-to-end wrap from `jobs_251117` batch JSON (card2nugget -> query2nugget -> pe
 ```bash
 python -m src.evaluate.wrap_card_query_eval \
   --jobs-json jobs_251117/batch_runs/batch_preset_queries_20260330_025232.json \
-  --job-id 2026-03-30_02-49-47_svsq \
+  --job-id 2026-03-30_02-49-47_svsq 2026-03-30_02-49-56_b3a3 \
+  --llm-mode iter
+
+# To run all job ids from the same batch preset JSON:
+
+python -m src.evaluate.wrap_card_query_eval \
+  --jobs-json jobs_251117/batch_runs/batch_preset_queries_20260330_025232.json \
+  --all-job-ids \
   --llm-mode iter
 ```
 
@@ -40,5 +47,5 @@ Wrap / §3 need `pyndeval`: `pip install pyndeval` (see repo `requirements.txt`)
 ```bash
 python -m src.evaluate.evaluate_pyndeval --run data_251117/toy_data_evaluate/toy_initial.run --qrels data_251117/toy_data_evaluate/toy_subtopic.qrels --cutoff 20
 ```
-
 For wrap runs, use the per-method `.run` / `.qrels` paths under `data_251117/evaluate/pipeline/<job_id_dir>/`.
+
