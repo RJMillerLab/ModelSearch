@@ -8,7 +8,6 @@ from typing import Iterable, List, Tuple
 
 import pyndeval
 
-
 def load_run(path: Path) -> List[Tuple[str, str, float]]:
     if path.suffix == ".run":
         run = []

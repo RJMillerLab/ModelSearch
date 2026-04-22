@@ -1,39 +1,41 @@
-# Single input: full Hugging Face model card (HTML / markdown / UI text). No separate local CSV tables.
+# Single input: full Hugging Face model card (HTML / markdown / UI text).
 
 nugget_schema_mapping: |
-  You extract **nugget tuples** from a **Hugging Face model card** pasted below.
+  Extract **nugget tuples** from the model card below into the markdown table at the end—**no other output**.
 
-  The card mixes **narrative text** and **tables** (HTML `<table>`, pipe markdown, tab blocks). **Do not compress** multiple relations into one row (no long `k=v; k=v; ...` blobs in `Metric_value`, no “summary” cells that glue many facts together). **Each distinct relation → exactly one output row.**
+  **Global**
+  - **One row = one fact** — Do not merge many relations into one cell (no long `k=v; k=v` strings in `Metric_value`). From result tables: one output row per non-empty cell; repeat the same `Model` on each row that belongs to the same table row.
+  - **No extra “condition” column** — If the card mentions setup (5-shot, dev split, temperature, seed), reflect it only by choosing the right `Train_dataset` / `Test_dataset` / metric or hyperparam rows, not a new column.
+  - **If the card does not state it → leave the field empty** — Do not invent ids, scores, or datasets.
 
-  **Relations from tables**
-  - **Cell + row/column headers** (typical result grids): one tuple per **non-empty cell**, with the cell’s **row label** and **column label** reflected in fields: usually `Model` (or row entity), `Metric` (column header / metric name), `Metric_value` (cell). If the row is not a model name, put the row label in `Model` or the most appropriate field and keep `Metric`/`Metric_value` aligned to the column.
-  - **Row-oriented tables** (one table row = one primary entity, columns are attributes or scores): still output **one tuple per attribute cell**—repeat the same row-entity in `Model` (or equivalent) on each tuple so the **row association** is clear. Do **not** merge an entire table row into a single tuple.
-  - **Column-oriented** layouts: same rule—**one tuple per (entity, attribute, value)** pair implied by headers and cells; never fuse a whole column into one string.
+  **Fields (each column: what it means → what to put → example)**
 
-  **Model ↔ dataset (or split) relations**
-  - Whenever the card states **which data** a model was trained on, fine-tuned on, or evaluated on, emit **separate tuple(s)** with `Model` + `Dataset` and/or `Train_dataset` / `Test_dataset` filled from the text (even if the same fact also appears in a table). Use `Metric` only if it helps (e.g. `trained_on`, `evaluated_on`); otherwise leave `Metric` / `Metric_value` empty for that link row.
+  - **`Model`** — The checkpoint’s **display name** or the row entity for this fact. **Value:** short string as on the card. **Example:** `Llama-3.1-8B-Instruct`.
 
-  **Prose / bullets / YAML-like blocks**
-  - One tuple per **clear, separate** fact. Multi-line YAML that describes **one** composite fact can be one tuple with fields filled consistently—still **no** stuffing unrelated pairs into one `Metric_value`.
+  - **`Base_model`** — The **upstream** model id **only** if tags, YAML metadata, or prose **explicitly** name it (e.g. hub id “fine-tuned from …”). **Value:** hub-style id or exact name from the card; empty if not stated. **Example:** `meta-llama/Meta-Llama-3-8B`.
 
-  **Global training hyperparameters** (epochs, batch sizes, learning rates, steps) shared across many results: **one dedicated row** with only `Model_hyperparameters` filled (other fields empty unless the card ties them to a specific model/dataset). Do not duplicate that blob into every metric tuple.
+  - **`Base_model_type`** — How this repo relates to `Base_model` (must align with `Base_model` when both are set). **Value:** exactly one of `finetuned` | `quantized` | `distilled` | `merged`, lowercase; empty if unclear. Not model **size** (Tiny/Large). **Example:** `finetuned`.
 
-  Unknown fields: empty string. Do not invent values.
+  - **`Train_dataset`** — Data the model was **trained** or **fine-tuned / transfer-learned** on (stated for training, not the eval benchmark). **Value:** dataset or mix name/id as on the card. **Example:** `OpenOrca`.
 
-  Field guidance:
-  - `Model`: checkpoint or row entity when applicable.
-  - `Base_model`: parent/base if stated.
-  - `Dataset` / `Train_dataset` / `Test_dataset`: benchmark or data source / split when applicable.
-  - `Model_hyperparameters`: training/preproc settings.
-  - `Model_variant_type`: Tiny/Base/Large/etc. if stated.
-  - `Metric` / `Metric_value`: one metric name and one value per tuple (from a column header and cell, or from prose).
+  - **`Test_dataset`** — Data or benchmark used for **reported evaluation** when the card names it separately from training. **Value:** benchmark id or name. **Example:** `MMLU`.
+
+  - **`Hyperparam_name`** — A **single** structural or training scalar’s **name** (architecture or training config). **Value:** snake_case or short label. **Example:** `num_layers`.
+
+  - **`Hyperparam_value`** — The value paired with `Hyperparam_name` on the **same row**. **Value:** digits only for a plain number (no commas); otherwise a **short** normalized text if the card gives a list or range. **Example:** `32` or `2e-5`.
+
+  - **`Metric_name`** — The **evaluation metric** label for this row. **Value:** canonical name only, no units in the string. **Example:** `f1`.
+
+  - **`Metric_value`** — The numeric result for `Metric_name`. **Value:** ASCII number only (optional `-`, `.`, `e`); **never** `%`. If the card shows a percentage, convert to a **fraction in [0, 1]** (e.g. 92.3% → `0.923`). Count-style metrics (e.g. BLEU) stay as printed. **Example:** `0.923`.
+
+  **Pure dataset or pure hyperparam rows** — You may leave `Metric_name` / `Metric_value` empty when the row only links model ↔ data or model ↔ hyperparam. **Shared training hparams** (epochs, batch size, lr): prefer **one** hyperparam row per name–value, not copied into every metric row.
 
   MODEL CARD:
   [[MODEL_CARD]]
 
-  Return **only** this markdown table (fenced). No other text.
+  Return **only** this fenced markdown table:
   ```markdown
-  | Model | Base_model | Dataset | Train_dataset | Test_dataset | Model_hyperparameters | Model_variant_type | Metric | Metric_value |
+  | Model | Base_model | Base_model_type | Train_dataset | Test_dataset | Hyperparam_name | Hyperparam_value | Metric_name | Metric_value |
   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
   | ... | ... | ... | ... | ... | ... | ... | ... | ... |
   ```

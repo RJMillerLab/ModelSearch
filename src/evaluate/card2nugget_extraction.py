@@ -10,7 +10,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import duckdb
 import yaml
@@ -28,6 +28,7 @@ from src.llm.model import query_openai, setup_openai
 SHARD_GLOB = "train-0000*-of-00006.parquet"
 EVAL_DIR = Path(OUTPUT_DIR) / "evaluate"
 BATCH_DIR = EVAL_DIR / "batch"
+CARD2NUGGET_DIR = Path(OUTPUT_DIR) / "card2nugget"
 PROMPT_PATH = Path("src/evaluate/card2nugget_prompts.yaml")
 PROMPT_KEY = "nugget_schema_mapping"
 TEXT_EXTRACTION_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-4o-mini")
@@ -36,12 +37,12 @@ CARD_MAX_CHARS = int(os.getenv("MODELSEARCHDEMO_CARD_MAX_CHARS", "100000"))
 OUTPUT_HEADERS = [
     "Model",
     "Base_model",
-    "Dataset",
+    "Base_model_type",
     "Train_dataset",
     "Test_dataset",
-    "Model_hyperparameters",
-    "Model_variant_type",
-    "Metric",
+    "Hyperparam_name",
+    "Hyperparam_value",
+    "Metric_name",
     "Metric_value",
 ]
 
@@ -111,7 +112,8 @@ def _safe_model_id(model_id: str) -> str:
 
 def _output_paths_for_model(model_id: str, use_batch_dir: bool = False) -> tuple[Path, Path]:
     base = _safe_model_id(model_id)
-    out_dir = BATCH_DIR if use_batch_dir else EVAL_DIR
+    _ = use_batch_dir
+    out_dir = CARD2NUGGET_DIR
     return out_dir / f"{base}.csv", out_dir / f"{base}_meta.yaml"
 
 
@@ -145,7 +147,23 @@ def _parse_markdown_table(response_text: str) -> list[dict[str, str]]:
         if len(lines) < 3:
             continue
         header_cells = _split_pipe_row(lines[0])
-        header_map = {h.lower().replace(" ", "_"): i for i, h in enumerate(header_cells)}
+        header_map: dict[str, int] = {}
+        for i, raw_h in enumerate(header_cells):
+            key = raw_h.lower().replace(" ", "_")
+            header_map[key] = i
+        # Accept legacy LLM / older prompt table headers
+        _alias = {
+            "metric": "metric_name",
+            "model_hyperparameters": "hyperparam_name",
+            "model_variant_type": "base_model_type",
+            "model_hyperparam_name": "hyperparam_name",
+            "model_hyperparam_number": "hyperparam_value",
+            "hyperparam_number": "hyperparam_value",
+            "dataset": "train_dataset",
+        }
+        for old_k, new_k in _alias.items():
+            if old_k in header_map and new_k not in header_map:
+                header_map[new_k] = header_map[old_k]
         start = 1
         if start < len(lines) and _is_markdown_separator_row(lines[start]):
             start += 1
@@ -164,46 +182,70 @@ def _parse_markdown_table(response_text: str) -> list[dict[str, str]]:
     return rows_out
 
 
-def _extract_global_hparams(text: str) -> str:
-    src = text or ""
-    parts: list[str] = []
+def _blank_nugget_row() -> dict[str, str]:
+    return {h: "" for h in OUTPUT_HEADERS}
+
+
+def _first_numeric_token(s: str) -> str:
+    m = re.search(r"[-+]?(?:\d+\.?\d*|\d*\.?\d+)(?:[eE][-+]?\d+)?", s or "")
+    return m.group(0) if m else ""
+
+
+def _extract_global_hparam_rows(card_text: str) -> list[dict[str, str]]:
+    """Heuristic extra rows when the card mentions global training hparams but the table omitted them."""
+    src = (card_text or "").strip()
+    if not src:
+        return []
+    rows: list[dict[str, str]] = []
 
     m_epochs = re.search(r"trained\s+for\s+(\d+)\s+epochs?", src, flags=re.IGNORECASE)
     if m_epochs:
-        parts.append(f"epochs={m_epochs.group(1)}")
+        r = _blank_nugget_row()
+        r["Hyperparam_name"] = "epochs"
+        r["Hyperparam_value"] = m_epochs.group(1)
+        rows.append(r)
 
     m_bs = re.search(r"batch\s+sizes?\s*:\s*([^\n]+)", src, flags=re.IGNORECASE)
     if m_bs:
-        parts.append(f"batch_sizes={_norm(m_bs.group(1))}")
+        raw = _norm(m_bs.group(1))
+        r = _blank_nugget_row()
+        r["Hyperparam_name"] = "batch_size"
+        num = _first_numeric_token(raw)
+        r["Hyperparam_value"] = num if num and raw == num else raw
+        rows.append(r)
 
     m_lr = re.search(r"learning\s+rates?\s*:\s*([^\n]+)", src, flags=re.IGNORECASE)
     if m_lr:
-        parts.append(f"learning_rates={_norm(m_lr.group(1))}")
+        raw = _norm(m_lr.group(1))
+        r = _blank_nugget_row()
+        r["Hyperparam_name"] = "learning_rate"
+        num = _first_numeric_token(raw)
+        r["Hyperparam_value"] = num if num and raw == num else raw
+        rows.append(r)
 
-    return "; ".join(parts)
+    return rows
 
 
 def _apply_hparam_fallback(rows: list[dict[str, str]], card_text: str) -> tuple[list[dict[str, str]], str]:
-    global_hparams = _extract_global_hparams(card_text)
-    if not global_hparams:
+    extra = _extract_global_hparam_rows(card_text)
+    if not extra:
         return rows, ""
     out: list[dict[str, str]] = [dict(r) for r in rows]
-    exists = any(_norm(r.get("Model_hyperparameters", "")) == global_hparams for r in out)
-    if not exists:
-        out.append(
-            {
-                "Model": "",
-                "Base_model": "",
-                "Dataset": "",
-                "Train_dataset": "",
-                "Test_dataset": "",
-                "Model_hyperparameters": global_hparams,
-                "Model_variant_type": "",
-                "Metric": "",
-                "Metric_value": "",
-            }
+    for er in extra:
+        key = (_norm(er.get("Hyperparam_name", "")), _norm(er.get("Hyperparam_value", "")))
+        if not key[0]:
+            continue
+        exists = any(
+            (_norm(r.get("Hyperparam_name", "")), _norm(r.get("Hyperparam_value", ""))) == key for r in out
         )
-    return out, global_hparams
+        if not exists:
+            out.append(er)
+    summary = "; ".join(
+        f"{_norm(e.get('Hyperparam_name', ''))}={_norm(e.get('Hyperparam_value', ''))}"
+        for e in extra
+        if _norm(e.get("Hyperparam_name", ""))
+    )
+    return out, summary
 
 
 def _write_llm_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -241,28 +283,16 @@ def _prepare_model_input(model_id: str) -> dict[str, Any]:
     }
 
 
-def _save_model_outputs(
-    prepared: dict[str, Any],
-    response: str,
-    note: str,
-    use_batch_dir: bool = False,
-) -> tuple[Path, Path]:
-    model_id = prepared["model_id"]
-    prompt = prepared["prompt"]
-    prompt_key = prepared["prompt_key"]
-    card_for_hparam = prepared["card_for_hparam"]
-    csv_path, meta_path = _output_paths_for_model(model_id, use_batch_dir=use_batch_dir)
-
-    parsed_rows = _parse_markdown_table(response)
-    parsed_rows, global_hparams = _apply_hparam_fallback(parsed_rows, card_for_hparam)
+def _save_model_outputs(prepared: dict[str, Any], response: str, note: str, use_batch_dir: bool = False) -> tuple[Path, Path]:
+    csv_path, meta_path = _output_paths_for_model(prepared["model_id"], use_batch_dir=use_batch_dir)
+    parsed_rows, global_hparams = _apply_hparam_fallback(_parse_markdown_table(response), prepared["card_for_hparam"])
     _write_llm_csv(csv_path, parsed_rows)
-
     meta = {
-        "modelId": model_id,
+        "modelId": prepared["model_id"],
         "llm_model": TEXT_EXTRACTION_MODEL,
-        "prompt_key": prompt_key,
+        "prompt_key": prepared["prompt_key"],
         "llm_csv": str(csv_path.resolve()),
-        "prompt": prompt,
+        "prompt": prepared["prompt"],
         "raw_response": response,
         "parsed_rows": len(parsed_rows),
         "global_hparams_fallback": global_hparams,
@@ -346,6 +376,34 @@ def _run_batch_query(prepared_items: list[dict[str, Any]]) -> dict[str, tuple[st
     return out
 
 
+def _iter_openai_responses_for_cards(prepared_items: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    out: dict[str, tuple[str, str]] = {}
+    if not os.getenv("OPENAI_API_KEY"):
+        for item in prepared_items:
+            out[item["model_id"]] = ("", "skip_no_api_key")
+        return out
+    setup_openai("", mode="openai")
+    for item in prepared_items:
+        mid = item["model_id"]
+        try:
+            resp = query_openai(item["prompt"], mode="openai", model=TEXT_EXTRACTION_MODEL, max_tokens=4096, temperature=0.0) or ""
+            out[mid] = (resp, "")
+        except Exception as e:
+            out[mid] = ("", str(e))
+    return out
+
+
+def collect_card2nugget_llm_responses(
+    prepared_items: list[dict[str, Any]],
+    llm_mode: Literal["batch", "iter"],
+) -> dict[str, tuple[str, str]]:
+    if llm_mode == "iter":
+        print("[card2nugget] llm_mode=iter (sync chat per model)")
+        return _iter_openai_responses_for_cards(prepared_items)
+    print("[card2nugget] llm_mode=batch (OpenAI Batch API)")
+    return _run_batch_query(prepared_items)
+
+
 def read_llm_csv(path: str | Path) -> list[dict[str, str]]:
     p = Path(path)
     with open(p, encoding="utf-8", newline="") as f:
@@ -376,41 +434,31 @@ def run_single(model_id: str) -> dict[str, Any]:
         setup_openai("", mode="openai")
         _tick("setup_openai")
         print("[llm] querying openai...")
-        response = query_openai(
-            prepared["prompt"],
-            mode="openai",
-            model=TEXT_EXTRACTION_MODEL,
-            max_tokens=4096,
-            temperature=0.0,
-        ) or ""
+        response = query_openai(prepared["prompt"], mode="openai", model=TEXT_EXTRACTION_MODEL, max_tokens=4096, temperature=0.0) or ""
         _tick(f"query_openai(response_chars={len(response)})")
 
-    csv_path, meta_path = _save_model_outputs(prepared, response, note, use_batch_dir=False)
+    csv_path, meta_path = _save_model_outputs(prepared, response, note, use_batch_dir=True)
     _tick("save_csv_and_meta")
     return {"csv_path": str(csv_path.resolve()), "meta_path": str(meta_path.resolve())}
 
 
-def run_batch(model_ids: list[str]) -> list[dict[str, str]]:
+def run_batch(
+    model_ids: list[str],
+    *,
+    llm_mode: Literal["batch", "iter"] = "batch",
+) -> list[dict[str, str]]:
     clean_ids = [_norm(m) for m in model_ids if _norm(m)]
     if not clean_ids:
         return []
     print(f"[batch] preparing {len(clean_ids)} model prompts...")
     prepared_items = [_prepare_model_input(m) for m in clean_ids]
-    print("[batch] submitting OpenAI Batch job...")
-    response_map = _run_batch_query(prepared_items)
+    response_map = collect_card2nugget_llm_responses(prepared_items, llm_mode)
     outputs: list[dict[str, str]] = []
     for item in prepared_items:
         model_id = item["model_id"]
         response, note = response_map.get(model_id, ("", "batch_missing_custom_id"))
         csv_path, meta_path = _save_model_outputs(item, response, note, use_batch_dir=True)
-        outputs.append(
-            {
-                "model_id": model_id,
-                "csv_path": str(csv_path.resolve()),
-                "meta_path": str(meta_path.resolve()),
-                "note": note,
-            }
-        )
+        outputs.append({"model_id": model_id, "csv_path": str(csv_path.resolve()), "meta_path": str(meta_path.resolve()), "note": note})
     return outputs
 
 
@@ -419,13 +467,8 @@ def main() -> None:
     parser.add_argument("--model-id", default=None, help="Single Hugging Face model id.")
     parser.add_argument("--model-ids", nargs="*", default=None, help="Multiple model ids for batch mode.")
     parser.add_argument("--model-ids-file", default=None, help="Text file with one model id per line.")
-    parser.add_argument(
-        "--read-csv",
-        nargs="?",
-        const=str(EVAL_DIR / "single_modelcard_llm.csv"),
-        metavar="PATH",
-        help="Print stats for parsed tuple CSV.",
-    )
+    parser.add_argument("--llm-mode", choices=["batch", "iter"], default="batch", help="batch=OpenAI Batch API; iter=sync chat per model (when Batch is slow/stuck).")
+    parser.add_argument("--read-csv", nargs="?", const=str(CARD2NUGGET_DIR / "single_modelcard_llm.csv"), metavar="PATH", help="Print stats for parsed tuple CSV.")
     args = parser.parse_args()
 
     if args.read_csv is not None:
@@ -458,17 +501,21 @@ def main() -> None:
     if not model_ids:
         parser.error("Provide --model-id, or --model-ids, or --model-ids-file")
 
-    if len(model_ids) == 1:
+    if len(model_ids) == 1 and args.llm_mode == "iter":
         result = run_single(model_ids[0])
         print(f"saved_csv = {result['csv_path']}")
         print(f"saved_meta_yaml = {result['meta_path']}")
     else:
-        outputs = run_batch(model_ids)
-        print(f"[batch] saved models = {len(outputs)}")
-        for out in outputs:
-            print(
-                f"model_id = {out['model_id']}  |  csv = {out['csv_path']}  |  meta = {out['meta_path']}  |  note = {out['note'] or 'ok'}"
-            )
+        outputs = run_batch(model_ids, llm_mode=args.llm_mode)
+        if len(model_ids) == 1:
+            out = outputs[0]
+            print(f"saved_csv = {out['csv_path']}")
+            print(f"saved_meta_yaml = {out['meta_path']}")
+            print(f"note = {out.get('note') or 'ok'}")
+        else:
+            print(f"[batch] saved models = {len(outputs)}")
+            for out in outputs:
+                print(f"model_id = {out['model_id']}  |  csv = {out['csv_path']}  |  meta = {out['meta_path']}  |  note = {out['note'] or 'ok'}")
 
 
 if __name__ == "__main__":

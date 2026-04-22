@@ -1,29 +1,29 @@
-# Map a user search query to nugget schema columns (which fields are relevant + short link phrases).
+# Step 1 only: map a user query → relevant nugget headers (no values/filters here).
 
 query_to_nugget_headers: |
-  You align a **user search query** with a fixed **nugget schema** (column headers from model-card extraction).
+  You only do Step 1 now: select relevant headers for the user query.
+  Do not add values, filters, constraints, clusters, or explanations.
 
-  Task:
-  - Decide which headers are **relevant** to answering or retrieving information for this query.
-  - For each relevant header, give a **short keyword list** (1–5 short phrases) that states **how / why** this query relates to that column (not generic filler).
-
-  Allowed headers (exact strings only):
+  Allowed headers (exact string only):
   [[HEADERS_YAML]]
 
-  Rules:
-  - Only use headers from the list above. Do not invent new column names.
-  - If the query is broad (e.g. "BERT model"), you may mark several fields (Model, Base_model, Dataset, Metric, …) with concise reasons.
-  - If the query is narrow (e.g. "GLUE MNLI score"), prefer Metric, Metric_value, Dataset; add Model only if the query names a model.
-  - Output **valid JSON only**, no markdown fences, no commentary.
+  Header meaning (must stay exactly aligned with card2nugget field guidance):
+  - `Model`: the model **display name** / checkpoint identity for the row.
+  - `Base_model`: upstream base only when the card/tags **explicitly** state where it comes from.
+  - `Base_model_type`: relationship to that base (`finetuned`, `quantized`, `distilled`, `merged`).
+  - `Train_dataset` / `Test_dataset`: training or transfer-learning data vs evaluation benchmark—**only** these two dataset columns exist.
+  - `Hyperparam_name` / `Hyperparam_value`: structural hyperparameters (e.g. layers, parameter count)—name and value.
+  - `Metric_name` / `Metric_value`: evaluation metric label and **numeric** value (no percentage strings; use fractions in [0, 1] when the card used percent).
 
-  JSON shape (example structure, replace with real query):
-  {
-    "query": "<exact user query>",
-    "related": [
-      { "header": "Metric", "keywords": ["GLUE", "benchmark scores", "accuracy"] },
-      { "header": "Dataset", "keywords": ["MNLI", "glue benchmark"] }
-    ]
-  }
+  Selection policy:
+  - Default to broad recall.
+  - Do not force value-level narrowing for general intents (e.g., question answering, summarization).
+  - Only select headers relevant to query intent.
+
+  Output format (NOT JSON):
+  - Return plain text, one header per line.
+  - Each line must be exactly one allowed header string.
+  - No bullets, no numbering, no extra words.
 
   User query:
   [[USER_QUERY]]
