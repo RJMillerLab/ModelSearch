@@ -40,6 +40,29 @@ python -m src.evaluate.wrap_card_query_eval \
   --llm-mode iter
 ```
 
+Batch-run backend search/integration from preset queries and then automatically run `wrap_card_query_eval` on the saved batch summary:
+
+```bash
+python -m src.utils.batch_run_preset_queries \
+  --backend_url http://localhost:5002 \
+  --run_integration \
+  --run_wrap_eval \
+  --wrap_llm_mode iter
+```
+
+Test a specific query from the extra query file (for example the 597th query, zero-based offset `596`):
+
+```bash
+python -m src.utils.batch_run_preset_queries \
+  --backend_url http://localhost:5002 \
+  --query_source extra \
+  --query_offset 596 \
+  --max_queries 1 \
+  --run_integration \
+  --run_wrap_eval \
+  --wrap_llm_mode iter
+```
+
 Wrap / §3 need `pyndeval`: `pip install pyndeval` (see repo `requirements.txt`).
 
 ## 3. Evaluate
@@ -48,4 +71,11 @@ Wrap / §3 need `pyndeval`: `pip install pyndeval` (see repo `requirements.txt`)
 python -m src.evaluate.evaluate_pyndeval --run data_251117/toy_data_evaluate/toy_initial.run --qrels data_251117/toy_data_evaluate/toy_subtopic.qrels --cutoff 20
 ```
 For wrap runs, use the per-method `.run` / `.qrels` paths under `data_251117/evaluate/pipeline/<job_id_dir>/`.
+
+Compare `keyword/single_column/unionable` vs `sparse/dense/hybrid` across a whole batch jobs JSON:
+
+```bash
+python -m src.evaluate.compare_method_families \
+  --jobs-json jobs_251117/batch_runs/batch_preset_queries_20260330_025232.json
+```
 

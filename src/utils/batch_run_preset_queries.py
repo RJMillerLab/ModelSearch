@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
@@ -45,6 +46,34 @@ def _load_preset_queries(preset_path: str) -> List[Dict[str, Any]]:
     if not isinstance(queries, list):
         raise ValueError(f"Invalid preset queries format in {preset_path}")
     return queries
+
+
+def _load_queries_from_json_or_jsonl(path: str) -> List[Dict[str, Any]]:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"queries file not found: {path}")
+    if path.endswith(".jsonl"):
+        rows: List[Dict[str, Any]] = []
+        with open(path, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                if not isinstance(obj, dict):
+                    continue
+                query = str(obj.get("query") or obj.get("rewritten_query") or "").strip()
+                if not query and isinstance(obj.get("response_text"), str):
+                    try:
+                        parsed = json.loads(obj["response_text"])
+                        if isinstance(parsed, dict):
+                            query = str(parsed.get("query", "")).strip()
+                    except Exception:
+                        pass
+                if not query:
+                    continue
+                rows.append({"id": str(obj.get("id") or obj.get("custom_id") or f"q{i}"), "query": query})
+        return rows
+    return _load_preset_queries(path)
 
 
 def _post_json(url: str, payload: Dict[str, Any], timeout: int = 60) -> Dict[str, Any]:
@@ -234,10 +263,27 @@ def main() -> int:
         help="Path to preset_queries.json (default: docs/preset_queries.json)",
     )
     parser.add_argument(
+        "--extra_queries_path",
+        default=os.path.join("data_251117", "query", "query_rewrite_polished.jsonl"),
+        help="Optional extra queries file (json/jsonl). Default: data_251117/query/query_rewrite_polished.jsonl",
+    )
+    parser.add_argument(
+        "--query_source",
+        choices=["preset", "extra", "all"],
+        default="preset",
+        help="Which query source(s) to run: preset / extra / all.",
+    )
+    parser.add_argument(
         "--max_queries",
         type=int,
         default=0,
         help="Optional max number of queries to run (0 = all).",
+    )
+    parser.add_argument(
+        "--query_offset",
+        type=int,
+        default=0,
+        help="Skip the first N queries after source selection (default: 0). Useful for testing a specific query index like 596 for the 597th query.",
     )
     parser.add_argument(
         "--table_search_k",
@@ -309,21 +355,45 @@ def main() -> int:
         default=["intermediate", "all_from_modelcards"],
         help="tables_source values to integrate via /api/integrate (default: intermediate all_from_modelcards).",
     )
+    parser.add_argument(
+        "--run_wrap_eval",
+        action="store_true",
+        help="After batch search/integration, run python -m src.evaluate.wrap_card_query_eval on the saved batch summary JSON.",
+    )
+    parser.add_argument(
+        "--wrap_llm_mode",
+        choices=["batch", "iter"],
+        default="iter",
+        help="llm-mode passed to wrap_card_query_eval when --run_wrap_eval is enabled.",
+    )
 
     args = parser.parse_args()
 
     backend_url = args.backend_url.rstrip("/")
     preset_path = args.preset_path
+    extra_queries_path = args.extra_queries_path
 
     print(f"Backend URL: {backend_url}")
     print(f"Preset path: {preset_path}")
+    print(f"Extra queries path: {extra_queries_path}")
+    print(f"Query source: {args.query_source}")
     print(f"Run integration: {bool(args.run_integration)}")
 
     try:
-        presets = _load_preset_queries(preset_path)
+        presets_default = _load_preset_queries(preset_path)
+        presets_extra = _load_queries_from_json_or_jsonl(extra_queries_path) if os.path.exists(extra_queries_path) else []
+        if args.query_source == "extra":
+            presets = presets_extra
+        elif args.query_source == "all":
+            presets = list(presets_default) + list(presets_extra)
+        else:
+            presets = presets_default
     except Exception as e:
         print(f"Failed to load preset queries: {e}")
         return 1
+
+    if args.query_offset and args.query_offset > 0:
+        presets = presets[args.query_offset :]
 
     if args.max_queries and args.max_queries > 0:
         presets = presets[: args.max_queries]
@@ -363,6 +433,7 @@ def main() -> int:
         print("")
 
     # Optionally dump a summary JSON under jobs_251117/batch_runs for inspection.
+    summary_path = ""
     try:
         summary_dir = os.path.join(JOBS_DIR, "batch_runs")
         os.makedirs(summary_dir, exist_ok=True)
@@ -373,6 +444,24 @@ def main() -> int:
         print(f"Batch summary saved to: {summary_path}")
     except Exception as e:
         print(f"Warning: failed to save batch summary: {e}")
+
+    if args.run_wrap_eval and summary_path:
+        try:
+            cmd = [
+                "python",
+                "-m",
+                "src.evaluate.wrap_card_query_eval",
+                "--jobs-json",
+                summary_path,
+                "--all-job-ids",
+                "--llm-mode",
+                args.wrap_llm_mode,
+            ]
+            print("Running wrap_card_query_eval on saved batch summary...")
+            print(" ".join(cmd))
+            subprocess.run(cmd, check=True)
+        except Exception as e:
+            print(f"Warning: wrap_card_query_eval failed: {e}")
 
     return 0
 

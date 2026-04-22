@@ -453,6 +453,11 @@ RAW_HTML_TEMPLATE = """
             <div class="mode-input active" id="query-input">
                 <div class="form-row">
                     <label for="query">Query (preset / fill in):</label>
+                    <select id="preset_query_source" onchange="onPresetSourceChange()" class="form-control" style="width: 120px; flex: none;">
+                        <option value="default">preset</option>
+                        <option value="extra">extra</option>
+                        <option value="all">all</option>
+                    </select>
                     <select id="preset_query_select" onchange="onPresetQueryChange()" class="form-control" style="width: 200px; flex: none;">
                         <option value="">— custom —</option>
                     </select>

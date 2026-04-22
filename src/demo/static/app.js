@@ -48,6 +48,12 @@
             return '{{BACKEND_URL}}/api/integration-review-page/' + encodeURIComponent(j);
         }
 
+        function evaluationPageHref(jobId) {
+            const j = String(jobId || currentJobId || '').trim();
+            if (!j) return '#';
+            return '{{BACKEND_URL}}/api/evaluation-page/' + encodeURIComponent(j);
+        }
+
         function describeTableSearchCount(run, stats) {
             const queryTableCount = Array.isArray(run && run.query_tables) ? run.query_tables.length : 0;
             const baseTablesCount = (stats && stats.total_unique_tables != null)
@@ -248,23 +254,43 @@
         
         async function loadPresetQueries() {
             const sel = document.getElementById('preset_query_select');
+            const sourceSel = document.getElementById('preset_query_source');
             if (!sel) return;
+            const source = sourceSel && sourceSel.value ? sourceSel.value : 'default';
             try {
-                const response = await fetch('{{BACKEND_URL}}/api/preset-queries');
+                const response = await fetch('{{BACKEND_URL}}/api/preset-queries?source=' + encodeURIComponent(source));
                 const data = await response.json();
-                if (data.status === 'success' && data.queries && data.queries.length > 0) {
+                if (sourceSel && Array.isArray(data.available_sources) && data.available_sources.length) {
+                    const current = sourceSel.value || 'default';
+                    sourceSel.innerHTML = '';
+                    data.available_sources.forEach(src => {
+                        const opt = document.createElement('option');
+                        opt.value = src;
+                        opt.textContent = src;
+                        sourceSel.appendChild(opt);
+                    });
+                    if ([...sourceSel.options].some(o => o.value === current)) sourceSel.value = current;
+                }
+                if (data.status === 'success') {
                     presetQueriesList = data.queries;
                     sel.innerHTML = '<option value="">— custom —</option>';
-                    data.queries.forEach(function(q, i) {
+                    (data.queries || []).forEach(function(q, i) {
                         const opt = document.createElement('option');
                         opt.value = String(i);
-                        opt.textContent = (q.title || q.id || ('Query ' + (i + 1)));
+                        const srcTag = q.source && q.source !== 'default' ? ` [${q.source}]` : '';
+                        opt.textContent = (q.title || q.id || ('Query ' + (i + 1))) + srcTag;
                         sel.appendChild(opt);
                     });
                 }
             } catch (e) {
                 console.warn('Preset queries load failed:', e);
             }
+        }
+
+        function onPresetSourceChange() {
+            const sel = document.getElementById('preset_query_select');
+            if (sel) sel.value = '';
+            loadPresetQueries();
         }
         
         function onPresetQueryChange() {
@@ -291,6 +317,74 @@
             
             loadPresetQueries();
         });
+
+        async function fetchEvaluationSummary(jobId) {
+            const j = String(jobId || currentJobId || '').trim();
+            if (!j) return null;
+            try {
+                const resp = await fetch('{{BACKEND_URL}}/api/evaluation-summary/' + encodeURIComponent(j));
+                const data = await resp.json();
+                return data;
+            } catch (e) {
+                return { status: 'error', message: e && e.message ? e.message : String(e) };
+            }
+        }
+
+        async function refreshEvaluationSummary(jobId) {
+            const mount = document.getElementById('evaluationSummaryMount');
+            if (!mount) return;
+            const j = String(jobId || currentJobId || '').trim();
+            if (!j) {
+                mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation summary will appear here when available.</span>';
+                return;
+            }
+            mount.innerHTML = '<span style="font-size:12px;color:#888;">Loading evaluation summary…</span>';
+            const data = await fetchEvaluationSummary(j);
+            if (!data || data.status !== 'success' || !data.available) {
+                mount.innerHTML = '<span style="font-size:12px;color:#888;">No evaluation summary found for this job yet.</span>';
+                return;
+            }
+            const methods = Array.isArray(data.methods) ? data.methods : [];
+            const rows = methods.map(row => `
+                <tr>
+                    <td><code>${escapeHtmlIntegration(row.method || '')}</code></td>
+                    <td>${Number(row.model_count || 0)}</td>
+                    <td>${Number(row.original_sum || 0)}</td>
+                    <td>${Number(row.filter_sum || 0)}</td>
+                    <td>${Number(row.original_dedup || 0)}</td>
+                    <td>${Number(row.filter_dedup || 0)}</td>
+                </tr>
+            `).join('');
+            const openLink = data.markdown_path
+                ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full markdown</a>`
+                : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
+            mount.innerHTML = `
+                <div style="margin-top: 14px; padding: 12px; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                        <div>
+                            <div style="font-weight:600; font-size:14px; color:#24292f;">Evaluation</div>
+                            <div style="font-size:11px; color:#57606a;">Compact view of per-method nugget extraction vs query-hit counts.</div>
+                        </div>
+                        <div>${openLink}</div>
+                    </div>
+                    <div style="font-size:12px; color:#57606a; margin-bottom:6px;"><strong>Query:</strong> ${escapeHtmlIntegration(data.query || '')}</div>
+                    <div style="font-size:12px; color:#57606a; margin-bottom:10px;"><strong>Headers:</strong> ${escapeHtmlIntegration((data.headers || []).join(', '))}</div>
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr style="background:#f6f8fa;">
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">method</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">models</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">original_sum</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">filter_sum</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">original_dedup</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">filter_dedup</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows || '<tr><td colspan="6" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
+                    </table>
+                </div>
+            `;
+        }
         
         function updateTopKValue(value) {
             const num = document.getElementById('top_k');
@@ -1113,6 +1207,11 @@
                     </div>
                 </div>
             `;
+            integrationPanelHtml += `
+                <div id="evaluationSummaryMount" style="margin-top: 16px; font-size: 12px; color: #888;">
+                    Evaluation summary will appear here when available.
+                </div>
+            `;
             
             if (ENABLE_POST_INTEGRATION_ANALYSIS) {
             integrationPanelHtml += `
@@ -1187,6 +1286,7 @@
             window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
             syncBothIntegrationDisplays();
+            refreshEvaluationSummary(results.job_id || currentJobId);
         }
 
         function normalizeModelSearchRunKey(key) {

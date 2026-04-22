@@ -97,6 +97,7 @@ CORS(app)
 
 jobs: Dict[str, Dict[str, Any]] = {}
 search_runtime: Optional[Dict[str, Any]] = None
+DEFAULT_EXTRA_PRESET_PATH = os.path.join(OUTPUT_DIR, "query", "query_rewrite_polished.jsonl")
 
 
 def init_search_runtime() -> None:
@@ -261,6 +262,104 @@ def _save_json(path: str, payload: Dict[str, Any]) -> None:
         os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _load_query_items_from_path(path: str, *, source_tag: str) -> List[Dict[str, Any]]:
+    if not path or not os.path.isfile(path):
+        return []
+    out: List[Dict[str, Any]] = []
+    if path.endswith(".jsonl"):
+        with open(path, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                query = str(obj.get("query") or obj.get("rewritten_query") or "").strip()
+                if not query:
+                    resp_text = obj.get("response_text")
+                    if isinstance(resp_text, str):
+                        try:
+                            parsed = json.loads(resp_text)
+                            if isinstance(parsed, dict):
+                                query = str(parsed.get("query", "")).strip()
+                        except Exception:
+                            pass
+                if not query:
+                    continue
+                qid = str(obj.get("id") or obj.get("custom_id") or f"{source_tag}_{i}").strip()
+                title = str(obj.get("title") or obj.get("id") or qid).strip() or qid
+                out.append({"id": qid, "title": title, "query": query, "source": source_tag})
+        return out
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    items = data.get("queries", []) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return []
+    for i, obj in enumerate(items):
+        if not isinstance(obj, dict):
+            continue
+        query = str(obj.get("query", "")).strip()
+        if not query:
+            continue
+        qid = str(obj.get("id") or f"{source_tag}_{i}").strip()
+        title = str(obj.get("title") or qid).strip() or qid
+        out.append({"id": qid, "title": title, "query": query, "source": source_tag})
+    return out
+
+
+def _evaluation_paths(job_id: str) -> Dict[str, str]:
+    base_dir = os.path.join(OUTPUT_DIR, "evaluate", "pipeline", job_id)
+    return {
+        "base_dir": base_dir,
+        "markdown_path": os.path.join(base_dir, "pipeline_match_log.md"),
+        "summary_path": os.path.join(base_dir, "pipeline_summary.json"),
+    }
+
+
+def _load_evaluation_summary_payload(job_id: str) -> Dict[str, Any]:
+    paths = _evaluation_paths(job_id)
+    summary_path = paths["summary_path"]
+    md_path = paths["markdown_path"]
+    if not os.path.isfile(summary_path):
+        return {"status": "missing", "job_id": job_id, "available": False}
+    with open(summary_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    clusters = payload.get("clusters", []) if isinstance(payload, dict) else []
+    cluster = clusters[0] if isinstance(clusters, list) and clusters else {}
+    query = str(cluster.get("query", "")).strip()
+    headers = cluster.get("query_headers", []) if isinstance(cluster.get("query_headers"), list) else []
+    methods = []
+    for row in cluster.get("query_method_counts", []) if isinstance(cluster.get("query_method_counts"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        methods.append(
+            {
+                "method": str(row.get("method", "")).strip(),
+                "model_count": len(row.get("models", []) or []),
+                "original_sum": int(row.get("raw_rows", 0) or 0),
+                "original_dedup": int(row.get("raw_dedup_count", 0) or 0),
+                "filter_sum": int(row.get("matched_rows", 0) or 0),
+                "filter_dedup": int(row.get("matched_dedup_count", 0) or 0),
+                "nugget_csv_path": str(row.get("nugget_csv_path", "")).strip(),
+            }
+        )
+    return {
+        "status": "success",
+        "available": True,
+        "job_id": job_id,
+        "query": query,
+        "headers": headers,
+        "methods": methods,
+        "markdown_path": md_path if os.path.isfile(md_path) else "",
+        "summary_path": summary_path,
+    }
 
 
 def _load_json_if_exists(path: str) -> Optional[Dict[str, Any]]:
@@ -603,6 +702,33 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/preset-queries", methods=["GET"])
+def preset_queries():
+    source = str(request.args.get("source", "default")).strip().lower() or "default"
+    extra_path = str(request.args.get("extra_path", "")).strip() or os.environ.get("MODELSEARCH_EXTRA_PRESET_QUERIES_PATH", DEFAULT_EXTRA_PRESET_PATH)
+    default_items = _load_query_items_from_path(PRESET_QUERIES_PATH, source_tag="default")
+    extra_items = _load_query_items_from_path(extra_path, source_tag="extra")
+    if source == "extra":
+        queries = extra_items
+    elif source == "all":
+        queries = default_items + extra_items
+    else:
+        queries = default_items
+    available_sources = ["default"]
+    if extra_items:
+        available_sources.append("extra")
+        available_sources.append("all")
+    return jsonify(
+        {
+            "status": "success",
+            "queries": queries,
+            "source": source,
+            "available_sources": available_sources,
+            "extra_path": extra_path if extra_items else "",
+        }
+    )
+
+
 @app.route("/api/search", methods=["POST"])
 def search():
     data = request.get_json() or {}
@@ -725,6 +851,33 @@ def integration_review_page(job_id: str):
         return Response(body, mimetype="text/html; charset=utf-8")
     except Exception as exc:
         return api_error(f"Failed to build integration review markdown: {exc}", 500)
+
+
+@app.route("/api/evaluation-summary/<job_id>", methods=["GET"])
+def evaluation_summary(job_id: str):
+    try:
+        return jsonify(_load_evaluation_summary_payload(job_id))
+    except Exception as exc:
+        return api_error(f"Failed to load evaluation summary: {exc}", 500)
+
+
+@app.route("/api/evaluation-page/<job_id>", methods=["GET"])
+def evaluation_page(job_id: str):
+    payload = _load_evaluation_summary_payload(job_id)
+    if not payload.get("available"):
+        return api_error(f"No evaluation markdown found for job_id: {job_id}", 404)
+    md_path = str(payload.get("markdown_path", "")).strip()
+    if not md_path or not os.path.isfile(md_path):
+        return api_error(f"No evaluation markdown found for job_id: {job_id}", 404)
+    with open(md_path, "r", encoding="utf-8") as f:
+        md_text = f.read()
+    body = render_template_string(
+        MARKDOWN_PAGE_HTML,
+        title=f"Evaluation: {job_id}",
+        path_display=md_path,
+        content_html=markdown_to_html(md_text),
+    )
+    return Response(body, mimetype="text/html; charset=utf-8")
 
 
 @app.route("/api/model-search-preview", methods=["POST"])
