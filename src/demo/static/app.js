@@ -359,10 +359,15 @@
             }
             const methods = Array.isArray(data.methods) ? data.methods : [];
             const familyOf = (m) => (['sparse', 'dense', 'hybrid'].includes(String(m)) ? 'semantic search' : 'table search');
+            const methodLabel = (m) => {
+                const s = String(m || '');
+                if (s === 'single_column') return 'single<br>column';
+                return escapeHtmlIntegration(s);
+            };
             const rows = methods.map(row => `
                 <tr>
-                    <td>${escapeHtmlIntegration(familyOf(row.method || ''))}</td>
-                    <td><code>${escapeHtmlIntegration(row.method || '')}</code></td>
+                    <td style="font-size:12px;">${escapeHtmlIntegration(familyOf(row.method || ''))}</td>
+                    <td style="font-size:12px; line-height:1.2;">${methodLabel(row.method || '')}</td>
                     <td>${Number(row.model_count || 0)}</td>
                     <td>${Number(row.original_sum || 0)}</td>
                     <td>${Number(row.original_dedup || 0)}</td>
@@ -396,16 +401,16 @@
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">family</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">method</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">models</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget_sum</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget_dedup</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget_sum</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget_dedup</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget<br>sum<sup>*</sup></th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget<br>dedup<sup>#</sup></th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget<br>sum<sup>*</sup></th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget<br>dedup<sup>#</sup></th>
                             </tr>
                         </thead>
                         <tbody>${rows || '<tr><td colspan="7" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
                     </table>
                     <div style="font-size:11px; color:#57606a; margin-top:6px;">
-                        sum = sum of each model rows in that method; dedup = unique nuggets after removing overlaps within that method.
+                        <sup>*</sup> sum = sum of each model rows in that method; <sup>#</sup> dedup = unique nuggets after removing overlaps within that method.
                     </div>
                 </div>
             `;

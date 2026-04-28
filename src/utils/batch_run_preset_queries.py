@@ -274,18 +274,6 @@ def main() -> int:
         help="Which query source(s) to run: preset / extra / all.",
     )
     parser.add_argument(
-        "--max_queries",
-        type=int,
-        default=0,
-        help="Optional max number of queries to run (0 = all).",
-    )
-    parser.add_argument(
-        "--query_offset",
-        type=int,
-        default=0,
-        help="Skip the first N queries after source selection (default: 0). Useful for testing a specific query index like 596 for the 597th query.",
-    )
-    parser.add_argument(
         "--table_search_k",
         type=int,
         default=3,
@@ -391,12 +379,6 @@ def main() -> int:
     except Exception as e:
         print(f"Failed to load preset queries: {e}")
         return 1
-
-    if args.query_offset and args.query_offset > 0:
-        presets = presets[args.query_offset :]
-
-    if args.max_queries and args.max_queries > 0:
-        presets = presets[: args.max_queries]
 
     if not presets:
         print("No preset queries to run.")
