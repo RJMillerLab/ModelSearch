@@ -270,7 +270,7 @@ def main() -> int:
     parser.add_argument(
         "--query_source",
         choices=["preset", "extra", "all"],
-        default="preset",
+        default="all",
         help="Which query source(s) to run: preset / extra / all.",
     )
     parser.add_argument(

@@ -8,6 +8,11 @@
         // Feature flags (declared early so all handlers see them; not related to fetch/network).
         const SHOW_CARD2TAB2CARD_MODEL_TABLES = false;
         const ENABLE_POST_INTEGRATION_ANALYSIS = false;
+        const NUGGET_SCHEMA_HEADERS = [
+            'Model', 'Base_model', 'Base_model_type', 'Train_dataset', 'Test_dataset',
+            'Hyperparam_name', 'Hyperparam_value', 'Metric_name', 'Metric_value'
+        ];
+        const DEFAULT_QUERY_FALLBACK = 'Are there table foundation models that can handle small tables (≤100 rows/columns) with many missing values and produce column embeddings?';
         const INT_TITLE_C2C_HTML = '<span class="number-badge">1</span> Query2Card Results';
         const INT_TITLE_C2T2C_HTML = '<span class="number-badge">2</span> Query2Tab2Card Results';
         const INT_MODEL_IDS_C2C = 'Model IDs (1 Query2Card Results)';
@@ -273,13 +278,14 @@
                         sel.value = '0';
                         if (queryInput) queryInput.value = (data.queries[0].query || '').trim();
                     } else if (queryInput) {
-                        queryInput.value = '';
+                        if (!String(queryInput.value || '').trim()) queryInput.value = DEFAULT_QUERY_FALLBACK;
                         sel.innerHTML = '<option value="">— no preset found —</option>';
                         console.warn('No preset queries loaded. path=', data.preset_path_used || '(unknown)');
                     }
                 }
             } catch (e) {
                 console.warn('Preset queries load failed:', e);
+                if (queryInput && !String(queryInput.value || '').trim()) queryInput.value = DEFAULT_QUERY_FALLBACK;
             }
         }
 
@@ -362,6 +368,14 @@
                     <td>${Number(row.filter_dedup || 0)}</td>
                 </tr>
             `).join('');
+            const selectedHeaderSet = new Set((data.headers || []).map(h => String(h)));
+            const headerChips = NUGGET_SCHEMA_HEADERS.map(h => {
+                const hit = selectedHeaderSet.has(h);
+                const style = hit
+                    ? 'background:#d1f0ff;border:1px solid #4ea1ff;color:#0b5394;font-weight:600;'
+                    : 'background:#f6f8fa;border:1px solid #d0d7de;color:#57606a;';
+                return `<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:11px;${style}">${escapeHtmlIntegration(h)}</span>`;
+            }).join(' ');
             const openLink = data.markdown_path
                 ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full markdown</a>`
                 : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
@@ -370,25 +384,30 @@
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
                         <div>
                             <div style="font-weight:600; font-size:14px; color:#24292f;">Evaluation</div>
-                            <div style="font-size:11px; color:#57606a;">Compact view of per-method nugget extraction vs query-hit counts.</div>
                         </div>
                         <div>${openLink}</div>
                     </div>
-                    <div style="font-size:12px; color:#57606a; margin-bottom:6px;"><strong>Query:</strong> ${escapeHtmlIntegration(data.query || '')}</div>
-                    <div style="font-size:12px; color:#57606a; margin-bottom:10px;"><strong>Headers:</strong> ${escapeHtmlIntegration((data.headers || []).join(', '))}</div>
+                    <div style="font-size:11px; color:#57606a; margin-bottom:8px;">Compact view of per-method nugget extraction vs query-hit counts.</div>
+                    <div style="font-size:12px; color:#57606a; margin-bottom:10px;">
+                        <strong>Headers:</strong>
+                        <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${headerChips}</div>
+                    </div>
                     <table style="width:100%; border-collapse:collapse; font-size:12px;">
                         <thead>
                             <tr style="background:#f6f8fa;">
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">method</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">models</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">original_sum</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">filter_sum</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">original_dedup</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">filter_dedup</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget_sum</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget_sum</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget_dedup</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget_dedup</th>
                             </tr>
                         </thead>
                         <tbody>${rows || '<tr><td colspan="6" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
                     </table>
+                    <div style="font-size:11px; color:#57606a; margin-top:6px;">
+                        sum = sum of each model rows in that method; dedup = unique nuggets after removing overlaps within that method.
+                    </div>
                 </div>
             `;
         }

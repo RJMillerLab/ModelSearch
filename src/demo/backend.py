@@ -802,20 +802,8 @@ def health():
 def preset_queries():
     source = str(request.args.get("source", "default")).strip().lower() or "default"
     extra_path = str(request.args.get("extra_path", "")).strip() or os.environ.get("MODELSEARCH_EXTRA_PRESET_QUERIES_PATH", DEFAULT_EXTRA_PRESET_PATH)
-    default_candidates = [
-        PRESET_QUERIES_PATH,
-        os.path.join(OUTPUT_DIR, "query", "preset_queries.json"),
-    ]
-    default_items: List[Dict[str, Any]] = []
-    default_path_used = ""
-    for p in default_candidates:
-        items = _load_query_items_from_path(p, source_tag="default")
-        if items:
-            default_items = items
-            default_path_used = p
-            break
-    if not default_path_used:
-        default_path_used = PRESET_QUERIES_PATH
+    default_items = _load_query_items_from_path(PRESET_QUERIES_PATH, source_tag="default")
+    default_path_used = PRESET_QUERIES_PATH
     extra_items = _load_query_items_from_path(extra_path, source_tag="extra")
     if source == "extra":
         queries = extra_items

@@ -324,60 +324,32 @@ def _format_pipeline_match_markdown(
         f"- Jobs JSON: `{jobs_path.resolve()}`",
         f"- job_id: `{job_id}`",
         "",
-        "## Card2nugget",
+        "## Query - Nugget - Cards",
         "",
-        "| method | model_id | nugget_rows | csv_path | nonempty_headers |",
-        "| --- | --- | ---: | --- | --- |",
+        f"- Query: `{_md_query_cell(query)}`",
+        f"- Headers: `{', '.join(query_headers) if query_headers else '[]'}`",
+        "",
+        "| method | model_id | card2nugget | query2nugget | csv_path | nonempty_headers |",
+        "| --- | --- | ---: | ---: | --- | --- |",
     ]
     for row in card_rows:
         csv_link = _md_file_link(str(row.get("csv_path", "")), base_dir=output_dir)
         nonempty_headers = str(row.get("nonempty_headers", "")).replace("|", "\\|")
         lines.append(
-            f"| `{row['method']}` | `{row['model_id']}` | {row['nugget_rows']} | "
+            f"| `{row['method']}` | `{row['model_id']}` | {row['nugget_rows']} | {row.get('filtered_rows', 0)} | "
             f"{csv_link} | "
             f"{nonempty_headers} |"
         )
     if not card_rows:
-        lines.append("| — | — | 0 | — | — |")
-
-    lines.extend(["", "## Query2nugget", ""])
-    lines.append(f"- Query: `{_md_query_cell(query)}`")
-    lines.append(f"- Headers: `{', '.join(query_headers) if query_headers else '[]'}`")
-    lines.append("")
-    if query_method_counts:
-        lines.extend(
-            [
-                "| method | model_id | original | filter |",
-                "| --- | --- | ---: | ---: |",
-            ]
-        )
-        for row in query_method_counts:
-            method = str(row.get("method", ""))
-            for model in row.get("models", []):
-                lines.append(
-                    f"| `{method}` | `{model.get('model_id', '')}` | "
-                    f"{int(model.get('raw_rows', 0))} | {int(model.get('matched_rows', 0))} |"
-                )
-            lines.append(
-                f"| `{method}` | `sum` | {int(row.get('raw_rows', 0))} | {int(row.get('matched_rows', 0))} |"
-            )
-            lines.append(
-                f"| `{method}` | `dedup` | {int(row.get('raw_dedup_count', 0))} | {int(row.get('matched_dedup_count', 0))} |"
-            )
-    else:
-        lines.extend([
-            "| method | model_id | original | filter |",
-            "| --- | --- | ---: | ---: |",
-            "| — | — | 0 | 0 |",
-        ])
+        lines.append("| — | — | 0 | 0 | — | — |")
     lines.extend(
         [
             "",
-            "_`original` = raw nugget rows from card2nugget before header filtering; `filter` = rows where any query-selected header is non-empty. `dedup` is the unique nugget count within that method after deduplicating across its model cards._",
+            "_`card2nugget` = raw nugget rows extracted per model card; `query2nugget` = rows where any query-selected header is non-empty._",
             "",
             "## Method Summary",
             "",
-            "| method | model_count | original_sum | original_dedup | filter_sum | filter_dedup | nugget_csv |",
+            "| method | model_count | card2nugget_sum | card2nugget_dedup | query2nugget_sum | query2nugget_dedup | nugget_csv |",
             "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
@@ -391,7 +363,8 @@ def _format_pipeline_match_markdown(
     lines.extend(
         [
             "",
-            "_`sum` = direct sum over model cards in that method; `dedup` = unique nugget count within that method after deduplication._",
+            "_`card2nugget` = raw nugget rows extracted from cards; `query2nugget` = rows matched by query-selected headers._",
+            "_`sum` = sum of each model rows in that method; `dedup` = unique nuggets after removing overlaps within that method._",
             "",
             "_No alpha-nDCG / strec here: this setting is open-world and we are comparing matched nugget counts, not coverage against a fixed ground-truth set._",
         ]
