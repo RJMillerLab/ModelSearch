@@ -146,6 +146,15 @@ RAW_HTML_TEMPLATE = """
             font-size: 14px;
             box-sizing: border-box;
         }
+        input.no-spin::-webkit-outer-spin-button,
+        input.no-spin::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input.no-spin[type=number] {
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
         button {
             background: #007bff;
             color: white;
@@ -452,14 +461,12 @@ RAW_HTML_TEMPLATE = """
             </div>
             
             <div class="mode-input active" id="query-input">
-                <div class="form-row">
+                <div class="form-row" style="gap: 6px; flex-wrap: nowrap;">
                     <label for="preset_query_select">Query:</label>
-                    <select id="preset_query_select" onchange="onPresetQueryChange()" class="form-control" style="width: 200px; flex: none;">
+                    <select id="preset_query_select" onchange="onPresetQueryChange()" class="form-control" style="width: 180px; flex: 0 0 auto;">
                         <option value="">— select preset —</option>
                     </select>
-                </div>
-                <div class="form-row">
-                    <input type="text" id="query" class="form-control" placeholder="Edit selected preset query" value="">
+                    <input type="text" id="query" class="form-control" placeholder="Edit selected preset query" value="" style="flex: 1 1 auto; min-width: 360px;">
                 </div>
             </div>
             
@@ -474,15 +481,23 @@ RAW_HTML_TEMPLATE = """
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px; flex: 0 0 auto;">
                     <label for="table_search_k" style="min-width: auto;">Table top-k (per table):</label>
-                    <button type="button" onclick="stepTopK('table_search_k', -1)" style="padding: 2px 8px; margin: 0;">-</button>
-                    <input type="number" id="table_search_k" class="form-control" value="3" min="1" max="5" style="width: 64px; text-align: center;">
-                    <button type="button" onclick="stepTopK('table_search_k', 1)" style="padding: 2px 8px; margin: 0;">+</button>
+                    <div style="position: relative; display: inline-flex; align-items: center;">
+                        <input type="number" id="table_search_k" class="form-control no-spin" value="3" min="1" max="5" style="width: 86px; text-align: center; padding-right: 40px;">
+                        <div style="position: absolute; right: 4px; display: inline-flex; gap: 2px;">
+                            <button type="button" onclick="stepTopK('table_search_k', -1)" style="padding: 0 5px; margin: 0; line-height: 1.2; height: 20px; min-width: 20px;">-</button>
+                            <button type="button" onclick="stepTopK('table_search_k', 1)" style="padding: 0 5px; margin: 0; line-height: 1.2; height: 20px; min-width: 20px;">+</button>
+                        </div>
+                    </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px; flex: 0 0 auto;">
                     <label for="model_top_k" style="min-width: auto;">Model top-k:</label>
-                    <button type="button" onclick="stepTopK('model_top_k', -1)" style="padding: 2px 8px; margin: 0;">-</button>
-                    <input type="number" id="model_top_k" class="form-control" value="3" min="1" max="5" style="width: 64px; text-align: center;">
-                    <button type="button" onclick="stepTopK('model_top_k', 1)" style="padding: 2px 8px; margin: 0;">+</button>
+                    <div style="position: relative; display: inline-flex; align-items: center;">
+                        <input type="number" id="model_top_k" class="form-control no-spin" value="3" min="1" max="5" style="width: 86px; text-align: center; padding-right: 40px;">
+                        <div style="position: absolute; right: 4px; display: inline-flex; gap: 2px;">
+                            <button type="button" onclick="stepTopK('model_top_k', -1)" style="padding: 0 5px; margin: 0; line-height: 1.2; height: 20px; min-width: 20px;">-</button>
+                            <button type="button" onclick="stepTopK('model_top_k', 1)" style="padding: 0 5px; margin: 0; line-height: 1.2; height: 20px; min-width: 20px;">+</button>
+                        </div>
+                    </div>
                 </div>
                 <div style="display: flex; align-items: center; flex: 0 0 auto;">
                     <button id="searchBtn" onclick="startSearch()" style="padding: 8px 16px; font-size: 14px; font-weight: 600; margin: 0;">Start Search</button>

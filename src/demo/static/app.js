@@ -274,6 +274,8 @@
                         if (queryInput) queryInput.value = (data.queries[0].query || '').trim();
                     } else if (queryInput) {
                         queryInput.value = '';
+                        sel.innerHTML = '<option value="">— no preset found —</option>';
+                        console.warn('No preset queries loaded. path=', data.preset_path_used || '(unknown)');
                     }
                 }
             } catch (e) {
