@@ -67,7 +67,7 @@ def _load_queries_from_json_or_jsonl(path: str) -> List[Dict[str, Any]]:
                         parsed = json.loads(obj["response_text"])
                         if isinstance(parsed, dict):
                             query = str(parsed.get("query", "")).strip()
-                    except Exception:
+                    except json.JSONDecodeError:
                         pass
                 if not query:
                     continue
@@ -113,7 +113,6 @@ def _poll_results(backend_url: str, job_id: str, poll_interval: float = 5.0, tim
 def run_one_query(
     backend_url: str,
     query: str,
-    mode: str = "query",
     top_k: int = 100,
     model_top_k: int = 3,
     table_search_k: int = 3,
@@ -132,18 +131,14 @@ def run_one_query(
     # Build request body to match frontend's startSearch behavior (query mode).
     req_body: Dict[str, Any] = {
         "search_mode": "new",
-        "mode": mode,
+        "mode": "query",
         "top_k": top_k,
         "model_top_k": model_top_k,
         "tab2tab_mode": "search",
         "table_search_k": table_search_k,
         "use_by_type": use_by_type,
+        "query": query,
     }
-    if mode == "query":
-        req_body["query"] = query
-    else:
-        # For completeness; not used when driving from docs/preset_queries.json
-        req_body["model_id"] = query
 
     start = time.time()
     search_resp = _post_json(search_url, req_body)
@@ -198,17 +193,13 @@ def run_one_query(
             "max_models": effective_integration_max_models,
             "query2modelcard_retrieval_mode": retrieval_mode,
         }
-        try:
-            res = _post_json(model_int_url, model_payload)
-            model_int_res_by_mode[retrieval_mode] = res
-            status = res.get("status")
-            if status == "success":
-                print(f"      ✓ Model Search integration success (mode={retrieval_mode})")
-            else:
-                print(f"      ⚠ Model Search integration status={status} (mode={retrieval_mode}) message={res.get('message')}")
-        except Exception as e:
-            model_int_res_by_mode[retrieval_mode] = {"status": "error", "message": str(e)}
-            print(f"      ✖ Model Search integration failed (mode={retrieval_mode}): {e}")
+        res = _post_json(model_int_url, model_payload)
+        model_int_res_by_mode[retrieval_mode] = res
+        status = res.get("status")
+        if status == "success":
+            print(f"      ✓ Model Search integration success (mode={retrieval_mode})")
+        else:
+            print(f"      ⚠ Model Search integration status={status} (mode={retrieval_mode}) message={res.get('message')}")
 
     # Table Search integration
     if not integration_search_types:
@@ -228,20 +219,16 @@ def run_one_query(
                 "max_models": effective_integration_max_models,
                 "tables_source": tables_source,
             }
-            try:
-                res = _post_json(table_int_url, table_payload)
-                table_int_res_by_type[st][tables_source] = res
-                status = res.get("status")
-                if status == "success":
-                    print(f"      ✓ Table Search integration success (search_type={st}, tables_source={tables_source})")
-                else:
-                    print(
-                        f"      ⚠ Table Search integration status={status} "
-                        f"(search_type={st}, tables_source={tables_source}) message={res.get('message')}"
-                    )
-            except Exception as e:
-                table_int_res_by_type[st][tables_source] = {"status": "error", "message": str(e)}
-                print(f"      ✖ Table Search integration failed (search_type={st}, tables_source={tables_source}): {e}")
+            res = _post_json(table_int_url, table_payload)
+            table_int_res_by_type[st][tables_source] = res
+            status = res.get("status")
+            if status == "success":
+                print(f"      ✓ Table Search integration success (search_type={st}, tables_source={tables_source})")
+            else:
+                print(
+                    f"      ⚠ Table Search integration status={status} "
+                    f"(search_type={st}, tables_source={tables_source}) message={res.get('message')}"
+                )
 
     outcome["integration_model_search"] = model_int_res_by_mode
     outcome["integration_table_search"] = table_int_res_by_type
@@ -367,18 +354,14 @@ def main() -> int:
     print(f"Query source: {args.query_source}")
     print(f"Run integration: {bool(args.run_integration)}")
 
-    try:
-        presets_default = _load_preset_queries(preset_path)
-        presets_extra = _load_queries_from_json_or_jsonl(extra_queries_path) if os.path.exists(extra_queries_path) else []
-        if args.query_source == "extra":
-            presets = presets_extra
-        elif args.query_source == "all":
-            presets = list(presets_default) + list(presets_extra)
-        else:
-            presets = presets_default
-    except Exception as e:
-        print(f"Failed to load preset queries: {e}")
-        return 1
+    presets_default = _load_preset_queries(preset_path)
+    presets_extra = _load_queries_from_json_or_jsonl(extra_queries_path) if os.path.exists(extra_queries_path) else []
+    if args.query_source == "extra":
+        presets = presets_extra
+    elif args.query_source == "all":
+        presets = list(presets_default) + list(presets_extra)
+    else:
+        presets = presets_default
 
     if not presets:
         print("No preset queries to run.")
@@ -391,59 +374,47 @@ def main() -> int:
         q_id = q.get("id") or f"q{idx}"
         q_text = q.get("query") or ""
         print(f"[{idx}/{len(presets)}] Running query id={q_id!r}: {q_text!r}")
-        try:
-            outcome = run_one_query(
-                backend_url=backend_url,
-                query=q_text,
-                mode="query",
-                top_k=args.top_k,
-                model_top_k=args.model_top_k,
-                table_search_k=args.table_search_k,
-                use_by_type=bool(args.use_by_type),
-                run_integration=bool(args.run_integration),
-                integration_type=args.integration_type,
-                integration_k=args.integration_k,
-                integration_max_models=args.integration_max_models,
-                integration_model_modes=(args.integration_model_modes or None),
-                integration_search_types=(args.integration_search_types or None),
-                integration_tables_sources=(args.integration_tables_sources or None),
-            )
-            all_outcomes.append({"id": q_id, "query": q_text, **outcome})
-        except Exception as e:
-            print(f"  ✖ Failed to run query {q_id!r}: {e}")
-            all_outcomes.append({"id": q_id, "query": q_text, "error": str(e)})
+        outcome = run_one_query(
+            backend_url=backend_url,
+            query=q_text,
+            top_k=args.top_k,
+            model_top_k=args.model_top_k,
+            table_search_k=args.table_search_k,
+            use_by_type=bool(args.use_by_type),
+            run_integration=bool(args.run_integration),
+            integration_type=args.integration_type,
+            integration_k=args.integration_k,
+            integration_max_models=args.integration_max_models,
+            integration_model_modes=(args.integration_model_modes or None),
+            integration_search_types=(args.integration_search_types or None),
+            integration_tables_sources=(args.integration_tables_sources or None),
+        )
+        all_outcomes.append({"id": q_id, "query": q_text, **outcome})
         print("")
 
     # Optionally dump a summary JSON under jobs_251117/batch_runs for inspection.
-    summary_path = ""
-    try:
-        summary_dir = os.path.join(JOBS_DIR, "batch_runs")
-        os.makedirs(summary_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        summary_path = os.path.join(summary_dir, f"batch_preset_queries_{ts}.json")
-        with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(all_outcomes, f, ensure_ascii=False, indent=2)
-        print(f"Batch summary saved to: {summary_path}")
-    except Exception as e:
-        print(f"Warning: failed to save batch summary: {e}")
+    summary_dir = os.path.join(JOBS_DIR, "batch_runs")
+    os.makedirs(summary_dir, exist_ok=True)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    summary_path = os.path.join(summary_dir, f"batch_preset_queries_{ts}.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(all_outcomes, f, ensure_ascii=False, indent=2)
+    print(f"Batch summary saved to: {summary_path}")
 
-    if args.run_wrap_eval and summary_path:
-        try:
-            cmd = [
-                "python",
-                "-m",
-                "src.evaluate.wrap_card_query_eval",
-                "--jobs-json",
-                summary_path,
-                "--all-job-ids",
-                "--llm-mode",
-                args.wrap_llm_mode,
-            ]
-            print("Running wrap_card_query_eval on saved batch summary...")
-            print(" ".join(cmd))
-            subprocess.run(cmd, check=True)
-        except Exception as e:
-            print(f"Warning: wrap_card_query_eval failed: {e}")
+    if args.run_wrap_eval:
+        cmd = [
+            "python",
+            "-m",
+            "src.evaluate.wrap_card_query_eval",
+            "--jobs-json",
+            summary_path,
+            "--all-job-ids",
+            "--llm-mode",
+            args.wrap_llm_mode,
+        ]
+        print("Running wrap_card_query_eval on saved batch summary...")
+        print(" ".join(cmd))
+        subprocess.run(cmd, check=True)
 
     return 0
 

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from src.config import OUTPUT_DIR
+from src.config import JOBS_DIR, OUTPUT_DIR
 from src.evaluate.card2nugget_extraction import CARD2NUGGET_DIR, run_batch, _safe_model_id
 from src.evaluate.evaluate_pyndeval import load_run, load_subtopic_qrels, mean
 from src.evaluate.query2nugget_mapping import (
@@ -24,8 +24,7 @@ from src.evaluate.query2nugget_mapping import (
     _row_dict,
 )
 
-EVAL_DIR = Path(OUTPUT_DIR) / "evaluate"
-PIPELINE_DIR = EVAL_DIR / "pipeline"
+PIPELINE_DIR = Path(JOBS_DIR)
 
 
 def _save_json(path: Path, payload: Any) -> None:
@@ -351,7 +350,7 @@ def _format_pipeline_match_markdown(
             "",
             "## Method Summary",
             "",
-            "| family | method | model_count | card2nugget_sum | card2nugget_dedup | query2nugget_sum | query2nugget_dedup | nugget_csv |",
+            "| family | method | model_count | card2nugget_sum* | card2nugget_dedup# | query2nugget_sum* | query2nugget_dedup# | nugget_csv |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
@@ -368,7 +367,7 @@ def _format_pipeline_match_markdown(
         [
             "",
             "_`card2nugget` = raw nugget rows extracted from cards; `query2nugget` = rows matched by query-selected headers._",
-            "_`sum` = sum of each model rows in that method; `dedup` = unique nuggets after removing overlaps within that method._",
+            "_`* sum` = sum of each model rows in that method; `# dedup` = unique nuggets after removing overlaps within that method._",
             "",
             "_No alpha-nDCG / strec here: this setting is open-world and we are comparing matched nugget counts, not coverage against a fixed ground-truth set._",
         ]
@@ -602,7 +601,11 @@ def main() -> None:
         help="Run all valid job_id entries found in the JSON, in file order.",
     )
 
-    parser.add_argument("--output-dir", default=str(PIPELINE_DIR), help=f"Output directory (default: {PIPELINE_DIR})")
+    parser.add_argument(
+        "--output-dir",
+        default=str(PIPELINE_DIR),
+        help=f"Output directory root (default: {PIPELINE_DIR}); each job writes to <output-dir>/<job_id>/evaluate/",
+    )
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -643,7 +646,7 @@ def main() -> None:
 
         print(f"[jobs] job_id={job_id} | cluster_dir={cluster_name} | models={len(model_ids)}")
         query_maps = map_queries([query], model=args.model, llm_mode=args.llm_mode)
-        cluster_out_dir = out_dir / cluster_name
+        cluster_out_dir = out_dir / cluster_name / "evaluate"
         cluster_out_dir.mkdir(parents=True, exist_ok=True)
         match_log_md = cluster_out_dir / "pipeline_match_log.md"
         summary_path = cluster_out_dir / "pipeline_summary.json"

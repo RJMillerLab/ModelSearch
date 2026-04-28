@@ -261,9 +261,8 @@
             const sel = document.getElementById('preset_query_select');
             const queryInput = document.getElementById('query');
             if (!sel) return;
-            const source = 'default';
             try {
-                const response = await fetch('{{BACKEND_URL}}/api/preset-queries?source=' + encodeURIComponent(source));
+                const response = await fetch('{{BACKEND_URL}}/api/preset-queries');
                 const data = await response.json();
                 if (data.status === 'success') {
                     presetQueriesList = data.queries;
@@ -280,19 +279,12 @@
                     } else if (queryInput) {
                         if (!String(queryInput.value || '').trim()) queryInput.value = DEFAULT_QUERY_FALLBACK;
                         sel.innerHTML = '<option value="">— no preset found —</option>';
-                        console.warn('No preset queries loaded. path=', data.preset_path_used || '(unknown)');
                     }
                 }
             } catch (e) {
                 console.warn('Preset queries load failed:', e);
                 if (queryInput && !String(queryInput.value || '').trim()) queryInput.value = DEFAULT_QUERY_FALLBACK;
             }
-        }
-
-        function onPresetSourceChange() {
-            const sel = document.getElementById('preset_query_select');
-            if (sel) sel.value = '';
-            loadPresetQueries();
         }
         
         function onPresetQueryChange() {
@@ -1028,7 +1020,7 @@
             const basename = (p) => String(p).split('/').pop();
             const tablesNoteCell = results.error
                 ? '<span style="font-size: 12px; color: #666;">—</span>'
-                : `<div class="retrieval-seed-col"><div class="retrieval-seed-line"><strong>Query table(s):</strong><div class="retrieval-table-links">${
+                : `<div class="retrieval-seed-col"><div class="retrieval-seed-line wrap"><strong>Query table(s):</strong><div class="retrieval-table-links">${
                     queryTables.length
                         ? queryTables.map((p) => {
                             const bn = basename(p);

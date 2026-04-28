@@ -98,7 +98,6 @@ CORS(app)
 jobs: Dict[str, Dict[str, Any]] = {}
 search_runtime: Optional[Dict[str, Any]] = None
 evaluation_runs: Dict[str, Dict[str, Any]] = {}
-DEFAULT_EXTRA_PRESET_PATH = os.path.join(OUTPUT_DIR, "query", "query_rewrite_polished.jsonl")
 
 
 def init_search_runtime() -> None:
@@ -316,7 +315,7 @@ def _load_query_items_from_path(path: str, *, source_tag: str) -> List[Dict[str,
 
 
 def _evaluation_paths(job_id: str) -> Dict[str, str]:
-    base_dir = os.path.join(OUTPUT_DIR, "evaluate", "pipeline", job_id)
+    base_dir = os.path.join(JOBS_DIR, job_id, "evaluate")
     return {
         "base_dir": base_dir,
         "markdown_path": os.path.join(base_dir, "pipeline_match_log.md"),
@@ -800,29 +799,14 @@ def health():
 
 @app.route("/api/preset-queries", methods=["GET"])
 def preset_queries():
-    source = str(request.args.get("source", "default")).strip().lower() or "default"
-    extra_path = str(request.args.get("extra_path", "")).strip() or os.environ.get("MODELSEARCH_EXTRA_PRESET_QUERIES_PATH", DEFAULT_EXTRA_PRESET_PATH)
     default_items = _load_query_items_from_path(PRESET_QUERIES_PATH, source_tag="default")
     default_path_used = PRESET_QUERIES_PATH
-    extra_items = _load_query_items_from_path(extra_path, source_tag="extra")
-    if source == "extra":
-        queries = extra_items
-    elif source == "all":
-        queries = default_items + extra_items
-    else:
-        queries = default_items
-    available_sources = ["default"]
-    if extra_items:
-        available_sources.append("extra")
-        available_sources.append("all")
     return jsonify(
         {
             "status": "success",
-            "queries": queries,
-            "source": source,
-            "available_sources": available_sources,
+            "queries": default_items,
+            "source": "default",
             "preset_path_used": default_path_used,
-            "extra_path": extra_path if extra_items else "",
         }
     )
 
