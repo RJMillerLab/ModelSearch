@@ -318,6 +318,35 @@ def _format_pipeline_match_markdown(
     query_method_counts: list[dict[str, Any]],
 ) -> str:
     semantic_methods = {"sparse", "dense", "hybrid"}
+    query_header_set = set(query_headers)
+
+    def _header_chip_html(header: str, *, hit: bool) -> str:
+        s = str(header).strip().replace("`", "")
+        if not s:
+            return ""
+        style = (
+            "display:inline-block;padding:1px 6px;border-radius:999px;font-size:11px;"
+            + (
+                "background:#d1f0ff;border:1px solid #4ea1ff;color:#0b5394;font-weight:600;"
+                if hit
+                else "background:#f6f8fa;border:1px solid #d0d7de;color:#57606a;"
+            )
+        )
+        return f"<span style=\"{style}\">{s}</span>"
+
+    def _nonempty_headers_cell_html(raw_headers: Any) -> str:
+        if isinstance(raw_headers, list):
+            items = [str(x).strip() for x in raw_headers if str(x).strip()]
+        else:
+            text = str(raw_headers or "").strip()
+            items = [x.strip() for x in text.split(",") if x.strip()]
+        if not items:
+            return "—"
+        chips = [_header_chip_html(h, hit=(h in query_header_set)) for h in items]
+        chips = [c for c in chips if c]
+        if not chips:
+            return "—"
+        return "<div style=\"display:flex;gap:4px;flex-wrap:wrap;\">" + " ".join(chips) + "</div>"
 
     lines = [
         "# Pipeline summary",
@@ -335,7 +364,7 @@ def _format_pipeline_match_markdown(
     ]
     for row in card_rows:
         csv_link = _md_file_link(str(row.get("csv_path", "")), base_dir=output_dir)
-        nonempty_headers = str(row.get("nonempty_headers", "")).replace("|", "\\|")
+        nonempty_headers = _nonempty_headers_cell_html(row.get("nonempty_headers_list") or row.get("nonempty_headers", ""))
         lines.append(
             f"| `{row['method']}` | `{row['model_id']}` | {row['nugget_rows']} | {row.get('filtered_rows', 0)} | "
             f"{csv_link} | "
@@ -424,6 +453,7 @@ def _run_cluster(
                     "nugget_rows": nugget_rows,
                     "filtered_rows": filtered_rows,
                     "csv_path": str(csv_path.resolve()) if csv_path.is_file() else "",
+                    "nonempty_headers_list": _nonempty_headers_for_csv(csv_path),
                     "nonempty_headers": nonempty_headers,
                 }
             )

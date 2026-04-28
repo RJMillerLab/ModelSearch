@@ -350,6 +350,26 @@ def _load_evaluation_summary_payload(job_id: str) -> Dict[str, Any]:
                 "nugget_csv_path": str(row.get("nugget_csv_path", "")).strip(),
             }
         )
+    cards = []
+    for row in cluster.get("card_rows", []) if isinstance(cluster.get("card_rows"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        raw_nonempty = row.get("nonempty_headers_list")
+        if isinstance(raw_nonempty, list):
+            nonempty_list = [str(x).strip() for x in raw_nonempty if str(x).strip()]
+        else:
+            nonempty_text = str(row.get("nonempty_headers", "")).strip()
+            nonempty_list = [x.strip() for x in nonempty_text.split(",") if x.strip()]
+        cards.append(
+            {
+                "method": str(row.get("method", "")).strip(),
+                "model_id": str(row.get("model_id", "")).strip(),
+                "card2nugget": int(row.get("nugget_rows", 0) or 0),
+                "query2nugget": int(row.get("filtered_rows", 0) or 0),
+                "csv_path": str(row.get("csv_path", "")).strip(),
+                "nonempty_headers": nonempty_list,
+            }
+        )
     return {
         "status": "success",
         "available": True,
@@ -357,6 +377,7 @@ def _load_evaluation_summary_payload(job_id: str) -> Dict[str, Any]:
         "query": query,
         "headers": headers,
         "methods": methods,
+        "cards": cards,
         "markdown_path": md_path if os.path.isfile(md_path) else "",
         "summary_path": summary_path,
     }

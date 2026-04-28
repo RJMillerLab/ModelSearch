@@ -350,6 +350,7 @@
                 return;
             }
             const methods = Array.isArray(data.methods) ? data.methods : [];
+            const cards = Array.isArray(data.cards) ? data.cards : [];
             const familyOf = (m) => (['sparse', 'dense', 'hybrid'].includes(String(m)) ? 'semantic search' : 'table search');
             const methodLabel = (m) => {
                 const s = String(m || '');
@@ -358,23 +359,40 @@
             };
             const rows = methods.map(row => `
                 <tr>
-                    <td style="font-size:12px;">${escapeHtmlIntegration(familyOf(row.method || ''))}</td>
-                    <td style="font-size:12px; line-height:1.2;">${methodLabel(row.method || '')}</td>
-                    <td>${Number(row.model_count || 0)}</td>
-                    <td>${Number(row.original_sum || 0)}</td>
-                    <td>${Number(row.original_dedup || 0)}</td>
-                    <td>${Number(row.filter_sum || 0)}</td>
-                    <td>${Number(row.filter_dedup || 0)}</td>
+                    <td style="font-size:12px; text-align:center;">${escapeHtmlIntegration(familyOf(row.method || ''))}</td>
+                    <td style="font-size:12px; line-height:1.2; text-align:center;">${methodLabel(row.method || '')}</td>
+                    <td style="text-align:center;">${Number(row.model_count || 0)}</td>
+                    <td style="text-align:center;">${Number(row.original_sum || 0)}</td>
+                    <td style="text-align:center;">${Number(row.original_dedup || 0)}</td>
+                    <td style="text-align:center;">${Number(row.filter_sum || 0)}</td>
+                    <td style="text-align:center;">${Number(row.filter_dedup || 0)}</td>
                 </tr>
             `).join('');
             const selectedHeaderSet = new Set((data.headers || []).map(h => String(h)));
-            const headerChips = NUGGET_SCHEMA_HEADERS.map(h => {
-                const hit = selectedHeaderSet.has(h);
+            const renderHeaderChip = (h) => {
+                const hit = selectedHeaderSet.has(String(h));
                 const style = hit
                     ? 'background:#d1f0ff;border:1px solid #4ea1ff;color:#0b5394;font-weight:600;'
                     : 'background:#f6f8fa;border:1px solid #d0d7de;color:#57606a;';
                 return `<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:11px;${style}">${escapeHtmlIntegration(h)}</span>`;
+            };
+            const headerChips = NUGGET_SCHEMA_HEADERS.map(h => {
+                return renderHeaderChip(h);
             }).join(' ');
+            const cardRows = cards.map(row => {
+                const chips = (Array.isArray(row.nonempty_headers) ? row.nonempty_headers : [])
+                    .map(h => renderHeaderChip(h))
+                    .join(' ');
+                return `
+                    <tr>
+                        <td style="text-align:center;">${escapeHtmlIntegration(row.method || '')}</td>
+                        <td style="text-align:center;">${escapeHtmlIntegration(row.model_id || '')}</td>
+                        <td style="text-align:center;">${Number(row.card2nugget || 0)}</td>
+                        <td style="text-align:center;">${Number(row.query2nugget || 0)}</td>
+                        <td style="text-align:left;">${chips || '—'}</td>
+                    </tr>
+                `;
+            }).join('');
             const openLink = data.markdown_path
                 ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full markdown</a>`
                 : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
@@ -387,16 +405,16 @@
                         </div>
                         <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${headerChips}</div>
                     </div>
-                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:center;">
                         <thead>
                             <tr style="background:#f6f8fa;">
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">family</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">method</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">models</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget<br>sum<sup>*</sup></th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget<br>dedup<sup>#</sup></th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget<br>sum<sup>*</sup></th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget<br>dedup<sup>#</sup></th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">family</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">method</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">models</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">card2nugget<br>sum<sup>*</sup></th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">card2nugget<br>dedup<sup>#</sup></th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">query2nugget<br>sum<sup>*</sup></th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">query2nugget<br>dedup<sup>#</sup></th>
                             </tr>
                         </thead>
                         <tbody>${rows || '<tr><td colspan="7" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
@@ -404,6 +422,19 @@
                     <div style="font-size:11px; color:#57606a; margin-top:6px;">
                         <sup>*</sup> sum = sum of each model rows in that method; <sup>#</sup> dedup = unique nuggets after removing overlaps within that method.
                     </div>
+                    <div style="margin-top:10px; font-size:12px; color:#57606a;"><strong>Query - Nugget - Cards</strong></div>
+                    <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:center; margin-top:6px;">
+                        <thead>
+                            <tr style="background:#f6f8fa;">
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">method</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">model_id</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">card2nugget</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">query2nugget</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">nonempty_headers</th>
+                            </tr>
+                        </thead>
+                        <tbody>${cardRows || '<tr><td colspan="5" style="border:1px solid #d0d7de; padding:8px; color:#888;">No card rows.</td></tr>'}</tbody>
+                    </table>
                 </div>
             `;
         }
