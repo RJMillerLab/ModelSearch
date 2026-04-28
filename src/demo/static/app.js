@@ -308,6 +308,17 @@
             
             const diagramImg = document.getElementById('search-diagram');
             if (diagramImg) diagramImg.src = '/static/docs/modelsearch_wquery.png';
+
+            const tableTopK = document.getElementById('table_search_k');
+            if (tableTopK) {
+                tableTopK.addEventListener('change', () => clampTopKInput('table_search_k'));
+                tableTopK.addEventListener('blur', () => clampTopKInput('table_search_k'));
+            }
+            const modelTopK = document.getElementById('model_top_k');
+            if (modelTopK) {
+                modelTopK.addEventListener('change', () => clampTopKInput('model_top_k'));
+                modelTopK.addEventListener('blur', () => clampTopKInput('model_top_k'));
+            }
             
             loadPresetQueries();
         });
@@ -492,6 +503,21 @@
                 slider.value = v;
                 num.value = v;
             }
+        }
+        function clampTopKInput(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const v = parseInt(el.value, 10);
+            const next = Number.isFinite(v) ? Math.max(1, Math.min(5, v)) : 3;
+            el.value = String(next);
+        }
+        function stepTopK(id, delta) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const base = parseInt(el.value, 10);
+            const cur = Number.isFinite(base) ? base : 3;
+            const next = Math.max(1, Math.min(5, cur + (delta || 0)));
+            el.value = String(next);
         }
         function updateTableSearchKDefault() {
             // Per-table k is independent; no sync with top_k

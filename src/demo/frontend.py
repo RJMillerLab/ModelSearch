@@ -448,20 +448,22 @@ RAW_HTML_TEMPLATE = """
             
             <div id="new-search-inputs">
             <div id="diagram-section" class="pdf-section" style="margin-bottom: 10px; padding: 8px;">
-                <img id="search-diagram" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" style="height: 160px;" />
+                <img id="search-diagram" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" style="height: 210px;" />
             </div>
             
             <div class="mode-input active" id="query-input">
                 <div class="form-row">
-                    <label for="query">Query:</label>
+                    <label for="preset_query_select">Query:</label>
                     <select id="preset_query_select" onchange="onPresetQueryChange()" class="form-control" style="width: 200px; flex: none;">
                         <option value="">— select preset —</option>
                     </select>
-                    <input type="hidden" id="query" value="">
+                </div>
+                <div class="form-row">
+                    <input type="text" id="query" class="form-control" placeholder="Edit selected preset query" value="">
                 </div>
             </div>
             
-            <div class="form-row" style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;">
+            <div class="form-row" style="display: flex; gap: 10px; align-items: center; flex-wrap: nowrap;">
                 <!-- Model Card Top K: hidden - left pipeline aligns to right's max; we only control Table Top K -->
                 <div style="flex: 1; min-width: 200px; display: none;">
                     <label for="top_k">Model Card Top K:</label>
@@ -470,16 +472,20 @@ RAW_HTML_TEMPLATE = """
                         <input type="number" id="top_k" class="form-control" value="100" min="1" max="100" oninput="updateTopKSlider(this.value)" style="width: 80px;">
                     </div>
                 </div>
-                <div style="flex: 1; min-width: 200px;">
-                    <label for="table_search_k">Table top-k (per table):</label>
-                    <input type="number" id="table_search_k" class="form-control" value="3" min="1" max="5" style="width: 80px;">
+                <div style="display: flex; align-items: center; gap: 6px; flex: 0 0 auto;">
+                    <label for="table_search_k" style="min-width: auto;">Table top-k (per table):</label>
+                    <button type="button" onclick="stepTopK('table_search_k', -1)" style="padding: 2px 8px; margin: 0;">-</button>
+                    <input type="number" id="table_search_k" class="form-control" value="3" min="1" max="5" style="width: 64px; text-align: center;">
+                    <button type="button" onclick="stepTopK('table_search_k', 1)" style="padding: 2px 8px; margin: 0;">+</button>
                 </div>
-                <div style="flex: 1; min-width: 200px;">
-                    <label for="model_top_k">Model top-k:</label>
-                    <input type="number" id="model_top_k" class="form-control" value="3" min="1" max="5" style="width: 80px;">
+                <div style="display: flex; align-items: center; gap: 6px; flex: 0 0 auto;">
+                    <label for="model_top_k" style="min-width: auto;">Model top-k:</label>
+                    <button type="button" onclick="stepTopK('model_top_k', -1)" style="padding: 2px 8px; margin: 0;">-</button>
+                    <input type="number" id="model_top_k" class="form-control" value="3" min="1" max="5" style="width: 64px; text-align: center;">
+                    <button type="button" onclick="stepTopK('model_top_k', 1)" style="padding: 2px 8px; margin: 0;">+</button>
                 </div>
-                <div>
-                    <button id="searchBtn" onclick="startSearch()" style="padding: 10px 24px; font-size: 15px; font-weight: 600;">Start Search</button>
+                <div style="display: flex; align-items: center; flex: 0 0 auto;">
+                    <button id="searchBtn" onclick="startSearch()" style="padding: 8px 16px; font-size: 14px; font-weight: 600; margin: 0;">Start Search</button>
                 </div>
             </div>
             </div>
