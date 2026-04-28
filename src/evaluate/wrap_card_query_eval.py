@@ -331,10 +331,11 @@ def _format_pipeline_match_markdown(
     ]
     for row in card_rows:
         csv_link = _md_file_link(str(row.get("csv_path", "")), base_dir=output_dir)
+        nonempty_headers = str(row.get("nonempty_headers", "")).replace("|", "\\|")
         lines.append(
             f"| `{row['method']}` | `{row['model_id']}` | {row['nugget_rows']} | "
             f"{csv_link} | "
-            f"{str(row.get('nonempty_headers', '')).replace('|', '\\|')} |"
+            f"{nonempty_headers} |"
         )
     if not card_rows:
         lines.append("| — | — | 0 | — | — |")
