@@ -330,8 +330,8 @@
             }
         }
 
-        async function refreshEvaluationSummary(jobId) {
-            const mount = document.getElementById('evaluationSummaryMount');
+        async function refreshEvaluationSummary(jobId, mountId) {
+            const mount = document.getElementById(mountId || 'evaluationSummaryMount');
             if (!mount) return;
             const j = String(jobId || currentJobId || '').trim();
             if (!j) {
@@ -383,7 +383,88 @@
                         <tbody>${rows || '<tr><td colspan="6" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
                     </table>
                 </div>
+                <div class="result-card" style="margin-top: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
+                    <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Evaluation</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
+                        <button onclick="runWrapEvaluation('${results.job_id || currentJobId}')" style="padding: 6px 12px; font-size: 12px; margin: 0;">
+                            Run Evaluation (iteration)
+                        </button>
+                        <span id="retrievalEvalStatus" style="font-size: 12px; color: #666;">Click button to generate wrap evaluation for this job.</span>
+                    </div>
+                    <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
+                        Evaluation summary will appear here when available.
+                    </div>
+                </div>
             `;
+        }
+
+        async function fetchEvaluationRunStatus(jobId) {
+            const j = String(jobId || currentJobId || '').trim();
+            if (!j) return null;
+            try {
+                const resp = await fetch('{{BACKEND_URL}}/api/evaluation-run/' + encodeURIComponent(j));
+                return await resp.json();
+            } catch (e) {
+                return { status: 'error', message: e && e.message ? e.message : String(e) };
+            }
+        }
+
+        async function runWrapEvaluation(jobId) {
+            const j = String(jobId || currentJobId || '').trim();
+            const statusEl = document.getElementById('retrievalEvalStatus');
+            if (!j) {
+                if (statusEl) statusEl.textContent = 'No job_id.';
+                return;
+            }
+            if (statusEl) statusEl.textContent = 'Starting evaluation...';
+            try {
+                const resp = await fetch('{{BACKEND_URL}}/api/evaluation-run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job_id: j, llm_mode: 'iteration' }),
+                });
+                const data = await resp.json();
+                if (data.status !== 'success') {
+                    if (statusEl) statusEl.textContent = data.message || 'Failed to start evaluation.';
+                    return;
+                }
+                if (statusEl) statusEl.textContent = 'Evaluation running...';
+                pollEvaluationRunUntilDone(j);
+            } catch (e) {
+                if (statusEl) statusEl.textContent = 'Failed to start evaluation: ' + formatFetchError(e);
+            }
+        }
+
+        async function pollEvaluationRunUntilDone(jobId) {
+            const statusEl = document.getElementById('retrievalEvalStatus');
+            const j = String(jobId || currentJobId || '').trim();
+            if (!j) return;
+            for (let i = 0; i < 120; i++) {
+                const data = await fetchEvaluationRunStatus(j);
+                if (!data || data.status !== 'success') {
+                    if (statusEl) statusEl.textContent = 'Evaluation status check failed.';
+                    return;
+                }
+                const runStatus = String(data.run_status || '');
+                if (runStatus === 'running') {
+                    if (statusEl) statusEl.textContent = data.message || 'Evaluation running...';
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                if (runStatus === 'completed') {
+                    if (statusEl) statusEl.textContent = 'Evaluation completed.';
+                    await refreshEvaluationSummary(j, 'retrievalEvaluationSummaryMount');
+                    await refreshEvaluationSummary(j, 'evaluationSummaryMount');
+                    return;
+                }
+                if (runStatus === 'failed') {
+                    if (statusEl) statusEl.textContent = data.message || 'Evaluation failed.';
+                    return;
+                }
+                if (statusEl) statusEl.textContent = 'Evaluation not started.';
+                return;
+            }
+            if (statusEl) statusEl.textContent = 'Evaluation still running. Please check again shortly.';
         }
         
         function updateTopKValue(value) {
@@ -1286,7 +1367,8 @@
             window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
             syncBothIntegrationDisplays();
-            refreshEvaluationSummary(results.job_id || currentJobId);
+            refreshEvaluationSummary(results.job_id || currentJobId, 'retrievalEvaluationSummaryMount');
+            refreshEvaluationSummary(results.job_id || currentJobId, 'evaluationSummaryMount');
         }
 
         function normalizeModelSearchRunKey(key) {

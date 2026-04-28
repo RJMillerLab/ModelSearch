@@ -12,7 +12,7 @@ No evaluation.
 No compatibility layers.
 """
 
-import atexit, html, json, math, os, random, re, string, threading, time
+import atexit, html, json, math, os, random, re, string, subprocess, sys, threading, time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -97,6 +97,7 @@ CORS(app)
 
 jobs: Dict[str, Dict[str, Any]] = {}
 search_runtime: Optional[Dict[str, Any]] = None
+evaluation_runs: Dict[str, Dict[str, Any]] = {}
 DEFAULT_EXTRA_PRESET_PATH = os.path.join(OUTPUT_DIR, "query", "query_rewrite_polished.jsonl")
 
 
@@ -360,6 +361,89 @@ def _load_evaluation_summary_payload(job_id: str) -> Dict[str, Any]:
         "markdown_path": md_path if os.path.isfile(md_path) else "",
         "summary_path": summary_path,
     }
+
+
+def _evaluation_run_status_payload(job_id: str) -> Dict[str, Any]:
+    run = evaluation_runs.get(job_id) or {}
+    status = str(run.get("status", "idle"))
+    payload: Dict[str, Any] = {
+        "status": "success",
+        "job_id": job_id,
+        "run_status": status,
+        "message": str(run.get("message", "")),
+        "started_at": run.get("started_at"),
+        "finished_at": run.get("finished_at"),
+        "log_path": str(run.get("log_path", "")),
+    }
+    if status == "completed":
+        payload["summary"] = _load_evaluation_summary_payload(job_id)
+    return payload
+
+
+def _manual_eval_jobs_json_path(job_id: str) -> str:
+    batch_dir = os.path.join(JOBS_DIR, "batch_runs")
+    os.makedirs(batch_dir, exist_ok=True)
+    return os.path.join(batch_dir, f"manual_eval_{job_id}.json")
+
+
+def _build_manual_eval_jobs_json(job_id: str) -> str:
+    paths = JobPaths(JOBS_DIR, job_id)
+    if not os.path.isfile(paths.job_meta_path):
+        raise FileNotFoundError(f"Unknown job_id: {job_id}")
+    meta = JobMeta.load(paths.job_meta_path)
+    out_path = _manual_eval_jobs_json_path(job_id)
+    payload = [
+        {
+            "job_id": job_id,
+            "query": meta.query,
+            "search_response": {
+                "folder_path": paths.job_dir,
+                "model_top_k": int(meta.model_top_k),
+            },
+        }
+    ]
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return out_path
+
+
+def _run_wrap_eval_background(job_id: str, llm_mode: str = "iteration") -> None:
+    run_state = evaluation_runs.setdefault(job_id, {})
+    run_state["status"] = "running"
+    run_state["message"] = "Running wrap_card_query_eval..."
+    run_state["started_at"] = datetime.now().isoformat()
+    run_state["finished_at"] = None
+    paths = JobPaths(JOBS_DIR, job_id)
+    log_path = os.path.join(paths.job_dir, "wrap_eval.log")
+    run_state["log_path"] = log_path
+
+    try:
+        jobs_json_path = _build_manual_eval_jobs_json(job_id)
+        cmd = [
+            sys.executable,
+            "-m",
+            "src.evaluate.wrap_card_query_eval",
+            "--jobs-json",
+            jobs_json_path,
+            "--job-id",
+            job_id,
+            "--llm-mode",
+            llm_mode if llm_mode in ("iteration", "batch") else "iteration",
+        ]
+        with open(log_path, "w", encoding="utf-8") as logf:
+            logf.write(f"$ {' '.join(cmd)}\n\n")
+            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=logf, stderr=subprocess.STDOUT, text=True)
+        if proc.returncode != 0:
+            run_state["status"] = "failed"
+            run_state["message"] = f"wrap_card_query_eval failed (exit={proc.returncode})"
+        else:
+            run_state["status"] = "completed"
+            run_state["message"] = "Evaluation generated."
+    except Exception as exc:
+        run_state["status"] = "failed"
+        run_state["message"] = f"Failed to run evaluation: {exc}"
+    finally:
+        run_state["finished_at"] = datetime.now().isoformat()
 
 
 def _load_json_if_exists(path: str) -> Optional[Dict[str, Any]]:
@@ -859,6 +943,34 @@ def evaluation_summary(job_id: str):
         return jsonify(_load_evaluation_summary_payload(job_id))
     except Exception as exc:
         return api_error(f"Failed to load evaluation summary: {exc}", 500)
+
+
+@app.route("/api/evaluation-run/<job_id>", methods=["GET"])
+def evaluation_run_status(job_id: str):
+    try:
+        return jsonify(_evaluation_run_status_payload(job_id))
+    except Exception as exc:
+        return api_error(f"Failed to load evaluation run status: {exc}", 500)
+
+
+@app.route("/api/evaluation-run", methods=["POST"])
+def evaluation_run_start():
+    data = request.get_json() or {}
+    job_id = str(data.get("job_id", "")).strip()
+    llm_mode = str(data.get("llm_mode", "iteration")).strip().lower() or "iteration"
+    if not job_id:
+        return api_error("Missing job_id", 400)
+    paths = JobPaths(JOBS_DIR, job_id)
+    if not os.path.isfile(paths.job_meta_path):
+        return api_error(f"Unknown job_id: {job_id}", 404)
+
+    run = evaluation_runs.get(job_id, {})
+    if str(run.get("status")) == "running":
+        return jsonify({"status": "success", "job_id": job_id, "run_status": "running", "message": "Evaluation already running."})
+
+    t = threading.Thread(target=_run_wrap_eval_background, args=(job_id, llm_mode), daemon=True)
+    t.start()
+    return jsonify({"status": "success", "job_id": job_id, "run_status": "running", "message": "Evaluation started."})
 
 
 @app.route("/api/evaluation-page/<job_id>", methods=["GET"])
