@@ -383,18 +383,6 @@
                         <tbody>${rows || '<tr><td colspan="6" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
                     </table>
                 </div>
-                <div class="result-card" style="margin-top: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                    <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Evaluation</h3>
-                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
-                        <button onclick="runWrapEvaluation('${results.job_id || currentJobId}')" style="padding: 6px 12px; font-size: 12px; margin: 0;">
-                            Run Evaluation (iteration)
-                        </button>
-                        <span id="retrievalEvalStatus" style="font-size: 12px; color: #666;">Click button to generate wrap evaluation for this job.</span>
-                    </div>
-                    <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
-                        Evaluation summary will appear here when available.
-                    </div>
-                </div>
             `;
         }
 
@@ -454,7 +442,6 @@
                 if (runStatus === 'completed') {
                     if (statusEl) statusEl.textContent = 'Evaluation completed.';
                     await refreshEvaluationSummary(j, 'retrievalEvaluationSummaryMount');
-                    await refreshEvaluationSummary(j, 'evaluationSummaryMount');
                     return;
                 }
                 if (runStatus === 'failed') {
@@ -1219,6 +1206,18 @@
                         })()}
                     </div>
                 </div>
+                <div class="result-card" style="margin-top: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
+                    <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Evaluation</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
+                        <button onclick="runWrapEvaluation('${results.job_id || currentJobId}')" style="padding: 6px 12px; font-size: 12px; margin: 0;">
+                            Run Evaluation (iteration)
+                        </button>
+                        <span id="retrievalEvalStatus" style="font-size: 12px; color: #666;">Click button to generate wrap evaluation for this job.</span>
+                    </div>
+                    <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
+                        Evaluation summary will appear here when available.
+                    </div>
+                </div>
             `;
             
             // Table Integration: 1 Query2Card vs 2 Query2Tab2Card — separate params and dropdown switching
@@ -1288,12 +1287,6 @@
                     </div>
                 </div>
             `;
-            integrationPanelHtml += `
-                <div id="evaluationSummaryMount" style="margin-top: 16px; font-size: 12px; color: #888;">
-                    Evaluation summary will appear here when available.
-                </div>
-            `;
-            
             if (ENABLE_POST_INTEGRATION_ANALYSIS) {
             integrationPanelHtml += `
                 <div id="integrationShortAnalysis" class="integration-summary-section" style="margin-top: 16px; padding: 14px; background: #e2e3e5; border-radius: 6px; border: 2px solid #6c757d; display: none;">
@@ -1368,7 +1361,6 @@
             document.getElementById('resultsSection').classList.add('active');
             syncBothIntegrationDisplays();
             refreshEvaluationSummary(results.job_id || currentJobId, 'retrievalEvaluationSummaryMount');
-            refreshEvaluationSummary(results.job_id || currentJobId, 'evaluationSummaryMount');
         }
 
         function normalizeModelSearchRunKey(key) {
