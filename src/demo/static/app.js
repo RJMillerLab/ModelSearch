@@ -254,33 +254,27 @@
         
         async function loadPresetQueries() {
             const sel = document.getElementById('preset_query_select');
-            const sourceSel = document.getElementById('preset_query_source');
+            const queryInput = document.getElementById('query');
             if (!sel) return;
-            const source = sourceSel && sourceSel.value ? sourceSel.value : 'default';
+            const source = 'default';
             try {
                 const response = await fetch('{{BACKEND_URL}}/api/preset-queries?source=' + encodeURIComponent(source));
                 const data = await response.json();
-                if (sourceSel && Array.isArray(data.available_sources) && data.available_sources.length) {
-                    const current = sourceSel.value || 'default';
-                    sourceSel.innerHTML = '';
-                    data.available_sources.forEach(src => {
-                        const opt = document.createElement('option');
-                        opt.value = src;
-                        opt.textContent = src;
-                        sourceSel.appendChild(opt);
-                    });
-                    if ([...sourceSel.options].some(o => o.value === current)) sourceSel.value = current;
-                }
                 if (data.status === 'success') {
                     presetQueriesList = data.queries;
-                    sel.innerHTML = '<option value="">— custom —</option>';
+                    sel.innerHTML = '<option value="">— select preset —</option>';
                     (data.queries || []).forEach(function(q, i) {
                         const opt = document.createElement('option');
                         opt.value = String(i);
-                        const srcTag = q.source && q.source !== 'default' ? ` [${q.source}]` : '';
-                        opt.textContent = (q.title || q.id || ('Query ' + (i + 1))) + srcTag;
+                        opt.textContent = q.title || q.id || ('Query ' + (i + 1));
                         sel.appendChild(opt);
                     });
+                    if ((data.queries || []).length > 0) {
+                        sel.value = '0';
+                        if (queryInput) queryInput.value = (data.queries[0].query || '').trim();
+                    } else if (queryInput) {
+                        queryInput.value = '';
+                    }
                 }
             } catch (e) {
                 console.warn('Preset queries load failed:', e);
@@ -808,8 +802,10 @@
             
             const query = document.getElementById('query').value.trim();
             const topK = parseInt((document.getElementById('top_k') || {}).value, 10) || 100;  // Left aligns to right; high default
-            const tableSearchK = parseInt(document.getElementById('table_search_k').value, 10) || 1;
-            const modelTopK = parseInt((document.getElementById('model_top_k') || {}).value, 10) || 5;
+            const tableSearchKRaw = parseInt(document.getElementById('table_search_k').value, 10) || 1;
+            const modelTopKRaw = parseInt((document.getElementById('model_top_k') || {}).value, 10) || 3;
+            const tableSearchK = Math.min(5, Math.max(1, tableSearchKRaw));
+            const modelTopK = Math.min(5, Math.max(1, modelTopKRaw));
             // Table retrieval: always run search (no load-from-JSON option)
             const tab2tabMode = 'search';
             // Validate input for current search flow
@@ -1226,7 +1222,7 @@
             const topKLabelStyle = 'display: block; margin-bottom: 2px; font-size: 11px; font-weight: 500; color: #212529;';
             const intH4Flex = 'margin: 0 0 6px 0; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;';
             const defaultIntegrationK = results.table_search_k || 10;
-            const defaultIntegrationMaxModels = results.model_top_k || 5;
+            const defaultIntegrationMaxModels = results.model_top_k || 3;
             let integrationPanelHtml = `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
