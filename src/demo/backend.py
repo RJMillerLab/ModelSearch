@@ -407,7 +407,7 @@ def _build_manual_eval_jobs_json(job_id: str) -> str:
     return out_path
 
 
-def _run_wrap_eval_background(job_id: str, llm_mode: str = "iteration") -> None:
+def _run_wrap_eval_background(job_id: str, llm_mode: str = "iter") -> None:
     run_state = evaluation_runs.setdefault(job_id, {})
     run_state["status"] = "running"
     run_state["message"] = "Running wrap_card_query_eval..."
@@ -419,6 +419,7 @@ def _run_wrap_eval_background(job_id: str, llm_mode: str = "iteration") -> None:
 
     try:
         jobs_json_path = _build_manual_eval_jobs_json(job_id)
+        wrap_llm_mode = str(llm_mode or "iter").strip().lower()
         cmd = [
             sys.executable,
             "-m",
@@ -428,14 +429,25 @@ def _run_wrap_eval_background(job_id: str, llm_mode: str = "iteration") -> None:
             "--job-id",
             job_id,
             "--llm-mode",
-            llm_mode if llm_mode in ("iteration", "batch") else "iteration",
+            wrap_llm_mode,
         ]
         with open(log_path, "w", encoding="utf-8") as logf:
             logf.write(f"$ {' '.join(cmd)}\n\n")
             proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=logf, stderr=subprocess.STDOUT, text=True)
         if proc.returncode != 0:
             run_state["status"] = "failed"
-            run_state["message"] = f"wrap_card_query_eval failed (exit={proc.returncode})"
+            tail = ""
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                if lines:
+                    tail = "".join(lines[-12:]).strip()
+            except Exception:
+                tail = ""
+            run_state["message"] = (
+                f"wrap_card_query_eval failed (exit={proc.returncode})"
+                + (f" | {tail}" if tail else "")
+            )
         else:
             run_state["status"] = "completed"
             run_state["message"] = "Evaluation generated."
@@ -957,9 +969,11 @@ def evaluation_run_status(job_id: str):
 def evaluation_run_start():
     data = request.get_json() or {}
     job_id = str(data.get("job_id", "")).strip()
-    llm_mode = str(data.get("llm_mode", "iteration")).strip().lower() or "iteration"
+    llm_mode = str(data.get("llm_mode", "iter")).strip().lower() or "iter"
     if not job_id:
         return api_error("Missing job_id", 400)
+    if llm_mode not in ("iter", "batch"):
+        return api_error("llm_mode must be one of: iter, batch", 400)
     paths = JobPaths(JOBS_DIR, job_id)
     if not os.path.isfile(paths.job_meta_path):
         return api_error(f"Unknown job_id: {job_id}", 404)

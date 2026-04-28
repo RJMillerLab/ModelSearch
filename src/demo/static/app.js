@@ -409,7 +409,7 @@
                 const resp = await fetch('{{BACKEND_URL}}/api/evaluation-run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ job_id: j, llm_mode: 'iteration' }),
+                    body: JSON.stringify({ job_id: j, llm_mode: 'iter' }),
                 });
                 const data = await resp.json();
                 if (data.status !== 'success') {
@@ -1210,7 +1210,7 @@
                     <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Evaluation</h3>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
                         <button onclick="runWrapEvaluation('${results.job_id || currentJobId}')" style="padding: 6px 12px; font-size: 12px; margin: 0;">
-                            Run Evaluation (iteration)
+                            Run Evaluation (iter)
                         </button>
                         <span id="retrievalEvalStatus" style="font-size: 12px; color: #666;">Click button to generate wrap evaluation for this job.</span>
                     </div>
