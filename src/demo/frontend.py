@@ -7,6 +7,7 @@ Simple web interface to compare Query2Card vs Query2Tab2Card search pipelines.
 import os
 import sys
 import json
+import time
 import requests
 from flask import (
     Flask,
@@ -516,7 +517,7 @@ RAW_HTML_TEMPLATE = """
         </div>
     </div>
     
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{APP_JS_VERSION}}"></script>
 
 </body>
 </html>
@@ -605,7 +606,7 @@ if _USE_API_PROXY:
 @app.route('/')
 def index():
     """Serve frontend HTML"""
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(HTML_TEMPLATE, APP_JS_VERSION=str(int(time.time())))
 
 
 @app.route('/static/app.js')
@@ -614,7 +615,11 @@ def serve_app_js():
     app_js_path = os.path.join(os.path.dirname(__file__), 'static', 'app.js')
     with open(app_js_path, 'r', encoding='utf-8') as f:
         content = f.read().replace("{{BACKEND_URL}}", CLIENT_BACKEND_URL)
-    return Response(content, mimetype='application/javascript')
+    resp = Response(content, mimetype='application/javascript')
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route('/static/docs/<path:filename>')
