@@ -358,13 +358,15 @@
                 return;
             }
             const methods = Array.isArray(data.methods) ? data.methods : [];
+            const familyOf = (m) => (['sparse', 'dense', 'hybrid'].includes(String(m)) ? 'semantic search' : 'table search');
             const rows = methods.map(row => `
                 <tr>
+                    <td>${escapeHtmlIntegration(familyOf(row.method || ''))}</td>
                     <td><code>${escapeHtmlIntegration(row.method || '')}</code></td>
                     <td>${Number(row.model_count || 0)}</td>
                     <td>${Number(row.original_sum || 0)}</td>
-                    <td>${Number(row.filter_sum || 0)}</td>
                     <td>${Number(row.original_dedup || 0)}</td>
+                    <td>${Number(row.filter_sum || 0)}</td>
                     <td>${Number(row.filter_dedup || 0)}</td>
                 </tr>
             `).join('');
@@ -381,29 +383,26 @@
                 : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
             mount.innerHTML = `
                 <div style="margin-top: 14px; padding: 12px; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-                        <div>
-                            <div style="font-weight:600; font-size:14px; color:#24292f;">Evaluation</div>
-                        </div>
-                        <div>${openLink}</div>
-                    </div>
-                    <div style="font-size:11px; color:#57606a; margin-bottom:8px;">Compact view of per-method nugget extraction vs query-hit counts.</div>
                     <div style="font-size:12px; color:#57606a; margin-bottom:10px;">
-                        <strong>Headers:</strong>
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap;">
+                            <strong>Headers:</strong>
+                            <div>${openLink}</div>
+                        </div>
                         <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${headerChips}</div>
                     </div>
                     <table style="width:100%; border-collapse:collapse; font-size:12px;">
                         <thead>
                             <tr style="background:#f6f8fa;">
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">family</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">method</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">models</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget_sum</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget_sum</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">card2nugget_dedup</th>
+                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget_sum</th>
                                 <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:right;">query2nugget_dedup</th>
                             </tr>
                         </thead>
-                        <tbody>${rows || '<tr><td colspan="6" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
+                        <tbody>${rows || '<tr><td colspan="7" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
                     </table>
                     <div style="font-size:11px; color:#57606a; margin-top:6px;">
                         sum = sum of each model rows in that method; dedup = unique nuggets after removing overlaps within that method.
@@ -1024,7 +1023,7 @@
             const basename = (p) => String(p).split('/').pop();
             const tablesNoteCell = results.error
                 ? '<span style="font-size: 12px; color: #666;">—</span>'
-                : `<div class="retrieval-tables-col"><strong>Query table(s):</strong><div class="retrieval-table-links">${
+                : `<div class="retrieval-seed-col"><div class="retrieval-seed-line"><strong>Query table(s):</strong><div class="retrieval-table-links">${
                     queryTables.length
                         ? queryTables.map((p) => {
                             const bn = basename(p);
@@ -1032,7 +1031,7 @@
                             return `<a href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(bn)}</a>`;
                           }).join(' ')
                         : '—'
-                  }</div></div>`;
+                  }</div></div></div>`;
             const headerRowHtml = `<div class="results-grid retrieval-header-strip" style="margin-bottom: 6px;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
@@ -1251,6 +1250,7 @@
                 </div>
                 <div class="result-card" style="margin-top: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
                     <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Evaluation</h3>
+                    <div style="font-size:11px; color:#57606a; margin-bottom:8px;">Compact view of per-method nugget extraction vs query-hit counts.</div>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
                         <button onclick="runWrapEvaluation('${results.job_id || currentJobId}')" style="padding: 6px 12px; font-size: 12px; margin: 0;">
                             Run Evaluation (iter)

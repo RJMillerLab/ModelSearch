@@ -318,6 +318,8 @@ def _format_pipeline_match_markdown(
     query_headers: list[str],
     query_method_counts: list[dict[str, Any]],
 ) -> str:
+    semantic_methods = {"sparse", "dense", "hybrid"}
+
     lines = [
         "# Pipeline summary",
         "",
@@ -349,13 +351,15 @@ def _format_pipeline_match_markdown(
             "",
             "## Method Summary",
             "",
-            "| method | model_count | card2nugget_sum | card2nugget_dedup | query2nugget_sum | query2nugget_dedup | nugget_csv |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+            "| family | method | model_count | card2nugget_sum | card2nugget_dedup | query2nugget_sum | query2nugget_dedup | nugget_csv |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
     for row in query_method_counts:
+        method_name = str(row.get("method", ""))
+        family = "semantic search" if method_name in semantic_methods else "table search"
         lines.append(
-            f"| `{row.get('method', '')}` | {len(row.get('models', []))} | "
+            f"| {family} | `{method_name}` | {len(row.get('models', []))} | "
             f"{int(row.get('raw_rows', 0))} | {int(row.get('raw_dedup_count', 0))} | "
             f"{int(row.get('matched_rows', 0))} | {int(row.get('matched_dedup_count', 0))} | "
             f"{_md_file_link(str(row.get('nugget_csv_path', '')), base_dir=output_dir)} |"

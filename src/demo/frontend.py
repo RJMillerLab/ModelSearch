@@ -262,8 +262,21 @@ RAW_HTML_TEMPLATE = """
             overflow: hidden;
             word-break: break-word;
             line-height: 1.35;
-            font-size: 10px;
-            font-family: ui-monospace, monospace, 'Courier New', monospace;
+            font-size: 12px;
+            font-family: inherit;
+            font-weight: 500;
+            margin-top: 2px;
+        }
+        .retrieval-table-links {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
+            line-height: 1.35;
+            font-size: 12px;
+            font-family: inherit;
+            font-weight: 500;
             margin-top: 2px;
         }
         .retrieval-tables-col .retrieval-table-links a {
@@ -462,7 +475,7 @@ RAW_HTML_TEMPLATE = """
             
             <div class="mode-input active" id="query-input">
                 <div class="form-row" style="gap: 6px; flex-wrap: nowrap;">
-                    <label for="preset_query_select">Query:</label>
+                    <label for="preset_query_select" style="min-width: auto; margin-right: 2px;">Query:</label>
                     <select id="preset_query_select" onchange="onPresetQueryChange()" class="form-control" style="width: 180px; flex: 0 0 auto;">
                         <option value="">— select preset —</option>
                     </select>
