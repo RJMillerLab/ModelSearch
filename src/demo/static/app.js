@@ -59,6 +59,47 @@
             return '{{BACKEND_URL}}/api/evaluation-page/' + encodeURIComponent(j);
         }
 
+        function normalizeNuggetMethod(method) {
+            return String(method || '').trim().toLowerCase();
+        }
+
+        function buildNuggetMethodMap(summary) {
+            const out = {};
+            const methods = Array.isArray(summary && summary.methods) ? summary.methods : [];
+            methods.forEach(row => {
+                const key = normalizeNuggetMethod(row && row.method);
+                if (key) out[key] = row;
+            });
+            return out;
+        }
+
+        function nuggetScoreBadgeHtml(row) {
+            if (!row) {
+                return '<span style="font-size:11px;color:#999;font-weight:500;">score pending</span>';
+            }
+            const score = Number(row.filter_dedup || 0);
+            return `<span title="query2nugget dedup# = unique query-matched nuggets after de-duplication within this method" style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:999px;background:#fff1e6;border:1px solid #ff8a3d;color:#b54708;font-size:11px;font-weight:700;white-space:nowrap;">query2nugget dedup# <strong>${score}</strong></span>`;
+        }
+
+        function nuggetScoreFooterHtml(row) {
+            if (!row) {
+                return '<span style="color:#999;">Run evaluation to show total dedup score.</span>';
+            }
+            return `Total dedup nugget score: <strong style="color:#b54708;">${Number(row.filter_dedup || 0)}</strong>`;
+        }
+
+        function applyNuggetScoresToRetrievalCards(summary) {
+            const scoreByMethod = buildNuggetMethodMap(summary);
+            document.querySelectorAll('[data-nugget-score-method]').forEach(el => {
+                const row = scoreByMethod[normalizeNuggetMethod(el.getAttribute('data-nugget-score-method'))];
+                el.innerHTML = nuggetScoreBadgeHtml(row || null);
+            });
+            document.querySelectorAll('[data-nugget-score-footer-method]').forEach(el => {
+                const row = scoreByMethod[normalizeNuggetMethod(el.getAttribute('data-nugget-score-footer-method'))];
+                el.innerHTML = nuggetScoreFooterHtml(row || null);
+            });
+        }
+
         function describeTableSearchCount(run, stats) {
             const queryTableCount = Array.isArray(run && run.query_tables) ? run.query_tables.length : 0;
             const baseTablesCount = (stats && stats.total_unique_tables != null)
@@ -350,24 +391,13 @@
                 return;
             }
             const methods = Array.isArray(data.methods) ? data.methods : [];
-            const cards = Array.isArray(data.cards) ? data.cards : [];
+            applyNuggetScoresToRetrievalCards(data);
             const familyOf = (m) => (['sparse', 'dense', 'hybrid'].includes(String(m)) ? 'semantic search' : 'table search');
             const methodLabel = (m) => {
                 const s = String(m || '');
-                if (s === 'single_column') return 'single<br>column';
+                if (s === 'single_column') return 'Joinable (single_column)';
                 return escapeHtmlIntegration(s);
             };
-            const rows = methods.map(row => `
-                <tr>
-                    <td style="font-size:12px; text-align:center;">${escapeHtmlIntegration(familyOf(row.method || ''))}</td>
-                    <td style="font-size:12px; line-height:1.2; text-align:center;">${methodLabel(row.method || '')}</td>
-                    <td style="text-align:center;">${Number(row.model_count || 0)}</td>
-                    <td style="text-align:center;">${Number(row.original_sum || 0)}</td>
-                    <td style="text-align:center;">${Number(row.original_dedup || 0)}</td>
-                    <td style="text-align:center;">${Number(row.filter_sum || 0)}</td>
-                    <td style="text-align:center;">${Number(row.filter_dedup || 0)}</td>
-                </tr>
-            `).join('');
             const selectedHeaderSet = new Set((data.headers || []).map(h => String(h)));
             const renderHeaderChip = (h) => {
                 const hit = selectedHeaderSet.has(String(h));
@@ -379,62 +409,39 @@
             const headerChips = NUGGET_SCHEMA_HEADERS.map(h => {
                 return renderHeaderChip(h);
             }).join(' ');
-            const cardRows = cards.map(row => {
-                const chips = (Array.isArray(row.nonempty_headers) ? row.nonempty_headers : [])
-                    .map(h => renderHeaderChip(h))
-                    .join(' ');
-                return `
-                    <tr>
-                        <td style="text-align:center;">${escapeHtmlIntegration(row.method || '')}</td>
-                        <td style="text-align:center;">${escapeHtmlIntegration(row.model_id || '')}</td>
-                        <td style="text-align:center;">${Number(row.card2nugget || 0)}</td>
-                        <td style="text-align:center;">${Number(row.query2nugget || 0)}</td>
-                        <td style="text-align:left;">${chips || '—'}</td>
-                    </tr>
-                `;
-            }).join('');
+            const methodScoreCards = methods.map(row => `
+                <div style="padding:10px;border:1px solid #f4b183;border-radius:8px;background:#fffaf5;min-width:135px;">
+                    <div style="font-size:10px;color:#8a6d3b;text-transform:uppercase;letter-spacing:.02em;">${escapeHtmlIntegration(familyOf(row.method || ''))}</div>
+                    <div style="font-size:12px;font-weight:700;color:#24292f;margin-top:2px;">${methodLabel(row.method || '')}</div>
+                    <div style="margin-top:7px;font-size:18px;line-height:1;color:#b54708;font-weight:800;">${Number(row.filter_dedup || 0)}</div>
+                    <div style="margin-top:3px;font-size:10px;color:#8a6d3b;">query2nugget dedup#</div>
+                </div>
+            `).join('');
             const openLink = data.markdown_path
-                ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full markdown</a>`
+                ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full nugget-based scoring progress</a>`
                 : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
             mount.innerHTML = `
                 <div style="margin-top: 14px; padding: 12px; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px;">
-                    <div style="font-size:12px; color:#57606a; margin-bottom:10px;">
-                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap;">
-                            <strong>Headers:</strong>
-                            <div>${openLink}</div>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+                        <div>
+                            <strong style="font-size:13px;color:#24292f;">Nugget-based Scores</strong>
+                            <div style="font-size:11px;color:#57606a;margin-top:2px;">Score only: unique query-matched nuggets after de-duplication.</div>
                         </div>
-                        <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${headerChips}</div>
                     </div>
-                    <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:center;">
-                        <thead>
-                            <tr style="background:#f6f8fa;">
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">family</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">method</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">models</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">card2nugget<br>sum<sup>*</sup></th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">card2nugget<br>dedup<sup>#</sup></th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">query2nugget<br>sum<sup>*</sup></th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">query2nugget<br>dedup<sup>#</sup></th>
-                            </tr>
-                        </thead>
-                        <tbody>${rows || '<tr><td colspan="7" style="border:1px solid #d0d7de; padding:8px; color:#888;">No method summary.</td></tr>'}</tbody>
-                    </table>
-                    <div style="font-size:11px; color:#57606a; margin-top:6px;">
-                        <sup>*</sup> sum = sum of each model rows in that method; <sup>#</sup> dedup = unique nuggets after removing overlaps within that method.
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;">
+                        ${methodScoreCards || '<div style="font-size:12px;color:#888;">No method scores.</div>'}
                     </div>
-                    <div style="margin-top:10px; font-size:12px; color:#57606a;"><strong>Query - Nugget - Cards</strong></div>
-                    <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:center; margin-top:6px;">
-                        <thead>
-                            <tr style="background:#f6f8fa;">
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">method</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">model_id</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">card2nugget</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:center;">query2nugget</th>
-                                <th style="border:1px solid #d0d7de; padding:6px 8px; text-align:left;">nonempty_headers</th>
-                            </tr>
-                        </thead>
-                        <tbody>${cardRows || '<tr><td colspan="5" style="border:1px solid #d0d7de; padding:8px; color:#888;">No card rows.</td></tr>'}</tbody>
-                    </table>
+                    <details style="margin-top:10px;font-size:11px;color:#57606a;">
+                        <summary style="cursor:pointer;color:#0056b3;">Definitions and selected nugget fields</summary>
+                        <div style="margin-top:8px;line-height:1.45;">
+                            <div><strong>query2nugget dedup#</strong>: the displayed score; unique nuggets that match the user query after removing overlaps within the method.</div>
+                            <div><strong>query2nugget sum</strong>: raw sum of query-matched nugget rows across models in the method.</div>
+                            <div><strong>card2nugget</strong>: nuggets extracted from model cards before query matching.</div>
+                            <div style="margin-top:6px;"><strong>Selected nugget fields:</strong></div>
+                            <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">${headerChips}</div>
+                        </div>
+                    </details>
+                    <div style="margin-top:10px;text-align:right;">${openLink}</div>
                 </div>
             `;
         }
@@ -1129,7 +1136,16 @@
             
             let retrievalHtml = `
                 ${errorBlock}
+                <div class="result-card" style="margin-bottom: 10px; padding: 10px 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
+                    <div style="font-size:12px;color:#495057;margin-bottom:8px;">
+                        Main figure (shown for both new search and loaded jobs)
+                    </div>
+                    <img src="/static/docs/modelsearch_wquery.png" alt="ModelSearch main figure" style="display:block; width:100%; max-width:920px; border:1px solid #e1e4e8; border-radius:6px; background:#fff;" />
+                </div>
                 ${headerRowHtml}
+                <div style="margin: 2px 0 10px 0; font-size: 11px; color: #8a6d3b;">
+                    <strong>Nugget score-based annotation:</strong> orange badge shows <code>query2nugget dedup#</code> for each retrieval method.
+                </div>
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">
@@ -1148,6 +1164,7 @@
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${modeInfo.label}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">${isError ? 'Error' : resultList.length + ' models'}</span>
+                                            <span data-nugget-score-method="${modeKey}">${nuggetScoreBadgeHtml(null)}</span>
                                         </h4>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
@@ -1157,10 +1174,10 @@
                                             </div>
                                         ` : resultList.length > 0 ? `
                                             <ul class="result-list" style="list-style: none; padding: 0;">
-                                                ${resultList.slice(0, 10).map(m => `<li class="result-item">${formatModel(m)}</li>`).join('')}
+                                                ${resultList.slice(0, 10).map(m => `<li class="result-item" style="font-size:12px;line-height:1.35;">${formatModel(m)}</li>`).join('')}
                                                 ${resultList.length > 10 ? `
                                                     <li class="collapsible-content expanded" id="${sectionId}-more" style="display:block;">
-                                                        ${resultList.slice(10).map(m => `<div class="result-item">${formatModel(m)}</div>`).join('')}
+                                                        ${resultList.slice(10).map(m => `<div class="result-item" style="font-size:12px;line-height:1.35;">${formatModel(m)}</div>`).join('')}
                                                     </li>
                                                     <li>
                                                         <span class="expand-toggle" onclick="toggleExpand('${sectionId}-more', this)">
@@ -1174,6 +1191,9 @@
                                                 No results available
                                             </div>
                                         `}
+                                        <div data-nugget-score-footer-method="${modeKey}" style="margin-top:6px;padding:6px 8px;border-top:1px dashed #f4b183;font-size:11px;color:#8a6d3b;">
+                                            ${nuggetScoreFooterHtml(null)}
+                                        </div>
                                     </div>
                                 </div>
                             `;
@@ -1244,13 +1264,14 @@
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">
                                                 ${models.length} models${(SHOW_CARD2TAB2CARD_MODEL_TABLES && realTableCount) ? ` from ${realTableCount} tables` : ''}
                                             </span>
+                                            <span data-nugget-score-method="${type}">${nuggetScoreBadgeHtml(null)}</span>
                                         </h4>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
                                             ${sortedModels.length > 0 ? sortedModels.map((m, idx) => {
                                                 if (!SHOW_CARD2TAB2CARD_MODEL_TABLES) {
-                                                    return `<li class="result-item">${formatModel(m)}</li>`;
+                                                    return `<li class="result-item" style="font-size:12px;line-height:1.35;">${formatModel(m)}</li>`;
                                                 }
                                                 let modelId = typeof m === 'string' ? m : (m.model_id || m);
                                                 modelId = String(modelId).trim();
@@ -1261,7 +1282,7 @@
                                                 return `
                                                     <li class="result-item">
                                                         <div style="display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; line-height: 1.45;">
-                                                            <a href="${modelUrl}" target="_blank" style="color: #0056b3; text-decoration: none; font-size: 13px;">${modelId}</a>
+                                                            <a href="${modelUrl}" target="_blank" style="color: #0056b3; text-decoration: none; font-size: 12px;">${modelId}</a>
                                                             ${hasTables ? ` <span style="font-size: 10px; color: #888;">(${modelTables.length} tables)</span>` : ''}
                                                             ${hasTables ? `<span style="font-size: 10px; color: #999; font-family: monospace;">${tableLine}</span>` : ''}
                                                         </div>
@@ -1269,6 +1290,9 @@
                                                 `;
                                             }).join('') : '<li>No results</li>'}
                                         </ul>
+                                        <div data-nugget-score-footer-method="${type}" style="margin-top:6px;padding:6px 8px;border-top:1px dashed #f4b183;font-size:11px;color:#8a6d3b;">
+                                            ${nuggetScoreFooterHtml(null)}
+                                        </div>
                                     </div>
                                 </div>
                             `;
@@ -1277,8 +1301,8 @@
                     </div>
                 </div>
                 <div class="result-card" style="margin-top: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                    <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Evaluation</h3>
-                    <div style="font-size:11px; color:#57606a; margin-bottom:8px;">Compact view of per-method nugget extraction vs query-hit counts.</div>
+                    <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Nugget-based Scoring</h3>
+                    <div style="font-size:11px; color:#57606a; margin-bottom:8px;">Shows only the per-method query2nugget dedup# score; definitions and full progress stay behind the details link.</div>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
                         <button onclick="runWrapEvaluation('${results.job_id || currentJobId}')" style="padding: 6px 12px; font-size: 12px; margin: 0;">
                             Run Evaluation (iter)
@@ -1288,6 +1312,12 @@
                     <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
                         Evaluation summary will appear here when available.
                     </div>
+                </div>
+                <div class="result-card" style="margin-top: 12px; padding: 10px 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
+                    <div style="font-size:12px;color:#8a6d3b;margin-bottom:8px;">
+                        Evaluation score is nugget-based.
+                    </div>
+                    <img src="/static/docs/evaluation.png" alt="Nugget-based evaluation diagram" style="display:block; width:100%; max-width:920px; border:1px solid #e1e4e8; border-radius:6px; background:#fff;" />
                 </div>
             `;
             

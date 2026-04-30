@@ -1,16 +1,32 @@
 # Evaluate
 
+![Nugget-based evaluation overview](../../docs/evaluation.png)
+
 ## Content
 
 1. [Model Card Extract Nuggets](#1-model-card-extract-nuggets)
 2. [Get Query-Nuggets List Mapping](#2-get-query-nuggets-list-mapping)
 3. [Evaluate](#3-evaluate)
 
-## 1. End-to-End Wrap (single or all jobs)
+## 1. Model Card Extract Nuggets
 
-Main pipeline: `card2nugget -> query2nugget -> per-method qrels/run + markdown summary` under `data_251117/evaluate/pipeline/`.
+```bash
+python -m src.evaluate.card2nugget_extraction --model-ids-file data_251117/query/toy_data/model_ids.txt
+```
 
-Run selected job ids from one batch summary JSON:
+Writes per-model CSV + meta under `data_251117/card2nugget/`. Batch API request / response jsonl files stay under `data_251117/evaluate/batch/`. If Batch stalls, add `--llm-mode iter` for sync chat per model.
+
+## 2. Query → nugget schema headers (LLM)
+
+After step 1, map queries (default: OpenAI Batch) and optionally build `qrels` / `.run` from the CSVs under `data_251117/card2nugget/`. Use `--llm-mode iter` for sync chat per query if Batch stalls.
+
+```bash
+python -m src.evaluate.query2nugget_mapping --queries-file data_251117/query/toy_data/queries.txt --build-qrels-run
+```
+
+Writes `query_header_keyword_mapping.json`, `real_subtopic.qrels`, `real_initial.run`, and `query_csv_match_debug.json` under `data_251117/evaluate/` by default.
+
+End-to-end wrap from `jobs_251117` batch JSON (card2nugget -> query2nugget -> per-method eval under one job; outputs under `data_251117/evaluate/pipeline/`):
 
 ```bash
 python -m src.evaluate.wrap_card_query_eval \
