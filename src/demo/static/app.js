@@ -75,17 +75,17 @@
 
         function nuggetScoreBadgeHtml(row) {
             if (!row) {
-                return '<span style="font-size:11px;color:#999;font-weight:500;">score pending</span>';
+                return '<span style="display:inline-flex;align-items:center;justify-content:center;min-width:26px;padding:1px 7px;border-radius:999px;background:#fff1e6;border:1px solid #ff8a3d;color:#b54708;font-size:11px;font-weight:800;line-height:1.2;">-</span>';
             }
             const score = Number(row.filter_dedup || 0);
-            return `<span title="query2nugget dedup# = unique query-matched nuggets after de-duplication within this method" style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:999px;background:#fff1e6;border:1px solid #ff8a3d;color:#b54708;font-size:11px;font-weight:700;white-space:nowrap;">query2nugget dedup# <strong>${score}</strong></span>`;
+            return `<span title="query2nugget dedup#: unique query-matched nuggets after de-duplication" style="display:inline-flex;align-items:center;justify-content:center;min-width:26px;padding:1px 7px;border-radius:999px;background:#fff1e6;border:1px solid #ff8a3d;color:#b54708;font-size:11px;font-weight:800;line-height:1.2;">${score}</span>`;
         }
 
         function nuggetScoreFooterHtml(row) {
             if (!row) {
-                return '<span style="color:#999;">Run evaluation to show total dedup score.</span>';
+                return '<span style="color:#999;">Method dedup nugget total: -</span>';
             }
-            return `Total dedup nugget score: <strong style="color:#b54708;">${Number(row.filter_dedup || 0)}</strong>`;
+            return `Method dedup nugget total: <strong style="color:#b54708;">${Number(row.filter_dedup || 0)}</strong>`;
         }
 
         function applyNuggetScoresToRetrievalCards(summary) {
@@ -390,14 +390,7 @@
                 mount.innerHTML = '<span style="font-size:12px;color:#888;">No evaluation summary found for this job yet.</span>';
                 return;
             }
-            const methods = Array.isArray(data.methods) ? data.methods : [];
             applyNuggetScoresToRetrievalCards(data);
-            const familyOf = (m) => (['sparse', 'dense', 'hybrid'].includes(String(m)) ? 'semantic search' : 'table search');
-            const methodLabel = (m) => {
-                const s = String(m || '');
-                if (s === 'single_column') return 'Joinable (single_column)';
-                return escapeHtmlIntegration(s);
-            };
             const selectedHeaderSet = new Set((data.headers || []).map(h => String(h)));
             const renderHeaderChip = (h) => {
                 const hit = selectedHeaderSet.has(String(h));
@@ -409,29 +402,12 @@
             const headerChips = NUGGET_SCHEMA_HEADERS.map(h => {
                 return renderHeaderChip(h);
             }).join(' ');
-            const methodScoreCards = methods.map(row => `
-                <div style="padding:10px;border:1px solid #f4b183;border-radius:8px;background:#fffaf5;min-width:135px;">
-                    <div style="font-size:10px;color:#8a6d3b;text-transform:uppercase;letter-spacing:.02em;">${escapeHtmlIntegration(familyOf(row.method || ''))}</div>
-                    <div style="font-size:12px;font-weight:700;color:#24292f;margin-top:2px;">${methodLabel(row.method || '')}</div>
-                    <div style="margin-top:7px;font-size:18px;line-height:1;color:#b54708;font-weight:800;">${Number(row.filter_dedup || 0)}</div>
-                    <div style="margin-top:3px;font-size:10px;color:#8a6d3b;">query2nugget dedup#</div>
-                </div>
-            `).join('');
             const openLink = data.markdown_path
                 ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full nugget-based scoring progress</a>`
                 : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
             mount.innerHTML = `
-                <div style="margin-top: 14px; padding: 12px; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px;">
-                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
-                        <div>
-                            <strong style="font-size:13px;color:#24292f;">Nugget-based Scores</strong>
-                            <div style="font-size:11px;color:#57606a;margin-top:2px;">Score only: unique query-matched nuggets after de-duplication.</div>
-                        </div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;">
-                        ${methodScoreCards || '<div style="font-size:12px;color:#888;">No method scores.</div>'}
-                    </div>
-                    <details style="margin-top:10px;font-size:11px;color:#57606a;">
+                <div style="margin-top: 8px; padding: 10px 12px; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px;">
+                    <details style="font-size:11px;color:#57606a;">
                         <summary style="cursor:pointer;color:#0056b3;">Definitions and selected nugget fields</summary>
                         <div style="margin-top:8px;line-height:1.45;">
                             <div><strong>query2nugget dedup#</strong>: the displayed score; unique nuggets that match the user query after removing overlaps within the method.</div>
@@ -441,7 +417,7 @@
                             <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">${headerChips}</div>
                         </div>
                     </details>
-                    <div style="margin-top:10px;text-align:right;">${openLink}</div>
+                    <div style="margin-top:8px;text-align:right;">${openLink}</div>
                 </div>
             `;
         }
@@ -457,14 +433,59 @@
             }
         }
 
-        async function runWrapEvaluation(jobId) {
+        async function pollEvaluationRunUntilDone(jobId, mountId) {
+            const mount = document.getElementById(mountId || 'retrievalEvaluationSummaryMount');
             const j = String(jobId || currentJobId || '').trim();
-            const statusEl = document.getElementById('retrievalEvalStatus');
-            if (!j) {
-                if (statusEl) statusEl.textContent = 'No job_id.';
+            if (!j) return;
+            for (let i = 0; i < 120; i++) {
+                const data = await fetchEvaluationRunStatus(j);
+                if (!data || data.status !== 'success') {
+                    if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation status check failed.</span>';
+                    return;
+                }
+                const runStatus = String(data.run_status || '');
+                if (runStatus === 'running') {
+                    if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Running nugget-based evaluation automatically...</span>';
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                if (runStatus === 'completed') {
+                    await refreshEvaluationSummary(j, mountId || 'retrievalEvaluationSummaryMount');
+                    return;
+                }
+                if (runStatus === 'failed') {
+                    if (mount) mount.innerHTML = `<span style="font-size:12px;color:#888;">${escapeHtmlIntegration(data.message || 'Evaluation failed.')}</span>`;
+                    return;
+                }
+                if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation not started.</span>';
                 return;
             }
-            if (statusEl) statusEl.textContent = 'Starting evaluation...';
+            if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation still running. Please check again shortly.</span>';
+        }
+
+        async function ensureEvaluationForResults(jobId, mountId) {
+            const mount = document.getElementById(mountId || 'retrievalEvaluationSummaryMount');
+            const j = String(jobId || currentJobId || '').trim();
+            if (!mount || !j) return;
+
+            const summary = await fetchEvaluationSummary(j);
+            if (summary && summary.status === 'success' && summary.available) {
+                await refreshEvaluationSummary(j, mountId || 'retrievalEvaluationSummaryMount');
+                return;
+            }
+
+            mount.innerHTML = '<span style="font-size:12px;color:#888;">Running nugget-based evaluation automatically...</span>';
+            const runState = await fetchEvaluationRunStatus(j);
+            const runStatus = String((runState && runState.run_status) || '');
+            if (runStatus === 'running') {
+                await pollEvaluationRunUntilDone(j, mountId || 'retrievalEvaluationSummaryMount');
+                return;
+            }
+            if (runStatus === 'completed') {
+                await refreshEvaluationSummary(j, mountId || 'retrievalEvaluationSummaryMount');
+                return;
+            }
+
             try {
                 const resp = await fetch('{{BACKEND_URL}}/api/evaluation-run', {
                     method: 'POST',
@@ -472,46 +493,14 @@
                     body: JSON.stringify({ job_id: j, llm_mode: 'iter' }),
                 });
                 const data = await resp.json();
-                if (data.status !== 'success') {
-                    if (statusEl) statusEl.textContent = data.message || 'Failed to start evaluation.';
-                    return;
-                }
-                if (statusEl) statusEl.textContent = 'Evaluation running...';
-                pollEvaluationRunUntilDone(j);
-            } catch (e) {
-                if (statusEl) statusEl.textContent = 'Failed to start evaluation: ' + formatFetchError(e);
-            }
-        }
-
-        async function pollEvaluationRunUntilDone(jobId) {
-            const statusEl = document.getElementById('retrievalEvalStatus');
-            const j = String(jobId || currentJobId || '').trim();
-            if (!j) return;
-            for (let i = 0; i < 120; i++) {
-                const data = await fetchEvaluationRunStatus(j);
                 if (!data || data.status !== 'success') {
-                    if (statusEl) statusEl.textContent = 'Evaluation status check failed.';
+                    mount.innerHTML = '<span style="font-size:12px;color:#888;">Failed to start automatic evaluation.</span>';
                     return;
                 }
-                const runStatus = String(data.run_status || '');
-                if (runStatus === 'running') {
-                    if (statusEl) statusEl.textContent = data.message || 'Evaluation running...';
-                    await new Promise(r => setTimeout(r, 2000));
-                    continue;
-                }
-                if (runStatus === 'completed') {
-                    if (statusEl) statusEl.textContent = 'Evaluation completed.';
-                    await refreshEvaluationSummary(j, 'retrievalEvaluationSummaryMount');
-                    return;
-                }
-                if (runStatus === 'failed') {
-                    if (statusEl) statusEl.textContent = data.message || 'Evaluation failed.';
-                    return;
-                }
-                if (statusEl) statusEl.textContent = 'Evaluation not started.';
-                return;
+                await pollEvaluationRunUntilDone(j, mountId || 'retrievalEvaluationSummaryMount');
+            } catch (e) {
+                mount.innerHTML = `<span style="font-size:12px;color:#888;">Automatic evaluation failed: ${escapeHtmlIntegration(formatFetchError(e))}</span>`;
             }
-            if (statusEl) statusEl.textContent = 'Evaluation still running. Please check again shortly.';
         }
         
         function updateTopKValue(value) {
@@ -1300,24 +1289,13 @@
                         })()}
                     </div>
                 </div>
-                <div class="result-card" style="margin-top: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                    <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">Nugget-based Scoring</h3>
-                    <div style="font-size:11px; color:#57606a; margin-bottom:8px;">Shows only the per-method query2nugget dedup# score; definitions and full progress stay behind the details link.</div>
-                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 8px;">
-                        <button onclick="runWrapEvaluation('${results.job_id || currentJobId}')" style="padding: 6px 12px; font-size: 12px; margin: 0;">
-                            Run Evaluation (iter)
-                        </button>
-                        <span id="retrievalEvalStatus" style="font-size: 12px; color: #666;">Click button to generate wrap evaluation for this job.</span>
-                    </div>
-                    <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
-                        Evaluation summary will appear here when available.
-                    </div>
-                </div>
                 <div class="result-card" style="margin-top: 12px; padding: 10px 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                    <div style="font-size:12px;color:#8a6d3b;margin-bottom:8px;">
+                    <div style="font-size:12px;color:#8a6d3b;margin-bottom:6px;">
                         Evaluation score is nugget-based.
                     </div>
-                    <img src="/static/docs/evaluation.png" alt="Nugget-based evaluation diagram" style="display:block; width:100%; max-width:920px; border:1px solid #e1e4e8; border-radius:6px; background:#fff;" />
+                    <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
+                        Running nugget-based evaluation automatically...
+                    </div>
                 </div>
             `;
             
@@ -1461,7 +1439,7 @@
             window.__tableSearchRuns = [];
             document.getElementById('resultsSection').classList.add('active');
             syncBothIntegrationDisplays();
-            refreshEvaluationSummary(results.job_id || currentJobId, 'retrievalEvaluationSummaryMount');
+            ensureEvaluationForResults(results.job_id || currentJobId, 'retrievalEvaluationSummaryMount');
         }
 
         function normalizeModelSearchRunKey(key) {
