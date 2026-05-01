@@ -244,6 +244,9 @@ RAW_HTML_TEMPLATE = """
             flex-wrap: wrap;
             overflow: visible;
         }
+        .retrieval-header-rows .retrieval-table-links a {
+            font-size: 11px;
+        }
         .retrieval-seed-col {
             font-size: 12px;
             color: #666;

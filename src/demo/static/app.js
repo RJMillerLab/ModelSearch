@@ -383,7 +383,7 @@
                     Score: evaluation is nugget-based.
                     <span style="margin-left:8px;">${reportLink}</span>
                 </div>
-                <img src="/static/docs/evaluation.png" alt="Nugget-based evaluation" style="display:block;width:90%;max-width:100%;height:auto;margin:0;border:none;background:transparent;" />
+                <img src="/static/docs/evaluation.png" alt="Nugget-based evaluation" style="display:block;width:70%;max-width:100%;height:auto;margin:0;border:none;background:transparent;" />
             `;
         }
 
