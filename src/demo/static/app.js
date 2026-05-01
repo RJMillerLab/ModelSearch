@@ -69,18 +69,18 @@
             return out;
         }
 
-        function nuggetScoreFooterHtml(row) {
+        function nuggetScoreInlineInner(row) {
             if (!row) {
-                return '<span style="color:#999;">Score*: -</span>';
+                return 'Score*: <span style="color:#999;">-</span>';
             }
             return `Score*: <strong style="color:#b54708;">${Number(row.filter_dedup || 0)}</strong>`;
         }
 
         function applyNuggetScoresToRetrievalCards(summary) {
             const scoreByMethod = buildNuggetMethodMap(summary);
-            document.querySelectorAll('[data-nugget-score-footer-method]').forEach(el => {
-                const row = scoreByMethod[normalizeNuggetMethod(el.getAttribute('data-nugget-score-footer-method'))];
-                el.innerHTML = nuggetScoreFooterHtml(row || null);
+            document.querySelectorAll('[data-nugget-score-inline-method]').forEach(el => {
+                const row = scoreByMethod[normalizeNuggetMethod(el.getAttribute('data-nugget-score-inline-method'))];
+                el.innerHTML = nuggetScoreInlineInner(row || null);
             });
         }
 
@@ -368,10 +368,10 @@
                 mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation summary will appear here when available.</span>';
                 return;
             }
-            mount.innerHTML = '<span style="font-size:12px;color:#888;">Loading evaluation summary…</span>';
+            mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Loading evaluation summary…</span></div>';
             const data = await fetchEvaluationSummary(j);
             if (!data || data.status !== 'success' || !data.available) {
-                mount.innerHTML = '<span style="font-size:12px;color:#888;">No evaluation summary found for this job yet.</span>';
+                mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">No evaluation summary found for this job yet.</span></div>';
                 return;
             }
             applyNuggetScoresToRetrievalCards(data);
@@ -379,12 +379,14 @@
                 ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">review full nugget extraction report</a>`
                 : '<span style="font-size:12px;color:#888;">Report not available yet.</span>';
             mount.innerHTML = `
-                <div class="pdf-section pipeline-diagram-frame">
-                    <img class="pipeline-diagram-img" src="/static/docs/evaluation.png" alt="Nugget-based evaluation" />
-                </div>
-                <div style="font-size:12px;color:#57606a;line-height:1.45;margin-top:4px;">
-                    Score: evaluation is nugget-based.
-                    <span style="margin-left:8px;">${reportLink}</span>
+                <div class="evaluation-summary-panel">
+                    <div style="font-size:12px;color:#57606a;line-height:1.45;margin-bottom:8px;">
+                        Score: evaluation is nugget-based.
+                        <span style="margin-left:8px;">${reportLink}</span>
+                    </div>
+                    <div class="pdf-section pipeline-diagram-frame">
+                        <img class="pipeline-diagram-img" src="/static/docs/evaluation.png" alt="Nugget-based evaluation" />
+                    </div>
                 </div>
             `;
         }
@@ -407,12 +409,12 @@
             for (let i = 0; i < 120; i++) {
                 const data = await fetchEvaluationRunStatus(j);
                 if (!data || data.status !== 'success') {
-                    if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation status check failed.</span>';
+                    if (mount) mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Evaluation status check failed.</span></div>';
                     return;
                 }
                 const runStatus = String(data.run_status || '');
                 if (runStatus === 'running') {
-                    if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Running nugget-based evaluation automatically...</span>';
+                    if (mount) mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Running nugget-based evaluation automatically...</span></div>';
                     await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }
@@ -421,13 +423,13 @@
                     return;
                 }
                 if (runStatus === 'failed') {
-                    if (mount) mount.innerHTML = `<span style="font-size:12px;color:#888;">${escapeHtmlIntegration(data.message || 'Evaluation failed.')}</span>`;
+                    if (mount) mount.innerHTML = `<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">${escapeHtmlIntegration(data.message || 'Evaluation failed.')}</span></div>`;
                     return;
                 }
-                if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation not started.</span>';
+                if (mount) mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Evaluation not started.</span></div>';
                 return;
             }
-            if (mount) mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation still running. Please check again shortly.</span>';
+            if (mount) mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Evaluation still running. Please check again shortly.</span></div>';
         }
 
         async function ensureEvaluationForResults(jobId, mountId) {
@@ -441,7 +443,7 @@
                 return;
             }
 
-            mount.innerHTML = '<span style="font-size:12px;color:#888;">Running nugget-based evaluation automatically...</span>';
+            mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Running nugget-based evaluation automatically...</span></div>';
             const runState = await fetchEvaluationRunStatus(j);
             const runStatus = String((runState && runState.run_status) || '');
             if (runStatus === 'running') {
@@ -461,12 +463,12 @@
                 });
                 const data = await resp.json();
                 if (!data || data.status !== 'success') {
-                    mount.innerHTML = '<span style="font-size:12px;color:#888;">Failed to start automatic evaluation.</span>';
+                    mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Failed to start automatic evaluation.</span></div>';
                     return;
                 }
                 await pollEvaluationRunUntilDone(j, mountId || 'retrievalEvaluationSummaryMount');
             } catch (e) {
-                mount.innerHTML = `<span style="font-size:12px;color:#888;">Automatic evaluation failed: ${escapeHtmlIntegration(formatFetchError(e))}</span>`;
+                mount.innerHTML = `<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Automatic evaluation failed: ${escapeHtmlIntegration(formatFetchError(e))}</span></div>`;
             }
         }
         
@@ -1023,7 +1025,7 @@
                           }).join(' ')
                         : '—'
                   }</div></div></div>`;
-            const headerRowHtml = `<div class="results-grid retrieval-header-strip" style="margin-top: 2px; margin-bottom: 4px;">
+            const headerRowHtml = `<div class="results-grid retrieval-header-strip retrieval-header-strip--scaled" style="margin-top: 2px; margin-bottom: 4px;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
             </div>`;
@@ -1092,9 +1094,6 @@
             
             let retrievalHtml = `
                 ${errorBlock}
-                <div class="pdf-section pipeline-diagram-frame">
-                    <img class="pipeline-diagram-img" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" />
-                </div>
                 ${headerRowHtml}
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
@@ -1110,11 +1109,12 @@
                             
                             return `
                                 <div class="search-type-section retrieval-method-tight" style="margin-bottom: 10px;">
-                                    <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
+                                    <div class="search-type-header expanded" onclick="toggleSearchType('${sectionId}', this)">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${modeInfo.label}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">${isError ? 'Error' : resultList.length + ' models'}</span>
                                         </h4>
+                                        <span data-nugget-score-inline-method="${modeKey}" class="retrieval-method-score" style="font-size:11px;color:#8a6d3b;flex-shrink:0;white-space:nowrap;margin-left:8px;">${nuggetScoreInlineInner(null)}</span>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
                                         ${isError ? `
@@ -1140,9 +1140,6 @@
                                                 No results available
                                             </div>
                                         `}
-                                        <div data-nugget-score-footer-method="${modeKey}" style="margin-top:6px;padding:6px 8px;border-top:1px dashed #f4b183;font-size:11px;color:#8a6d3b;">
-                                            ${nuggetScoreFooterHtml(null)}
-                                        </div>
                                     </div>
                                 </div>
                             `;
@@ -1207,13 +1204,14 @@
                             
                             return `
                                 <div class="search-type-section retrieval-method-tight" style="margin-bottom: 10px;">
-                                    <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
+                                    <div class="search-type-header expanded" onclick="toggleSearchType('${sectionId}', this)">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${displayName}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">
                                                 ${models.length} models${(SHOW_CARD2TAB2CARD_MODEL_TABLES && realTableCount) ? ` from ${realTableCount} tables` : ''}
                                             </span>
                                         </h4>
+                                        <span data-nugget-score-inline-method="${type}" class="retrieval-method-score" style="font-size:11px;color:#8a6d3b;flex-shrink:0;white-space:nowrap;margin-left:8px;">${nuggetScoreInlineInner(null)}</span>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
                                         <ul class="result-list" style="list-style: none; padding: 0;">
@@ -1238,9 +1236,6 @@
                                                 `;
                                             }).join('') : '<li>No results</li>'}
                                         </ul>
-                                        <div data-nugget-score-footer-method="${type}" style="margin-top:6px;padding:6px 8px;border-top:1px dashed #f4b183;font-size:11px;color:#8a6d3b;">
-                                            ${nuggetScoreFooterHtml(null)}
-                                        </div>
                                     </div>
                                 </div>
                             `;
@@ -1250,7 +1245,7 @@
                 </div>
                 <div class="result-card" style="margin-top: 12px; padding: 10px 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
                     <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
-                        Running nugget-based evaluation automatically...
+                        <div class="evaluation-summary-panel">Running nugget-based evaluation automatically...</div>
                     </div>
                 </div>
             `;
@@ -1266,8 +1261,8 @@
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches.</p>
-                    <div class="pdf-section pipeline-diagram-frame">
-                        <img class="pipeline-diagram-img" src="/static/docs/tableintegration.png" alt="Table integration overview" />
+                    <div class="pdf-section pipeline-diagram-frame integration-diagram-frame">
+                        <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration.png" alt="Table integration overview" />
                     </div>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">

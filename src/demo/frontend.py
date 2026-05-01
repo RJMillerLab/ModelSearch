@@ -479,6 +479,33 @@ RAW_HTML_TEMPLATE = """
             background: white;
             display: block;
         }
+        /* Table integration overview: 1.5× default diagram height */
+        .pdf-section.pipeline-diagram-frame.integration-diagram-frame img.pipeline-diagram-img.integration-diagram-img {
+            max-height: 315px;
+        }
+        .evaluation-summary-panel {
+            width: 80%;
+            max-width: 100%;
+            margin: 0 auto;
+            box-sizing: border-box;
+        }
+        .results-grid.retrieval-header-strip.retrieval-header-strip--scaled {
+            width: 80%;
+            max-width: 100%;
+            margin-left: auto;
+            margin-right: auto;
+            box-sizing: border-box;
+        }
+        .retrieval-header-strip--scaled .retrieval-table-links a {
+            font-size: 11px;
+        }
+        .retrieval-header-strip--scaled a.retrieval-seed-link {
+            font-size: 11px;
+        }
+        .search-type-header h4 {
+            flex: 1;
+            min-width: 0;
+        }
     </style>
 </head>
 <body>
@@ -498,6 +525,10 @@ RAW_HTML_TEMPLATE = """
                 </label>
             </div>
             
+            <div id="diagram-section" class="pdf-section pipeline-diagram-frame">
+                <img id="search-diagram" class="pipeline-diagram-img" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" />
+            </div>
+            
             <div id="previous-search-section" style="display: none; margin-bottom: 10px;">
                 <p style="margin-bottom: 4px; font-size: 12px; color: #666;">Pick a saved job. New jobs are restored from <code>job_meta.json</code> plus raw retrieval JSON files.</p>
                 <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px;">
@@ -509,10 +540,6 @@ RAW_HTML_TEMPLATE = """
             </div>
             
             <div id="new-search-inputs">
-            <div id="diagram-section" class="pdf-section pipeline-diagram-frame">
-                <img id="search-diagram" class="pipeline-diagram-img" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" />
-            </div>
-            
             <div class="mode-input active" id="query-input">
                 <div class="form-row" style="gap: 6px; flex-wrap: nowrap;">
                     <label for="preset_query_select" style="min-width: auto; margin-right: 2px;">Query:</label>
