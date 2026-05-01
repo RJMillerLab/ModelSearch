@@ -1257,13 +1257,8 @@
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches.</p>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; margin-bottom: 10px;">
-                        <div class="pdf-section pipeline-diagram-frame integration-diagram-frame" style="margin:0;">
-                            <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration1.png" alt="Table integration overview 1" />
-                        </div>
-                        <div class="pdf-section pipeline-diagram-frame integration-diagram-frame" style="margin:0;">
-                            <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration2.png" alt="Table integration overview 2" />
-                        </div>
+                    <div class="pdf-section pipeline-diagram-frame integration-diagram-frame" style="margin-bottom: 10px;">
+                        <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration1.png" alt="Table integration overview" />
                     </div>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
