@@ -1068,7 +1068,49 @@ def integrate_model_search():
     payload = q2m_file.build_preview(query=job_meta.query, table_resources=job_meta.table_resources, mode=retrieval_mode, max_models=max_models)
     payload = _attach_single_table_preview(payload)
     table_paths = payload["table_paths"][:k]
-    df = TableIntegrater().run(local_table_paths(table_paths), mode=integration_type)
+    resolved_table_paths = [p for p in local_table_paths(table_paths) if p]
+    if not resolved_table_paths:
+        message = (
+            "No resolvable tables found for model-search integration. "
+            "Try increasing max_models or using another retrieval mode."
+        )
+        response_payload = {
+            "status": "skipped",
+            "message": message,
+            "integration_type": integration_type,
+            "query2modelcard_retrieval_mode": retrieval_mode,
+            "k": k,
+            "max_models": max_models,
+            "integration_input_table_paths": table_paths,
+            "resolved_table_paths": resolved_table_paths,
+            **payload,
+        }
+        _save_json(
+            os.path.join(paths.job_dir, f"integration_model_search_{integration_type}_{retrieval_mode}.json"),
+            response_payload,
+        )
+        return jsonify(response_payload)
+
+    df = TableIntegrater().run(resolved_table_paths, mode=integration_type)
+    if df is None:
+        message = "Table integration produced no output dataframe."
+        response_payload = {
+            "status": "error",
+            "message": message,
+            "integration_type": integration_type,
+            "query2modelcard_retrieval_mode": retrieval_mode,
+            "k": k,
+            "max_models": max_models,
+            "integration_input_table_paths": table_paths,
+            "resolved_table_paths": resolved_table_paths,
+            **payload,
+        }
+        _save_json(
+            os.path.join(paths.job_dir, f"integration_model_search_{integration_type}_{retrieval_mode}.json"),
+            response_payload,
+        )
+        return jsonify(response_payload)
+
     csv_name = f"integrated_model_search_{integration_type}_{retrieval_mode}.csv"
     csv_path = os.path.join(paths.job_dir, csv_name)
     df.to_csv(csv_path, index=False, encoding="utf-8")

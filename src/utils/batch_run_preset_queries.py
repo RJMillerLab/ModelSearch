@@ -82,6 +82,27 @@ def _post_json(url: str, payload: Dict[str, Any], timeout: int = 60) -> Dict[str
     return resp.json()
 
 
+def _post_json_safe(url: str, payload: Dict[str, Any], timeout: int = 60) -> Dict[str, Any]:
+    try:
+        return _post_json(url, payload, timeout=timeout)
+    except requests.RequestException as exc:
+        response_text = ""
+        response_obj = getattr(exc, "response", None)
+        if response_obj is not None:
+            try:
+                response_text = response_obj.text
+            except Exception:
+                response_text = ""
+        return {
+            "status": "error",
+            "message": str(exc),
+            "http_error": True,
+            "url": url,
+            "request_payload": payload,
+            "response_text": response_text,
+        }
+
+
 def _poll_results(backend_url: str, job_id: str, poll_interval: float = 5.0, timeout: int = 3600) -> Dict[str, Any]:
     """Poll /api/results/<job_id> until completed or error."""
     results_url = f"{backend_url}/api/results/{job_id}"
@@ -193,7 +214,7 @@ def run_one_query(
             "max_models": effective_integration_max_models,
             "query2modelcard_retrieval_mode": retrieval_mode,
         }
-        res = _post_json(model_int_url, model_payload)
+        res = _post_json_safe(model_int_url, model_payload)
         model_int_res_by_mode[retrieval_mode] = res
         status = res.get("status")
         if status == "success":
@@ -219,7 +240,7 @@ def run_one_query(
                 "max_models": effective_integration_max_models,
                 "tables_source": tables_source,
             }
-            res = _post_json(table_int_url, table_payload)
+            res = _post_json_safe(table_int_url, table_payload)
             table_int_res_by_type[st][tables_source] = res
             status = res.get("status")
             if status == "success":
