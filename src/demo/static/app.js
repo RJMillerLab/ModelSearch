@@ -71,9 +71,9 @@
 
         function nuggetScoreFooterHtml(row) {
             if (!row) {
-                return '<span style="color:#999;">Method dedup nugget total: -</span>';
+                return '<span style="color:#999;">Score*: -</span>';
             }
-            return `Method dedup nugget total: <strong style="color:#b54708;">${Number(row.filter_dedup || 0)}</strong>`;
+            return `Score*: <strong style="color:#b54708;">${Number(row.filter_dedup || 0)}</strong>`;
         }
 
         function applyNuggetScoresToRetrievalCards(summary) {
@@ -375,14 +375,17 @@
                 return;
             }
             applyNuggetScoresToRetrievalCards(data);
-            const openLink = data.markdown_path
-                ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full nugget-based scoring progress</a>`
-                : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
+            const reportLink = data.markdown_path
+                ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">review full nugget extraction report</a>`
+                : '<span style="font-size:12px;color:#888;">Report not available yet.</span>';
             mount.innerHTML = `
-                <div style="text-align:center;margin-bottom:8px;">
-                    <img src="/static/docs/evaluation.png" alt="Nugget-based evaluation" style="display:block;width:100%;max-width:920px;margin:0 auto;border:1px solid #e1e4e8;border-radius:6px;background:#fff;" />
+                <div class="pdf-section pipeline-diagram-frame">
+                    <img class="pipeline-diagram-img" src="/static/docs/evaluation.png" alt="Nugget-based evaluation" />
                 </div>
-                <div style="text-align:right;">${openLink}</div>
+                <div style="font-size:12px;color:#57606a;line-height:1.45;margin-top:4px;">
+                    Score: evaluation is nugget-based.
+                    <span style="margin-left:8px;">${reportLink}</span>
+                </div>
             `;
         }
 
@@ -1089,8 +1092,8 @@
             
             let retrievalHtml = `
                 ${errorBlock}
-                <div class="pdf-section results-pipeline-diagram" style="margin-bottom: 10px; padding: 8px;">
-                    <img src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" style="height: 210px; width: auto; max-width: 100%; object-fit: contain; border: 1px solid #dee2e6; border-radius: 4px; background: white; display: block;" />
+                <div class="pdf-section pipeline-diagram-frame">
+                    <img class="pipeline-diagram-img" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" />
                 </div>
                 ${headerRowHtml}
                 <div class="results-grid">
@@ -1246,9 +1249,6 @@
                     </div>
                 </div>
                 <div class="result-card" style="margin-top: 12px; padding: 10px 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                    <div style="font-size:12px;color:#8a6d3b;margin-bottom:6px;">
-                        Evaluation score is nugget-based.
-                    </div>
                     <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
                         Running nugget-based evaluation automatically...
                     </div>
@@ -1264,11 +1264,11 @@
             const defaultIntegrationMaxModels = results.model_top_k || 3;
             let integrationPanelHtml = `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
-                    <div class="pdf-section integration-pipeline-diagram" style="margin-bottom: 10px; padding: 8px;">
-                        <img src="/static/docs/tableintegration.png" alt="Table integration overview" style="height: 210px; width: auto; max-width: 100%; object-fit: contain; border: 1px solid #dee2e6; border-radius: 4px; background: white; display: block;" />
-                    </div>
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches.</p>
+                    <div class="pdf-section pipeline-diagram-frame">
+                        <img class="pipeline-diagram-img" src="/static/docs/tableintegration.png" alt="Table integration overview" />
+                    </div>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">
                             <option value="alite">ALITE</option>

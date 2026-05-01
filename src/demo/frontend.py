@@ -461,6 +461,24 @@ RAW_HTML_TEMPLATE = """
             background: white;
             display: block;
         }
+        /* Same full-width frame for pipeline / evaluation / integration figures (matches column width). */
+        .pdf-section.pipeline-diagram-frame {
+            margin-bottom: 10px;
+            padding: 8px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .pdf-section.pipeline-diagram-frame img.pipeline-diagram-img {
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            max-height: 210px;
+            object-fit: contain;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            background: white;
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -491,8 +509,8 @@ RAW_HTML_TEMPLATE = """
             </div>
             
             <div id="new-search-inputs">
-            <div id="diagram-section" class="pdf-section" style="margin-bottom: 10px; padding: 8px;">
-                <img id="search-diagram" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" style="height: 210px;" />
+            <div id="diagram-section" class="pdf-section pipeline-diagram-frame">
+                <img id="search-diagram" class="pipeline-diagram-img" src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" />
             </div>
             
             <div class="mode-input active" id="query-input">
