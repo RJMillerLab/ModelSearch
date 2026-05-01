@@ -607,7 +607,15 @@
         function clearIntegrationPanel() {
             const m = document.getElementById('integrationPanelMount');
             if (!m) return;
-            m.innerHTML = '<span style="font-size:12px;color:#888;">Table Integration will appear here after a search completes.</span>';
+            m.innerHTML = `
+                <div class="integration-section" style="padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%); border-radius: 8px; border: 1px solid #dee2e6; font-size: 13px; color: #212529; min-width: 0;">
+                    <h3 style="margin-top: 0; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: #1a1d21;">Table Integration</h3>
+                    <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches.</p>
+                    <div class="pdf-section pipeline-diagram-frame integration-diagram-frame" style="margin-bottom: 0;">
+                        <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration1.png" alt="Table integration overview" />
+                    </div>
+                </div>
+            `;
         }
 
         async function fetchJson(url, options) {
