@@ -204,7 +204,7 @@ RAW_HTML_TEMPLATE = """
             color: #d4d4d4;
         }
         .results-section {
-            margin-top: 12px;
+            margin-top: 8px;
             display: none;
         }
         .results-section.active {
@@ -400,6 +400,15 @@ RAW_HTML_TEMPLATE = """
         }
         .search-type-section .collapsible-content {
             padding: 8px;
+        }
+        .search-type-section.retrieval-method-tight .search-type-header {
+            padding: 4px 8px;
+        }
+        .search-type-section.retrieval-method-tight .collapsible-content {
+            padding: 4px 8px 6px;
+        }
+        .search-type-section.retrieval-method-tight .collapsible-content > .result-list {
+            margin-top: 0;
         }
         .search-type-header::before {
             content: '▶';

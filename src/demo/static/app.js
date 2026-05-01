@@ -8,10 +8,6 @@
         // Feature flags (declared early so all handlers see them; not related to fetch/network).
         const SHOW_CARD2TAB2CARD_MODEL_TABLES = false;
         const ENABLE_POST_INTEGRATION_ANALYSIS = false;
-        const NUGGET_SCHEMA_HEADERS = [
-            'Model', 'Base_model', 'Base_model_type', 'Train_dataset', 'Test_dataset',
-            'Hyperparam_name', 'Hyperparam_value', 'Metric_name', 'Metric_value'
-        ];
         const DEFAULT_QUERY_FALLBACK = 'Are there table foundation models that can handle small tables (≤100 rows/columns) with many missing values and produce column embeddings?';
         const INT_TITLE_C2C_HTML = '<span class="number-badge">1</span> Query2Card Results';
         const INT_TITLE_C2T2C_HTML = '<span class="number-badge">2</span> Query2Tab2Card Results';
@@ -73,14 +69,6 @@
             return out;
         }
 
-        function nuggetScoreBadgeHtml(row) {
-            if (!row) {
-                return '<span style="display:inline-flex;align-items:center;justify-content:center;min-width:26px;padding:1px 7px;border-radius:999px;background:#fff1e6;border:1px solid #ff8a3d;color:#b54708;font-size:11px;font-weight:800;line-height:1.2;">-</span>';
-            }
-            const score = Number(row.filter_dedup || 0);
-            return `<span title="query2nugget dedup#: unique query-matched nuggets after de-duplication" style="display:inline-flex;align-items:center;justify-content:center;min-width:26px;padding:1px 7px;border-radius:999px;background:#fff1e6;border:1px solid #ff8a3d;color:#b54708;font-size:11px;font-weight:800;line-height:1.2;">${score}</span>`;
-        }
-
         function nuggetScoreFooterHtml(row) {
             if (!row) {
                 return '<span style="color:#999;">Method dedup nugget total: -</span>';
@@ -90,10 +78,6 @@
 
         function applyNuggetScoresToRetrievalCards(summary) {
             const scoreByMethod = buildNuggetMethodMap(summary);
-            document.querySelectorAll('[data-nugget-score-method]').forEach(el => {
-                const row = scoreByMethod[normalizeNuggetMethod(el.getAttribute('data-nugget-score-method'))];
-                el.innerHTML = nuggetScoreBadgeHtml(row || null);
-            });
             document.querySelectorAll('[data-nugget-score-footer-method]').forEach(el => {
                 const row = scoreByMethod[normalizeNuggetMethod(el.getAttribute('data-nugget-score-footer-method'))];
                 el.innerHTML = nuggetScoreFooterHtml(row || null);
@@ -391,34 +375,14 @@
                 return;
             }
             applyNuggetScoresToRetrievalCards(data);
-            const selectedHeaderSet = new Set((data.headers || []).map(h => String(h)));
-            const renderHeaderChip = (h) => {
-                const hit = selectedHeaderSet.has(String(h));
-                const style = hit
-                    ? 'background:#d1f0ff;border:1px solid #4ea1ff;color:#0b5394;font-weight:600;'
-                    : 'background:#f6f8fa;border:1px solid #d0d7de;color:#57606a;';
-                return `<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:11px;${style}">${escapeHtmlIntegration(h)}</span>`;
-            };
-            const headerChips = NUGGET_SCHEMA_HEADERS.map(h => {
-                return renderHeaderChip(h);
-            }).join(' ');
             const openLink = data.markdown_path
                 ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">Open full nugget-based scoring progress</a>`
                 : '<span style="font-size:12px;color:#888;">Markdown not found</span>';
             mount.innerHTML = `
-                <div style="margin-top: 8px; padding: 10px 12px; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px;">
-                    <details style="font-size:11px;color:#57606a;">
-                        <summary style="cursor:pointer;color:#0056b3;">Definitions and selected nugget fields</summary>
-                        <div style="margin-top:8px;line-height:1.45;">
-                            <div><strong>query2nugget dedup#</strong>: the displayed score; unique nuggets that match the user query after removing overlaps within the method.</div>
-                            <div><strong>query2nugget sum</strong>: raw sum of query-matched nugget rows across models in the method.</div>
-                            <div><strong>card2nugget</strong>: nuggets extracted from model cards before query matching.</div>
-                            <div style="margin-top:6px;"><strong>Selected nugget fields:</strong></div>
-                            <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">${headerChips}</div>
-                        </div>
-                    </details>
-                    <div style="margin-top:8px;text-align:right;">${openLink}</div>
+                <div style="text-align:center;margin-bottom:8px;">
+                    <img src="/static/docs/evaluation.png" alt="Nugget-based evaluation" style="display:block;width:100%;max-width:920px;margin:0 auto;border:1px solid #e1e4e8;border-radius:6px;background:#fff;" />
                 </div>
+                <div style="text-align:right;">${openLink}</div>
             `;
         }
 
@@ -1056,7 +1020,7 @@
                           }).join(' ')
                         : '—'
                   }</div></div></div>`;
-            const headerRowHtml = `<div class="results-grid retrieval-header-strip" style="margin-bottom: 6px;">
+            const headerRowHtml = `<div class="results-grid retrieval-header-strip" style="margin-top: 2px; margin-bottom: 4px;">
                 <div>${seedModelCell}</div>
                 <div>${tablesNoteCell}</div>
             </div>`;
@@ -1125,16 +1089,10 @@
             
             let retrievalHtml = `
                 ${errorBlock}
-                <div class="result-card" style="margin-bottom: 10px; padding: 10px 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                    <div style="font-size:12px;color:#495057;margin-bottom:8px;">
-                        Main figure (shown for both new search and loaded jobs)
-                    </div>
-                    <img src="/static/docs/modelsearch_wquery.png" alt="ModelSearch main figure" style="display:block; width:100%; max-width:920px; border:1px solid #e1e4e8; border-radius:6px; background:#fff;" />
+                <div class="pdf-section results-pipeline-diagram" style="margin-bottom: 10px; padding: 8px;">
+                    <img src="/static/docs/modelsearch_wquery.png" alt="ModelSearch Overview" style="height: 210px; width: auto; max-width: 100%; object-fit: contain; border: 1px solid #dee2e6; border-radius: 4px; background: white; display: block;" />
                 </div>
                 ${headerRowHtml}
-                <div style="margin: 2px 0 10px 0; font-size: 11px; color: #8a6d3b;">
-                    <strong>Nugget score-based annotation:</strong> orange badge shows <code>query2nugget dedup#</code> for each retrieval method.
-                </div>
                 <div class="results-grid">
                     <div class="result-card" style="min-width: 0;">
                         <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #495057;">
@@ -1148,12 +1106,11 @@
                             const sectionId = `q2m-${modeKey}-${Date.now()}-${idx}`;
                             
                             return `
-                                <div class="search-type-section" style="margin-bottom: 15px;">
+                                <div class="search-type-section retrieval-method-tight" style="margin-bottom: 10px;">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${modeInfo.label}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">${isError ? 'Error' : resultList.length + ' models'}</span>
-                                            <span data-nugget-score-method="${modeKey}">${nuggetScoreBadgeHtml(null)}</span>
                                         </h4>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
@@ -1246,14 +1203,13 @@
                             });
                             
                             return `
-                                <div class="search-type-section" style="margin-bottom: 15px;">
+                                <div class="search-type-section retrieval-method-tight" style="margin-bottom: 10px;">
                                     <div class="search-type-header" onclick="toggleSearchType('${sectionId}', this)">
                                         <h4 style="margin: 0; display: flex; align-items: center; gap: 8px;">
                                             ${displayName}
                                             <span style="font-size: 12px; color: #666; font-weight: normal;">
                                                 ${models.length} models${(SHOW_CARD2TAB2CARD_MODEL_TABLES && realTableCount) ? ` from ${realTableCount} tables` : ''}
                                             </span>
-                                            <span data-nugget-score-method="${type}">${nuggetScoreBadgeHtml(null)}</span>
                                         </h4>
                                     </div>
                                     <div class="collapsible-content expanded" id="${sectionId}" style="display:block;">
@@ -1308,6 +1264,9 @@
             const defaultIntegrationMaxModels = results.model_top_k || 3;
             let integrationPanelHtml = `
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
+                    <div class="pdf-section integration-pipeline-diagram" style="margin-bottom: 10px; padding: 8px;">
+                        <img src="/static/docs/tableintegration.png" alt="Table integration overview" style="height: 210px; width: auto; max-width: 100%; object-fit: contain; border: 1px solid #dee2e6; border-radius: 4px; background: white; display: block;" />
+                    </div>
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches.</p>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
