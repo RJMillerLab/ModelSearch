@@ -22,6 +22,7 @@ if _repo_root not in sys.path:
 load_dotenv(os.path.join(_repo_root, ".env"), override=False)
 
 from src.config import CARD_CONTENT_RAW, OUTPUT_DIR
+from src.evaluate.nugget_schema import NUGGET_SCHEMA_HEADERS
 from src.llm.batch import main_batch_query
 from src.llm.model import query_openai, setup_openai
 
@@ -34,17 +35,7 @@ PROMPT_KEY = "nugget_schema_mapping"
 TEXT_EXTRACTION_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-4o-mini")
 CARD_MAX_CHARS = int(os.getenv("MODELSEARCHDEMO_CARD_MAX_CHARS", "100000"))
 
-OUTPUT_HEADERS = [
-    "Model",
-    "Base_model",
-    "Base_model_type",
-    "Train_dataset",
-    "Test_dataset",
-    "Hyperparam_name",
-    "Hyperparam_value",
-    "Metric_name",
-    "Metric_value",
-]
+OUTPUT_HEADERS = list(NUGGET_SCHEMA_HEADERS)
 
 
 def _norm(v: Any) -> str:
@@ -151,19 +142,6 @@ def _parse_markdown_table(response_text: str) -> list[dict[str, str]]:
         for i, raw_h in enumerate(header_cells):
             key = raw_h.lower().replace(" ", "_")
             header_map[key] = i
-        # Accept legacy LLM / older prompt table headers
-        _alias = {
-            "metric": "metric_name",
-            "model_hyperparameters": "hyperparam_name",
-            "model_variant_type": "base_model_type",
-            "model_hyperparam_name": "hyperparam_name",
-            "model_hyperparam_number": "hyperparam_value",
-            "hyperparam_number": "hyperparam_value",
-            "dataset": "train_dataset",
-        }
-        for old_k, new_k in _alias.items():
-            if old_k in header_map and new_k not in header_map:
-                header_map[new_k] = header_map[old_k]
         start = 1
         if start < len(lines) and _is_markdown_separator_row(lines[start]):
             start += 1
@@ -201,26 +179,26 @@ def _extract_global_hparam_rows(card_text: str) -> list[dict[str, str]]:
     m_epochs = re.search(r"trained\s+for\s+(\d+)\s+epochs?", src, flags=re.IGNORECASE)
     if m_epochs:
         r = _blank_nugget_row()
-        r["Hyperparam_name"] = "epochs"
-        r["Hyperparam_value"] = m_epochs.group(1)
+        r["Metric_name"] = "epochs"
+        r["Metric_value"] = m_epochs.group(1)
         rows.append(r)
 
     m_bs = re.search(r"batch\s+sizes?\s*:\s*([^\n]+)", src, flags=re.IGNORECASE)
     if m_bs:
         raw = _norm(m_bs.group(1))
         r = _blank_nugget_row()
-        r["Hyperparam_name"] = "batch_size"
+        r["Metric_name"] = "batch_size"
         num = _first_numeric_token(raw)
-        r["Hyperparam_value"] = num if num and raw == num else raw
+        r["Metric_value"] = num if num and raw == num else raw
         rows.append(r)
 
     m_lr = re.search(r"learning\s+rates?\s*:\s*([^\n]+)", src, flags=re.IGNORECASE)
     if m_lr:
         raw = _norm(m_lr.group(1))
         r = _blank_nugget_row()
-        r["Hyperparam_name"] = "learning_rate"
+        r["Metric_name"] = "learning_rate"
         num = _first_numeric_token(raw)
-        r["Hyperparam_value"] = num if num and raw == num else raw
+        r["Metric_value"] = num if num and raw == num else raw
         rows.append(r)
 
     return rows
@@ -232,18 +210,18 @@ def _apply_hparam_fallback(rows: list[dict[str, str]], card_text: str) -> tuple[
         return rows, ""
     out: list[dict[str, str]] = [dict(r) for r in rows]
     for er in extra:
-        key = (_norm(er.get("Hyperparam_name", "")), _norm(er.get("Hyperparam_value", "")))
+        key = (_norm(er.get("Metric_name", "")), _norm(er.get("Metric_value", "")))
         if not key[0]:
             continue
         exists = any(
-            (_norm(r.get("Hyperparam_name", "")), _norm(r.get("Hyperparam_value", ""))) == key for r in out
+            (_norm(r.get("Metric_name", "")), _norm(r.get("Metric_value", ""))) == key for r in out
         )
         if not exists:
             out.append(er)
     summary = "; ".join(
-        f"{_norm(e.get('Hyperparam_name', ''))}={_norm(e.get('Hyperparam_value', ''))}"
+        f"{_norm(e.get('Metric_name', ''))}={_norm(e.get('Metric_value', ''))}"
         for e in extra
-        if _norm(e.get("Hyperparam_name", ""))
+        if _norm(e.get("Metric_name", ""))
     )
     return out, summary
 
@@ -271,7 +249,7 @@ def _prepare_model_input(model_id: str) -> dict[str, Any]:
     template = _load_prompt_template()
     if not template:
         raise RuntimeError(f"Missing prompt key {PROMPT_KEY} in {PROMPT_PATH}")
-    prompt = template.replace("[[MODEL_CARD]]", card_in_prompt)
+    prompt = template.replace("[[MODEL_CARD]]", card_in_prompt).replace("[[TARGET_MODEL_ID]]", model_id)
     return {
         "model_id": model_id,
         "prompt_key": PROMPT_KEY,

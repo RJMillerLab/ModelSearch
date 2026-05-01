@@ -1,42 +1,39 @@
 # Single input: full Hugging Face model card (HTML / markdown / UI text).
 
 nugget_schema_mapping: |
-  Extract **nugget tuples** from the model card below into the markdown table at the end—**no other output**.
+  Extract nugget rows from the model card into the markdown table at the end. Return **only** the table.
 
-  **Global**
-  - **One row = one fact** — Do not merge many relations into one cell (no long `k=v; k=v` strings in `Metric_value`). From result tables: one output row per non-empty cell; repeat the same `Model` on each row that belongs to the same table row.
-  - **No extra “condition” column** — If the card mentions setup (5-shot, dev split, temperature, seed), reflect it only by choosing the right `Train_dataset` / `Test_dataset` / metric or hyperparam rows, not a new column.
-  - **If the card does not state it → leave the field empty** — Do not invent ids, scores, or datasets.
-  - **Keep fields short and entity-like** — `Train_dataset` / `Test_dataset` must be dataset or benchmark names, `Metric_name` must be the metric name, and `Metric_value` / `Hyperparam_value` must be values rather than names or long sentences.
+  TARGET MODEL ID (only extract rows for this repo id):
+  [[TARGET_MODEL_ID]]
 
-  **Fields (each column: what it means → what to put → example)**
+  Global rules:
+  - One row = one fact. Do not merge multiple facts into one row.
+  - Each relationship must be a separate nugget row. Example: (`Model`, `Dataset`, `Metric_name`, `Metric_value`) is one nugget; (`Model`, `Base_model`, `Model_variant_type`) is a different nugget row.
+  - If a leaderboard table contains many models, keep only rows that correspond to TARGET MODEL ID. Ignore other models.
+  - If a value is not explicitly stated in the card, leave it empty.
+  - No extra columns, no commentary, no JSON.
 
-  - **`Model`** — The checkpoint’s **display name** or the row entity for this fact. **Value:** short string as on the card. **Example:** `Llama-3.1-8B-Instruct`.
-
-  - **`Base_model`** — The **upstream** model id **only** if tags, YAML metadata, or prose **explicitly** name it (e.g. hub id “fine-tuned from …”). **Value:** hub-style id or exact name from the card; empty if not stated. **Example:** `meta-llama/Meta-Llama-3-8B`.
-
-  - **`Base_model_type`** — How this repo relates to `Base_model` (must align with `Base_model` when both are set). **Value:** exactly one of `finetuned` | `quantized` | `adaptor` | `merged`, lowercase; empty if unclear. Not model **size** (Tiny/Large). **Example:** `finetuned`.
-
-  - **`Train_dataset`** — Data the model was **trained** or **fine-tuned / transfer-learned** on (stated for training, not the eval benchmark). **Value:** short dataset or mix name/id only, not a sentence. **Example:** `OpenOrca`.
-
-  - **`Test_dataset`** — Data or benchmark used for **reported evaluation** when the card names it separately from training. **Value:** short benchmark/dataset name only, not a sentence. **Example:** `MMLU`.
-
-  - **`Hyperparam_name`** — A **single** structural or training scalar’s **name** (architecture or training config). **Value:** snake_case or short label. **Example:** `num_layers`.
-
-  - **`Hyperparam_value`** — The value paired with `Hyperparam_name` on the **same row**. **Value:** digits only for a plain number (no commas); otherwise a **short** normalized value string if the card gives a list or range. Do not put the hyperparameter name here. **Example:** `32` or `2e-5`.
-
-  - **`Metric_name`** — The **evaluation metric** label for this row. **Value:** metric name only, no units, no numbers, no dataset names, no sentence fragments. **Example:** `f1`.
-
-  - **`Metric_value`** — The numeric result for `Metric_name`. **Value:** ASCII number only (optional `-`, `.`, `e`); **never** `%`; never put metric names or prose here. If the card shows a percentage, convert to a **fraction in [0, 1]** (e.g. 92.3% → `0.923`). Count-style metrics (e.g. BLEU) stay as printed. **Example:** `0.923`.
-
-  **Pure dataset or pure hyperparam rows** — You may leave `Metric_name` / `Metric_value` empty when the row only links model ↔ data or model ↔ hyperparam. **Shared training hparams** (epochs, batch size, lr): prefer **one** hyperparam row per name–value, not copied into every metric row.
+  Columns:
+  - `Model`: row entity / model display name.
+  - `Base_model`: upstream model id only if explicitly stated in tags/YAML/prose (same behavior as before).
+  - `Model_variant_type`: one of `finetuned` | `quantized` | `adaptor` | `merged` (lowercase), else empty.
+  - `Dataset`: dataset or benchmark name for this fact. Since train/test is not required, use a single dataset column.
+  - `Metric_name`: expanded metric or scalar name only. No abbreviations.
+    - Write full names: `accuracy` (not `acc`), `precision` (not `prec`), `recall`, `f1`, `pass@1`, `num_layers`, `parameters`, etc.
+    - Hyperparameters are also allowed in `Metric_name` (for example `num_layers`, `learning_rate`, `parameters`).
+  - `Metric_value`: value paired with `Metric_name`.
+    - Must be value-only, not prose, with no extra text.
+    - If value is percentage, convert to fraction in [0, 1] and remove `%` (for example `92.3%` -> `0.923`).
+    - For parameter counts, use unit form only for very large values (for example `7B`, `32B`).
+    - For normal scalar counts, keep plain numeric form (for example `32`, `4096`, `2e-5`).
+    - Never put metric names in `Metric_value`.
 
   MODEL CARD:
   [[MODEL_CARD]]
 
-  Return **only** this fenced markdown table:
+  Return exactly this fenced markdown table format:
   ```markdown
-  | Model | Base_model | Base_model_type | Train_dataset | Test_dataset | Hyperparam_name | Hyperparam_value | Metric_name | Metric_value |
-  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-  | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+  | Model | Base_model | Model_variant_type | Dataset | Metric_name | Metric_value |
+  | --- | --- | --- | --- | --- | --- |
+  | ... | ... | ... | ... | ... | ... |
   ```

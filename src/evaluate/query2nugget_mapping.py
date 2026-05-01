@@ -24,30 +24,17 @@ if _repo_root not in sys.path:
 load_dotenv(os.path.join(_repo_root, ".env"), override=False)
 
 from src.config import OUTPUT_DIR
+from src.evaluate.nugget_schema import NUGGET_SCHEMA_HEADERS
 from src.llm.batch import main_batch_query
 from src.llm.model import query_openai, setup_openai
-
-# Keep in sync with src/evaluate/card2nugget_extraction.py OUTPUT_HEADERS
-NUGGET_SCHEMA_HEADERS = [
-    "Model",
-    "Base_model",
-    "Base_model_type",
-    "Train_dataset",
-    "Test_dataset",
-    "Hyperparam_name",
-    "Hyperparam_value",
-    "Metric_name",
-    "Metric_value",
-]
 
 QUERY_MAP_HEADERS = list(NUGGET_SCHEMA_HEADERS)
 
 # Job-merged integrated CSV (wrap_card_query_eval) adds provenance; not used for header matching.
 SOURCE_MODEL_ID_COLUMN = "source_model_id"
-MODEL_ROW_COLUMNS = frozenset({"Model", "Base_model", "Base_model_type"})
-DATASET_ROW_COLUMNS = frozenset({"Train_dataset", "Test_dataset"})
+MODEL_ROW_COLUMNS = frozenset({"Model", "Base_model", "Model_variant_type"})
+DATASET_ROW_COLUMNS = frozenset({"Dataset"})
 METRIC_ROW_COLUMNS = frozenset({"Metric_name", "Metric_value"})
-HYPERPARAM_ROW_COLUMNS = frozenset({"Hyperparam_name", "Hyperparam_value"})
 
 OUTPUT_HEADER_KEYWORD_JSON = os.path.join(OUTPUT_DIR, "evaluate", "query_header_keyword_mapping.json")
 OUTPUT_QRELS = os.path.join(OUTPUT_DIR, "evaluate", "real_subtopic.qrels")
@@ -445,10 +432,7 @@ def row_match_score(related: list[dict[str, Any]], cells: dict[str, str]) -> tup
         elif h in METRIC_ROW_COLUMNS:
             # Metric rows are only meaningful when the value exists.
             cell_candidates = [cells.get("Metric_value", "")]
-        elif h in HYPERPARAM_ROW_COLUMNS:
-            # Hyperparameter rows are only meaningful when the value exists.
-            cell_candidates = [cells.get("Hyperparam_value", "")]
-        elif h in ("Train_dataset", "Test_dataset"):
+        elif h in ("Dataset",):
             cell_candidates = [cells.get(k, "") for k in DATASET_ROW_COLUMNS]
         else:
             cell_candidates = [cells.get(h, "")]
@@ -471,8 +455,6 @@ def _haystack_for_filter_column(column: str, cells: dict[str, str]) -> str:
         return " ".join(cells.get(k, "") for k in sorted(MODEL_ROW_COLUMNS))
     if column in METRIC_ROW_COLUMNS:
         return cells.get("Metric_value", "")
-    if column in HYPERPARAM_ROW_COLUMNS:
-        return cells.get("Hyperparam_value", "")
     if column in DATASET_ROW_COLUMNS:
         return " ".join(cells.get(k, "") for k in sorted(DATASET_ROW_COLUMNS))
     return cells.get(column, "")
@@ -560,9 +542,7 @@ def _header_non_empty_for_row(header: str, cells: dict[str, str]) -> bool:
         return any(cells.get(k) for k in MODEL_ROW_COLUMNS)
     if header in METRIC_ROW_COLUMNS:
         return bool(cells.get("Metric_value", ""))
-    if header in HYPERPARAM_ROW_COLUMNS:
-        return bool(cells.get("Hyperparam_value", ""))
-    if header in ("Train_dataset", "Test_dataset"):
+    if header in ("Dataset",):
         return any(cells.get(k) for k in DATASET_ROW_COLUMNS)
     return bool(cells.get(header, ""))
 
