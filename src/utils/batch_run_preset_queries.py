@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import time
+from collections import Counter
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -129,6 +130,58 @@ def _poll_results(backend_url: str, job_id: str, poll_interval: float = 5.0, tim
             return data
         # Fallback: still not ready, wait and retry
         time.sleep(poll_interval)
+
+
+def _normalize_status(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text == "success":
+        return "success"
+    if text == "skipped":
+        return "skipped"
+    return "error"
+
+
+def _print_integration_batch_summary(all_outcomes: List[Dict[str, Any]]) -> None:
+    model_counts: Counter[str] = Counter()
+    table_counts: Counter[str] = Counter()
+    error_messages: Counter[str] = Counter()
+
+    for outcome in all_outcomes:
+        for mode, payload in (outcome.get("integration_model_search") or {}).items():
+            status = _normalize_status((payload or {}).get("status"))
+            model_counts[status] += 1
+            if status != "success":
+                message = str((payload or {}).get("message") or f"model::{mode} unknown error").strip()
+                error_messages[message] += 1
+
+        for search_type, per_source in (outcome.get("integration_table_search") or {}).items():
+            for tables_source, payload in (per_source or {}).items():
+                status = _normalize_status((payload or {}).get("status"))
+                table_counts[status] += 1
+                if status != "success":
+                    message = str(
+                        (payload or {}).get("message")
+                        or f"table::{search_type}::{tables_source} unknown error"
+                    ).strip()
+                    error_messages[message] += 1
+
+    print("Integration batch summary:")
+    print(
+        "  - model integration: "
+        f"success {model_counts['success']} / skipped {model_counts['skipped']} / error {model_counts['error']}"
+    )
+    print(
+        "  - table integration: "
+        f"success {table_counts['success']} / skipped {table_counts['skipped']} / error {table_counts['error']}"
+    )
+
+    if error_messages:
+        top_items = error_messages.most_common(5)
+        top_text = ", ".join(f"{msg} ({cnt})" for msg, cnt in top_items)
+        print(f"  - top errors: {top_text}")
+    else:
+        print("  - top errors: none")
+    print("")
 
 
 def run_one_query(
@@ -412,6 +465,9 @@ def main() -> int:
         )
         all_outcomes.append({"id": q_id, "query": q_text, **outcome})
         print("")
+
+    if args.run_integration:
+        _print_integration_batch_summary(all_outcomes)
 
     # Optionally dump a summary JSON under jobs_251117/batch_runs for inspection.
     summary_dir = os.path.join(JOBS_DIR, "batch_runs")

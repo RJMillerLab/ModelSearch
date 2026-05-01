@@ -15,6 +15,7 @@ No compatibility layers.
 import atexit, html, json, math, os, random, re, string, subprocess, sys, threading, time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import duckdb
 import pandas as pd
@@ -702,7 +703,25 @@ def make_table_page_response(path_q: str) -> Response:
     return Response(body, mimetype="text/html; charset=utf-8")
 
 
-def markdown_to_html(md_text: str) -> str:
+def _rewrite_local_markdown_links(md_text: str, *, base_dir: Optional[str]) -> str:
+    if not base_dir:
+        return md_text
+
+    def repl(match: re.Match) -> str:
+        label = match.group(1)
+        href = match.group(2).strip()
+        if not href or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", href) or href.startswith(("#", "/")):
+            return match.group(0)
+        target = href if os.path.isabs(href) else os.path.abspath(os.path.join(base_dir, href))
+        if not os.path.isfile(target) or os.path.splitext(target)[1].lower() != ".csv":
+            return match.group(0)
+        return f"[{label}](/api/table-page?path={quote(target)})"
+
+    return re.sub(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)", repl, md_text)
+
+
+def markdown_to_html(md_text: str, *, base_dir: Optional[str] = None) -> str:
+    md_text = _rewrite_local_markdown_links(md_text, base_dir=base_dir)
     try:
         import markdown  # type: ignore
         return markdown.markdown(md_text, extensions=["tables", "fenced_code"])
@@ -949,7 +968,7 @@ def integration_review_page(job_id: str):
             MARKDOWN_PAGE_HTML,
             title=f"Integration Review: {job_id}",
             path_display=md_path,
-            content_html=markdown_to_html(md_text),
+            content_html=markdown_to_html(md_text, base_dir=os.path.dirname(md_path)),
         )
         return Response(body, mimetype="text/html; charset=utf-8")
     except Exception as exc:
@@ -1008,7 +1027,7 @@ def evaluation_page(job_id: str):
         MARKDOWN_PAGE_HTML,
         title=f"Evaluation: {job_id}",
         path_display=md_path,
-        content_html=markdown_to_html(md_text),
+        content_html=markdown_to_html(md_text, base_dir=os.path.dirname(md_path)),
     )
     return Response(body, mimetype="text/html; charset=utf-8")
 
@@ -1189,9 +1208,52 @@ def integrate():
     else:
         retrieved_table_paths = [str(p).strip() for p in (payload.get("table_paths") or []) if str(p).strip()]
         integration_input_table_paths = ordered_unique_paths(retrieved_table_paths[:k])
-        df = TableIntegrater().run(local_table_paths(integration_input_table_paths), mode=integration_type)
+        resolved_table_paths = [p for p in local_table_paths(integration_input_table_paths) if p]
+        if not resolved_table_paths:
+            message = (
+                "No resolvable tables found for table-search integration. "
+                "Try increasing max_models or adjusting search_type/tables_source."
+            )
+            response_payload = {
+                "status": "skipped",
+                "message": message,
+                "integration_type": integration_type,
+                "search_type": search_type,
+                "k": k,
+                "max_models": max_models,
+                "tables_source": payload["tables_source"],
+                "integration_input_table_paths": integration_input_table_paths,
+                "resolved_table_paths": resolved_table_paths,
+                "grouped_integrated_tables": [],
+                **payload,
+            }
+            _save_json(
+                os.path.join(paths.job_dir, f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json"),
+                response_payload,
+            )
+            return jsonify(response_payload)
+
+        df = TableIntegrater().run(resolved_table_paths, mode=integration_type)
         if df is None:
-            raise ValueError("Table integration returned no output.")
+            message = "Table integration produced no output dataframe."
+            response_payload = {
+                "status": "error",
+                "message": message,
+                "integration_type": integration_type,
+                "search_type": search_type,
+                "k": k,
+                "max_models": max_models,
+                "tables_source": payload["tables_source"],
+                "integration_input_table_paths": integration_input_table_paths,
+                "resolved_table_paths": resolved_table_paths,
+                "grouped_integrated_tables": [],
+                **payload,
+            }
+            _save_json(
+                os.path.join(paths.job_dir, f"integration_table_search_{integration_type}_{search_type}_{tables_source}.json"),
+                response_payload,
+            )
+            return jsonify(response_payload)
         flat_grouped_results = [
             {
                 "query_table_path": "",
