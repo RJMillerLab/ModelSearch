@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from src.config import JOBS_DIR, OUTPUT_DIR
+from src.config import JOBS_DIR, OUTPUT_DIR, REPO_ROOT
 from src.evaluate.card2nugget_extraction import CARD2NUGGET_DIR, run_batch, _safe_model_id
 from src.evaluate.evaluate_pyndeval import load_run, load_subtopic_qrels, mean
 from src.evaluate.query2nugget_mapping import (
@@ -319,6 +319,7 @@ def _format_pipeline_match_markdown(
 ) -> str:
     semantic_methods = {"sparse", "dense", "hybrid"}
     query_header_set = set(query_headers)
+    figure_rel = os.path.relpath(str((Path(REPO_ROOT) / "docs" / "evaluation.png").resolve()), str(output_dir.resolve()))
 
     def _header_chip_html(header: str, *, hit: bool) -> str:
         s = str(header).strip().replace("`", "")
@@ -349,6 +350,17 @@ def _format_pipeline_match_markdown(
         return "<div style=\"display:flex;gap:4px;flex-wrap:wrap;\">" + " ".join(chips) + "</div>"
 
     lines = [
+        "![Nugget-based evaluation pipeline](" + figure_rel.replace("\\", "/") + ")",
+        "",
+        "This report follows the nugget pipeline in the figure above:",
+        "",
+        "1. **Extract nuggets from model cards (`card2nugget`)**",
+        "   Nuggets are defined for scientific leaderboard-style generation tasks.",
+        "   Each nugget tuple usually represents model hyperparameters or performance metrics.",
+        "",
+        "2. **Recognize query-related nuggets (`query2nugget`)**",
+        "   For the given query, we keep nuggets that match the query-related headers and use those matches for scoring.",
+        "",
         "# Pipeline summary",
         "",
         f"- Jobs JSON: `{jobs_path.resolve()}`",
