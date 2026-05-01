@@ -368,10 +368,10 @@
                 mount.innerHTML = '<span style="font-size:12px;color:#888;">Evaluation summary will appear here when available.</span>';
                 return;
             }
-            mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">Loading evaluation summary…</span></div>';
+            mount.innerHTML = '<span style="font-size:12px;color:#888;">Loading evaluation summary…</span>';
             const data = await fetchEvaluationSummary(j);
             if (!data || data.status !== 'success' || !data.available) {
-                mount.innerHTML = '<div class="evaluation-summary-panel"><span style="font-size:12px;color:#888;">No evaluation summary found for this job yet.</span></div>';
+                mount.innerHTML = '<span style="font-size:12px;color:#888;">No evaluation summary found for this job yet.</span>';
                 return;
             }
             applyNuggetScoresToRetrievalCards(data);
@@ -379,15 +379,11 @@
                 ? `<a href="${evaluationPageHref(j)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:#0056b3;text-decoration:none;">review full nugget extraction report</a>`
                 : '<span style="font-size:12px;color:#888;">Report not available yet.</span>';
             mount.innerHTML = `
-                <div class="evaluation-summary-panel">
-                    <div style="font-size:12px;color:#57606a;line-height:1.45;margin-bottom:8px;">
-                        Score: evaluation is nugget-based.
-                        <span style="margin-left:8px;">${reportLink}</span>
-                    </div>
-                    <div class="pdf-section pipeline-diagram-frame">
-                        <img class="pipeline-diagram-img" src="/static/docs/evaluation.png" alt="Nugget-based evaluation" />
-                    </div>
+                <div style="font-size:12px;color:#57606a;line-height:1.45;margin:4px 0 8px 0;">
+                    Score: evaluation is nugget-based.
+                    <span style="margin-left:8px;">${reportLink}</span>
                 </div>
+                <img src="/static/docs/evaluation.png" alt="Nugget-based evaluation" style="display:block;width:90%;max-width:100%;height:auto;margin:0;border:none;background:transparent;" />
             `;
         }
 
@@ -1025,10 +1021,12 @@
                           }).join(' ')
                         : '—'
                   }</div></div></div>`;
-            const headerRowHtml = `<div class="results-grid retrieval-header-strip retrieval-header-strip--scaled" style="margin-top: 2px; margin-bottom: 4px;">
-                <div>${seedModelCell}</div>
-                <div>${tablesNoteCell}</div>
-            </div>`;
+            const headerRowHtml = `
+                <div class="retrieval-header-rows" style="margin-top: 2px; margin-bottom: 6px;">
+                    <div class="retrieval-header-row">${seedModelCell}</div>
+                    <div class="retrieval-header-row">${tablesNoteCell}</div>
+                </div>
+            `;
 
             let jobIdStrip = (results.job_id != null && String(results.job_id).trim()) ? String(results.job_id).trim() : '';
             if (!jobIdStrip && typeof currentJobId !== 'undefined' && currentJobId) {
@@ -1243,10 +1241,8 @@
                         })()}
                     </div>
                 </div>
-                <div class="result-card" style="margin-top: 12px; padding: 10px 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-radius: 6px;">
-                    <div id="retrievalEvaluationSummaryMount" style="font-size: 12px; color: #888;">
-                        <div class="evaluation-summary-panel">Running nugget-based evaluation automatically...</div>
-                    </div>
+                <div id="retrievalEvaluationSummaryMount" style="margin-top: 10px; font-size: 12px; color: #888;">
+                    Running nugget-based evaluation automatically...
                 </div>
             `;
             
@@ -1261,8 +1257,13 @@
                 <div class="integration-section" style="${integrationCardStyle}; margin-top: 0;">
                     <h3 style="${integrationTitleStyle}">Table Integration</h3>
                     <p style="font-size: 12px; color: #5a6268; margin-bottom: 10px;">Integrate tables from both searches.</p>
-                    <div class="pdf-section pipeline-diagram-frame integration-diagram-frame">
-                        <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration.png" alt="Table integration overview" />
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; margin-bottom: 10px;">
+                        <div class="pdf-section pipeline-diagram-frame integration-diagram-frame" style="margin:0;">
+                            <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration1.png" alt="Table integration overview 1" />
+                        </div>
+                        <div class="pdf-section pipeline-diagram-frame integration-diagram-frame" style="margin:0;">
+                            <img class="pipeline-diagram-img integration-diagram-img" src="/static/docs/tableintegration2.png" alt="Table integration overview 2" />
+                        </div>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 6px;">
                         <div style="flex: 0 0 auto;"><label style="${topKLabelStyle}">integration method:</label><select id="integration_type" class="form-control" onchange="syncBothIntegrationDisplays();" style="width: 100px; box-sizing: border-box; padding: 4px 6px; font-size: 12px;">

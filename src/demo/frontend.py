@@ -220,6 +220,30 @@ RAW_HTML_TEMPLATE = """
         .results-grid.retrieval-header-strip > div {
             min-width: 0;
         }
+        /* Two-line retrieval header (no truncation in left column) */
+        .retrieval-header-rows {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0;
+        }
+        .retrieval-header-row {
+            margin: 0 0 2px 0;
+        }
+        .retrieval-header-rows .retrieval-seed-line {
+            white-space: normal;
+            flex-wrap: wrap;
+            align-items: baseline;
+        }
+        .retrieval-header-rows a.retrieval-seed-link {
+            overflow: visible;
+            text-overflow: clip;
+            white-space: normal;
+        }
+        .retrieval-header-rows .retrieval-table-links {
+            display: flex;
+            flex-wrap: wrap;
+            overflow: visible;
+        }
         .retrieval-seed-col {
             font-size: 12px;
             color: #666;
@@ -315,6 +339,7 @@ RAW_HTML_TEMPLATE = """
         .result-list {
             list-style: none;
             padding: 0;
+            margin: 0;
         }
         .result-item {
             padding: 4px 6px;
