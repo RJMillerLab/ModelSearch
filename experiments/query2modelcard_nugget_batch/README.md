@@ -30,27 +30,27 @@ python experiments/query2modelcard_nugget_batch/run_batch_eval.py --jobs-json <b
 3. `query2nugget`: batch-map all queries to selected headers and optional constraints.
 4. `filter`: for each query + method + top-k group, filter candidate nugget CSVs and record method scores/rankings.
 
-## Smoke Run
+## Recommended Run
 
-Backend mode, first 5 queries:
+Use the polished model recommendation query set here, not the old smoke / 15-example files:
 
 ```bash
 python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
   --queries-file data_251117/query/query_rewrite_polished.jsonl \
-  --limit-jobs 5 \
-  --top-k 1 3 \
+  --top-k 1 3 5 10 \
   --query-llm-mode batch \
   --card-llm-mode batch \
   --match-build structured
 ```
 
-Reuse mode, first saved job:
+`run_batch_eval.py` will automatically request enough `query2modelcard` results to cover the largest requested `--top-k`, then reuse the deduped model-card list for batch `modelcard2nugget` extraction and per-query/per-top-k filtering.
+
+Reuse an existing query2modelcard intermediate:
 
 ```bash
 python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
   --jobs-json jobs_251117/batch_runs/batch_preset_queries_20260501_154026.json \
-  --limit-jobs 1 \
-  --top-k 1 3 \
+  --top-k 1 3 5 10 \
   --query-llm-mode batch \
   --card-llm-mode batch \
   --match-build structured

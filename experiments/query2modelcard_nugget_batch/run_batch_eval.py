@@ -138,10 +138,12 @@ def extract_method_model_sets(
     *,
     jobs_root: Path,
     preferred_table_sources: list[str],
+    model_cap: int,
 ) -> list[dict[str, Any]]:
     job_dir = _job_artifact_dir(item, jobs_root)
     search_resp = item.get("search_response") if isinstance(item.get("search_response"), dict) else {}
-    model_top_k = int(search_resp.get("model_top_k", 3) or 3)
+    job_model_cap = int(search_resp.get("model_top_k", 3) or 3)
+    effective_model_cap = max(0, max(job_model_cap, model_cap))
     out_by_method: dict[str, dict[str, Any]] = {}
 
     ims = item.get("integration_model_search")
@@ -149,7 +151,7 @@ def extract_method_model_sets(
         for method, payload in ims.items():
             if not isinstance(payload, dict):
                 continue
-            model_ids = _first_n(_ids_from_payload(payload), model_top_k)
+            model_ids = _first_n(_ids_from_payload(payload), effective_model_cap)
             status = str(payload.get("status", "")).strip() or ("success" if model_ids else "")
             note = str(payload.get("message", "")).strip()
             method_name = str(method).strip()
@@ -160,17 +162,17 @@ def extract_method_model_sets(
     q2mc_results = q2mc.get("results", {}) if isinstance(q2mc.get("results"), dict) else {}
     for method in MODEL_METHODS:
         if method not in out_by_method and isinstance(q2mc_results.get(method), list):
-            ids = _first_n(_unique_keep(q2mc_results.get(method)), model_top_k)
+            ids = _first_n(_unique_keep(q2mc_results.get(method)), effective_model_cap)
             out_by_method[method] = {"method": method, "model_ids": ids, "status": "success" if ids else "", "note": ""}
 
     for method in TABLE_METHODS:
         ids, status, note = _table_ids_from_summary(item, method, preferred_table_sources)
         if not ids:
-            ids = _first_n(_table_ids_from_job_file(job_dir, method), model_top_k)
+            ids = _first_n(_table_ids_from_job_file(job_dir, method), effective_model_cap)
             status = "success" if ids else ""
             note = "from_job_file" if ids else ""
         if ids:
-            out_by_method[method] = {"method": method, "model_ids": _first_n(ids, model_top_k), "status": status, "note": note}
+            out_by_method[method] = {"method": method, "model_ids": _first_n(ids, effective_model_cap), "status": status, "note": note}
 
     return [out_by_method[m] for m in METHOD_ORDER if m in out_by_method]
 
@@ -238,6 +240,7 @@ def load_jobs(
     *,
     limit_jobs: int | None,
     preferred_table_sources: list[str],
+    model_cap: int,
     jobs_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     payload = json.loads(jobs_json.read_text(encoding="utf-8"))
@@ -258,6 +261,7 @@ def load_jobs(
             item,
             jobs_root=jobs_root,
             preferred_table_sources=preferred_table_sources,
+            model_cap=model_cap,
         )
         model_ids = _unique_keep(mid for method in method_model_sets for mid in method.get("model_ids", []))
         if model_ids:
@@ -473,14 +477,21 @@ def main() -> None:
     out_dir.mkdir(parents=True)
 
     jobs_root: Path | None = None
+    requested_top_k_cap = max([int(k) for k in args.top_k if int(k) > 0] or [1])
     if args.queries_file:
+        effective_backend_model_top_k = max(int(args.backend_model_top_k), requested_top_k_cap)
+        if effective_backend_model_top_k != int(args.backend_model_top_k):
+            print(
+                f"[backend] bump backend_model_top_k {args.backend_model_top_k} -> {effective_backend_model_top_k} "
+                f"to cover requested top-k={requested_top_k_cap}"
+            )
         jobs_json = run_query2modelcard_backend(
             args.queries_file,
             args.backend_intermediate_output or (out_dir / "query2modelcard_backend_intermediate.json"),
             backend_url=args.backend_url,
             limit_jobs=args.limit_jobs,
             backend_top_k=args.backend_top_k,
-            backend_model_top_k=args.backend_model_top_k,
+            backend_model_top_k=effective_backend_model_top_k,
             backend_table_search_k=args.backend_table_search_k,
             backend_use_by_type=bool(args.backend_use_by_type),
             backend_run_integration=not bool(args.skip_backend_integration),
@@ -495,7 +506,13 @@ def main() -> None:
     else:
         jobs_json = args.jobs_json
 
-    jobs = load_jobs(jobs_json, limit_jobs=args.limit_jobs, preferred_table_sources=args.table_sources, jobs_root=jobs_root)
+    jobs = load_jobs(
+        jobs_json,
+        limit_jobs=args.limit_jobs,
+        preferred_table_sources=args.table_sources,
+        model_cap=requested_top_k_cap,
+        jobs_root=jobs_root,
+    )
     if not jobs:
         raise RuntimeError(f"No valid jobs found in {jobs_json}")
     print(f"[load] jobs={len(jobs)} from {jobs_json}")
