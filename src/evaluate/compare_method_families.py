@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from src.config import OUTPUT_DIR
-from src.evaluate.query2nugget_mapping import NUGGET_SCHEMA_HEADERS, _header_non_empty_for_row, _row_dict
+from src.evaluate.nugget_schema import NUGGET_SCHEMA_HEADERS
+from src.evaluate.query2nugget_match import _header_non_empty_for_row, _row_dict
 
 MODEL_SEARCH_METHODS = ("sparse", "dense", "hybrid")
 TABLE_SEARCH_METHODS = ("keyword", "single_column", "unionable")

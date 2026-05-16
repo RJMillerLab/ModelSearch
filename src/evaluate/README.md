@@ -18,10 +18,16 @@ Writes per-model CSV + meta under `data_251117/card2nugget/`. Batch API request 
 
 ## 2. Query → nugget schema headers (LLM)
 
-After step 1, map queries (default: OpenAI Batch) and optionally build `qrels` / `.run` from the CSVs under `data_251117/card2nugget/`. Use `--llm-mode iter` for sync chat per query if Batch stalls.
+After step 1, map queries and optionally build `qrels` / `.run` from the CSVs under `data_251117/card2nugget/`.
 
 ```bash
 python -m src.evaluate.query2nugget_mapping --queries-file data_251117/query/toy_data/queries.txt --build-qrels-run
+```
+
+Use the separate Batch API wrapper when running many queries:
+
+```bash
+python -m src.evaluate.query2nugget_mapping_batch --queries-file data_251117/query/toy_data/queries.txt --build-qrels-run
 ```
 
 Writes `query_header_keyword_mapping.json`, `real_subtopic.qrels`, `real_initial.run`, and `query_csv_match_debug.json` under `data_251117/evaluate/` by default.
@@ -81,4 +87,3 @@ Compare `keyword/single_column/unionable` vs `sparse/dense/hybrid` across a whol
 python -m src.evaluate.compare_method_families \
   --jobs-json jobs_251117/batch_runs/batch_preset_queries_20260330_025232.json
 ```
-

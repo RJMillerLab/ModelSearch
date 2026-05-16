@@ -15,15 +15,16 @@ from typing import Any, Literal
 from src.config import JOBS_DIR, OUTPUT_DIR, REPO_ROOT
 from src.evaluate.card2nugget_extraction import CARD2NUGGET_DIR, run_batch, _safe_model_id
 from src.evaluate.evaluate_pyndeval import load_run, load_subtopic_qrels, mean
-from src.evaluate.query2nugget_mapping import (
-    NUGGET_SCHEMA_HEADERS,
+from src.evaluate.nugget_schema import NUGGET_SCHEMA_HEADERS
+from src.evaluate.query2nugget_mapping import map_queries
+from src.evaluate.query2nugget_match import (
     build_qrels_and_run_llm_rerank,
     build_qrels_and_run_structured,
     count_csv_data_rows,
-    map_queries,
     _header_non_empty_for_row,
     _row_dict,
 )
+from src.evaluate.query2nugget_mapping_batch import map_queries_batch
 from src.utils.modelcard_snapshots import dump_modelcard_snapshots, snapshot_path_for_model_id
 
 PIPELINE_DIR = Path(JOBS_DIR)
@@ -749,7 +750,8 @@ def main() -> None:
         cluster_name = _safe_name(job_id)
 
         print(f"[jobs] job_id={job_id} | cluster_dir={cluster_name} | models={len(model_ids)}")
-        query_maps = map_queries([query], model=args.model, llm_mode=args.llm_mode)
+        query_map_fn = map_queries_batch if args.llm_mode == "batch" else map_queries
+        query_maps = query_map_fn([query], model=args.model)
         cluster_out_dir = out_dir / cluster_name / "evaluate"
         cluster_out_dir.mkdir(parents=True, exist_ok=True)
         match_log_md = cluster_out_dir / "pipeline_match_log.md"
