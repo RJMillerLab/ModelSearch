@@ -2,7 +2,6 @@
 
 | title | link | note |
 | --- | --- | --- |
-| UniDocBench | [`query_example_unidocbench.py`](../../others/unidoc/query_example_unidocbench.py) | QA query synthesis template for scientific documents; we only keep a small filtered subset for model selection, and most generated queries are unrelated. |
 | LitSearch | https://aclanthology.org/2024.emnlp-main.840/ | Closest explicit literature-search query benchmark; for our task we reuse the query text and replace `paper` / `studies` with `models`. |
 | LitSearch query subset | https://huggingface.co/datasets/yale-nlp/LitSearch-NLP-Class/viewer/query?row=6 | Query-only subset we can reuse directly as recommendation-style query data. |
 | SPRD / Scholarly Paper Recommendation Dataset | https://link.springer.com/article/10.1007/s00799-022-00339-w | Manual relevance judgments for scholarly paper recommendation; good for evaluation, not a natural-language query benchmark. |

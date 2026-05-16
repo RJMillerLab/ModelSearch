@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from src.evaluate.query2nugget_mapping import (
     _header_non_empty_for_row,
     _row_dict,
 )
+from src.utils.modelcard_snapshots import dump_modelcard_snapshots, snapshot_path_for_model_id
 
 PIPELINE_DIR = Path(JOBS_DIR)
 
@@ -307,6 +309,55 @@ def _md_file_link(path_str: str, *, base_dir: Path) -> str:
     return f"[{name}]({rel})"
 
 
+def _format_archived_modelcards_markdown(*, output_dir: Path, model_ids: list[str]) -> list[str]:
+    unique_model_ids = sorted({str(mid).strip() for mid in model_ids if str(mid).strip()})
+    if not unique_model_ids:
+        return []
+
+    dump_modelcard_snapshots(unique_model_ids)
+    lines = [
+        "## Model Card Snapshots From Our Dump",
+        "",
+        "These snapshots are the model-card text used by our card2nugget extraction from the 2025-09-25 dump dataset. Hugging Face model cards may have changed since then, so we include them to make the reported nuggets reproducible and inspectable against the exact evaluation input.",
+        "",
+    ]
+    max_preview_chars = 60000
+    for model_id in unique_model_ids:
+        snapshot_path = snapshot_path_for_model_id(model_id)
+        if not snapshot_path.is_file():
+            lines.append(f"- `{model_id}`: archived snapshot missing from dump dataset")
+            continue
+        snapshot_link = _md_file_link(str(snapshot_path), base_dir=output_dir)
+        hf_link = f"[`{model_id}`](https://huggingface.co/{model_id})"
+        card_text = snapshot_path.read_text(encoding="utf-8")
+        preview_text = card_text[:max_preview_chars]
+        truncated_note = ""
+        if len(card_text) > max_preview_chars:
+            truncated_note = f"\n\n[preview truncated at {max_preview_chars} chars; open the snapshot file above for the full archived card]"
+        lines.extend(
+            [
+                f"### `{model_id}`",
+                "",
+                f"- Current HF link: {hf_link}",
+                f"- Snapshot file: {snapshot_link}",
+                "",
+                "<details>",
+                f"<summary>Model card snapshot for <code>{html.escape(model_id)}</code></summary>",
+                "",
+                (
+                    "<pre style=\"white-space:pre-wrap;max-height:520px;overflow:auto;"
+                    "border:1px solid #d0d7de;border-radius:8px;padding:12px;background:#f6f8fa;\">"
+                    f"{html.escape(preview_text + truncated_note)}"
+                    "</pre>"
+                ),
+                "",
+                "</details>",
+                "",
+            ]
+        )
+    return lines
+
+
 def _format_pipeline_match_markdown(
     *,
     output_dir: Path,
@@ -389,6 +440,16 @@ def _format_pipeline_match_markdown(
             "",
             "_`card2nugget` = raw nugget rows extracted per model card; `query2nugget` = rows where any query-selected header is non-empty._",
             "",
+        ]
+    )
+    lines.extend(
+        _format_archived_modelcards_markdown(
+            output_dir=output_dir,
+            model_ids=[str(row.get("model_id", "")).strip() for row in card_rows],
+        )
+    )
+    lines.extend(
+        [
             "## Method Summary",
             "",
             "| family | method | model_count | card2nugget_sum* | card2nugget_dedup# | query2nugget_sum* | query2nugget_dedup# | nugget_csv |",
@@ -556,6 +617,7 @@ def _run_cluster(
         "newly_created": len(new_outputs),
         "match_build": match_build,
         "query_headers": query_headers,
+        "query_maps": query_maps,
         "card_rows": card_rows,
         "query_method_counts": query_method_counts,
         "methods": method_runs,

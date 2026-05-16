@@ -1,29 +1,60 @@
-# Step 1 only: map a user query → relevant nugget headers (no values/filters here).
+# Step 1: map a user query to minimum nugget headers and optional value constraints.
 
 query_to_nugget_headers: |
-  You only do Step 1 now: select relevant headers for the user query.
-  Do not add values, filters, constraints, clusters, or explanations.
+  Select the minimum necessary nugget headers for the user query, plus any explicit/strongly implied header-value constraints for later fuzzy filtering.
 
-  Allowed headers (exact string only):
+  Allowed headers:
   [[HEADERS_YAML]]
 
-  Header meaning (must stay exactly aligned with card2nugget field guidance):
-  - `Model`: the model **display name** / checkpoint identity for the row.
-  - `Base_model`: upstream base only when the card/tags **explicitly** state where it comes from.
-  - `Model_variant_type`: relationship to that base (`finetuned`, `quantized`, `adaptor`, `merged`).
-  - `Dataset`: one unified dataset/benchmark column (train/test are merged).
-  - `Metric_name`: metric label or scalar name; hyperparameters can also appear here (e.g. `num_layers`, `parameters`).
-  - `Metric_value`: value paired with `Metric_name` (value-only; convert percentages to [0, 1] fractions and remove `%`; use `7B`/`32B` for very large parameter counts).
+  Policy:
+  - Choose the smallest header set needed for the query intent.
+  - Do not include `Model` just because the query asks "which models"; include it only when model identity/name/family itself matters.
+  - `Base_model` means the upstream model id from fixed HF metadata/tags in the card, not a guessed source model from the query.
+  - `Model_variant_type` means the HF variant relationship/type in the card, such as `finetuned`, `quantized`, `adaptor`, or `merged`. Use it only when the query is asking for the model's HF variant identity or relationship, e.g. "BERT quantized version" or "which quantized variants".
+  - If the query only says a model is "quantized with 2-bit" or similar property text and does not ask for a specific model variant identity, prefer `Metric_name=quantization_bits` and `Metric_value=2-bit`.
+  - Use `Dataset` for named/implied datasets, benchmarks, domains, corpora, or evaluation settings.
+  - Do not turn broad task names such as code generation or text-to-SQL into `Dataset` constraints unless a specific dataset/benchmark/corpus is named.
+  - `Dataset` in `header_values` must be a specific named dataset, benchmark, or corpus. Broad task/domain phrases may affect selected headers, but they are not value constraints.
+  - Use `Metric_name` + `Metric_value` for scores, performance, thresholds, size, latency, context length, memory, quantization bits, or other scalar/hyperparameter facts.
+  - For threshold-style constraints, normalize natural language into comparison text when helpful, e.g. `fewer than 1B` -> `<1B`.
+  - `header_values` are optional fuzzy constraints from the query, e.g. Dataset=Spider, Metric_name=execution accuracy, Metric_value=<1B, Metric_value=4-bit, Metric_name=quantization_bits.
+  - Do not create a `header_values` entry merely because a header is selected. Add one only when the query states a concrete constraint, target value, named metric, named dataset, or comparison condition.
+  - If the query asks to retrieve a value without specifying a constraint for that value, select the header but leave its value unconstrained.
+  - If no constraint is specified, return empty `header_values`.
+  - `related` usually mirrors `selected_headers`; add broad recall headers only when useful.
+  - Output JSON only. No explanation.
 
-  Selection policy:
-  - Default to broad recall.
-  - Do not force value-level narrowing for general intents (e.g., question answering, summarization).
-  - Only select headers relevant to query intent.
+  Anchor:
+  - `quantized with 2-bit` without a specific model-variant question -> `Metric_name=quantization_bits`, `Metric_value=2-bit`.
+  - `BERT quantized version` or similar variant-identity question -> `Model_variant_type=quantized`.
 
-  Output format (NOT JSON):
-  - Return plain text, one header per line.
-  - Each line must be exactly one allowed header string.
-  - No bullets, no numbering, no extra words.
+  Schema:
+  {
+    "selected_headers": ["..."],
+    "header_values": [{"header":"...","contains":"..."}],
+    "related": [{"header":"...","keywords":["..."]}]
+  }
 
   User query:
   [[USER_QUERY]]
+
+query_to_nugget_filter: |
+  Pick nugget rows that answer the query.
+  Constraints are fuzzy but binding: match aliases, metric/dataset names, units, thresholds, and bits by meaning.
+  Use three-valued constraint logic: satisfied, unknown, contradicted. Unknown is allowed for relaxed matching; reject only contradicted models/rows.
+  Bind header-specific constraints together: Metric_name=parameters + Metric_value=<1B means parameter count <1B when a parameter row exists; if no parameter row exists for that model, treat it as unknown.
+  For multi-fact queries, a model may use same-Model rows as support evidence, but answer rows must be the final nuggets requested.
+  Reject rows/models that violate constraints; never pick a row whose own evidence contradicts the query.
+  For queries asking for models under a threshold, include relaxed model-level rows when the threshold evidence is unknown and no same-model row contradicts it.
+  If constraints are empty, do not invent them. If none match, return {"picked": []}.
+  JSON only: {"picked":[{"table":"<stem>","row_idx":<int>,"supporting_evidence":[{"table":"<stem>","row_idx":<int>,"why":"short reason"}]}]}.
+  Do not include support-only rows as answers unless directly requested. Prefer <=30 answers.
+
+  Query:
+  [[USER_QUERY]]
+
+  Extracted constraints:
+  [[HEADER_VALUES_JSON]]
+
+  Candidates (tab-separated):
+  [[CANDIDATE_ROWS]]

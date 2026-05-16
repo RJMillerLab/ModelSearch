@@ -36,14 +36,14 @@ def query_openai(prompt, mode='azure', model='gpt-35-turbo', max_tokens=1200, **
     if mode == 'openai':
         response = openai.chat.completions.create(model=model,
                                              messages=[{'role': 'user', 'content': prompt}],
-                                             max_tokens=max_tokens,
+                                             max_completion_tokens=max_tokens,
                                              **kwargs
                                              )
     else:
         response = openai.chat.completions.create(
             deployment_id=model,
             messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=max_tokens,
+            max_completion_tokens=max_tokens,
             **kwargs,
         )
     return response.choices[0].message.content

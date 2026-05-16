@@ -46,14 +46,26 @@ CARD2NUGGET_DIR = Path(OUTPUT_DIR) / "card2nugget"
 
 PROMPT_PATH = Path("src/evaluate/query2nugget_prompts.yaml")
 PROMPT_KEY = "query_to_nugget_headers"
-TEXT_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-4o-mini")
+FILTER_PROMPT_KEY = "query_to_nugget_filter"
+TEXT_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-5.4-mini")
 
 
-def _load_prompt_template() -> str:
+def _load_prompt_template(prompt_key: str = PROMPT_KEY) -> str:
     if not PROMPT_PATH.exists():
         return ""
     data = yaml.safe_load(PROMPT_PATH.read_text(encoding="utf-8")) or {}
-    return str(data.get(PROMPT_KEY, "")).strip()
+    return str(data.get(prompt_key, "")).strip()
+
+
+def _build_filter_prompt(query: str, header_values: list[dict[str, str]], candidate_lines: list[str]) -> str:
+    template = _load_prompt_template(FILTER_PROMPT_KEY)
+    if not template:
+        raise RuntimeError(f"Missing prompt key {FILTER_PROMPT_KEY} in {PROMPT_PATH}")
+    return (
+        template.replace("[[USER_QUERY]]", query.strip())
+        .replace("[[HEADER_VALUES_JSON]]", json.dumps(header_values, ensure_ascii=False))
+        .replace("[[CANDIDATE_ROWS]]", "\n".join(candidate_lines))
+    )
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -217,6 +229,16 @@ def _clusters_from_parsed(parsed: dict[str, Any]) -> list[dict[str, Any]]:
 def _validate_and_normalize(parsed: dict[str, Any], user_query: str) -> dict[str, Any]:
     q = str(parsed.get("query", "")).strip() or user_query
     clusters = _clusters_from_parsed(parsed)
+    if not clusters:
+        selected = parsed.get("selected_headers", [])
+        if isinstance(selected, list):
+            related = [
+                {"header": str(h).strip(), "keywords": []}
+                for h in selected
+                if str(h).strip() in QUERY_MAP_HEADERS
+            ]
+            if related:
+                clusters = [{"related": related, "filters": []}]
     flat_related: list[dict[str, Any]] = []
     seen_h: set[str] = set()
     for c in clusters:
@@ -225,7 +247,23 @@ def _validate_and_normalize(parsed: dict[str, Any], user_query: str) -> dict[str
             if h and h not in seen_h:
                 seen_h.add(h)
                 flat_related.append({"header": h, "keywords": list(it.get("keywords", []))})
-    return {"query": q, "related": flat_related, "clusters": clusters, "header_list": [x["header"] for x in flat_related]}
+    out: dict[str, Any] = {"query": q, "related": flat_related, "clusters": clusters, "header_list": [x["header"] for x in flat_related]}
+    header_values = parsed.get("header_values", [])
+    if isinstance(header_values, list):
+        out["header_values"] = [
+            {"header": str(x.get("header", "")).strip(), "contains": str(x.get("contains", "")).strip()}
+            for x in header_values
+            if isinstance(x, dict)
+            and str(x.get("header", "")).strip() in QUERY_MAP_HEADERS
+            and str(x.get("contains", "")).strip()
+        ]
+        for hv in out["header_values"]:
+            h = hv["header"]
+            if h not in seen_h:
+                seen_h.add(h)
+                out["related"].append({"header": h, "keywords": []})
+                out["header_list"].append(h)
+    return out
 
 
 def _norm_cell(v: Any) -> str:
@@ -575,7 +613,13 @@ def _collect_llm_rerank_candidates(
     return candidates, csv_errors
 
 
-def _llm_pick_row_indices(query: str, candidates: list[dict[str, Any]], *, model: str | None) -> tuple[list[tuple[str, int]], str]:
+def _llm_pick_rows_with_evidence(
+    query: str,
+    candidates: list[dict[str, Any]],
+    *,
+    header_values: list[dict[str, str]],
+    model: str | None,
+) -> tuple[list[dict[str, Any]], str]:
     if not candidates:
         return [], ""
     if not os.getenv("OPENAI_API_KEY"):
@@ -583,21 +627,16 @@ def _llm_pick_row_indices(query: str, candidates: list[dict[str, Any]], *, model
     lines = []
     for i, c in enumerate(candidates):
         lines.append(f"{i}\ttable={c['table']}\trow_idx={c['row_idx']}\tjson={json.dumps(c['cells'], ensure_ascii=False)}")
-    body = (
-        "Given a user search query and candidate rows (from model-card tables), pick row indices that best answer the query.\n"
-        "Return valid JSON only, no markdown. Shape: {\"picked\": [{\"table\": \"<stem>\", \"row_idx\": <int>}, ...]}\n"
-        "Use [] if none apply. Prefer at most 30 rows, most relevant first.\n\n"
-        f"Query:\n{query}\n\nCandidates (tab-separated):\n" + "\n".join(lines)
-    )
+    body = _build_filter_prompt(query, header_values, lines)
     setup_openai("", mode="openai")
-    raw = query_openai(body, mode="openai", model=model or TEXT_MODEL, max_tokens=1200, temperature=0.0) or ""
+    raw = query_openai(body, mode="openai", model=model or TEXT_MODEL, max_tokens=1200) or ""
     parsed = _extract_json_object(raw)
     if not parsed:
         return [], "llm_parse_failed"
     picked = parsed.get("picked")
     if not isinstance(picked, list):
         return [], "llm_bad_shape"
-    out: list[tuple[str, int]] = []
+    out: list[dict[str, Any]] = []
     for p in picked:
         if not isinstance(p, dict):
             continue
@@ -606,9 +645,154 @@ def _llm_pick_row_indices(query: str, candidates: list[dict[str, Any]], *, model
             ri = int(p.get("row_idx"))
         except (TypeError, ValueError):
             continue
-        if t:
-            out.append((t, ri))
+        if not t:
+            continue
+        evidence: list[dict[str, Any]] = []
+        raw_evidence = p.get("supporting_evidence", [])
+        if isinstance(raw_evidence, list):
+            for e in raw_evidence:
+                if not isinstance(e, dict):
+                    continue
+                et = str(e.get("table", "")).strip()
+                try:
+                    eri = int(e.get("row_idx"))
+                except (TypeError, ValueError):
+                    continue
+                if et:
+                    evidence.append({"table": et, "row_idx": eri, "why": str(e.get("why", "")).strip()})
+        out.append({"table": t, "row_idx": ri, "supporting_evidence": evidence})
     return out, ""
+
+
+def _norm_for_match(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _number_with_unit(text: str) -> float | None:
+    m = re.search(r"[-+]?(?:\d+\.?\d*|\d*\.?\d+)", text or "")
+    if not m:
+        return None
+    value = float(m.group(0))
+    suffix = (text or "")[m.end() : m.end() + 1].lower()
+    if suffix == "b":
+        value *= 1_000_000_000
+    elif suffix == "m":
+        value *= 1_000_000
+    elif suffix == "k":
+        value *= 1_000
+    return value
+
+
+def _is_less_than_one_b(text: str) -> bool:
+    norm = re.sub(r"\s+", "", (text or "").lower())
+    return any(
+        token in norm
+        for token in (
+            "<1b",
+            "<=1b",
+            "lessthan1b",
+            "lessthan1b",
+            "under1b",
+            "fewerthan1b",
+            "parametercount<1b",
+            "paramcount<1b",
+        )
+    )
+
+
+def _bit_constraint_value(text: str) -> str:
+    m = re.search(r"(\d+)\s*-?\s*bit", text or "", flags=re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def _metric_constraints_for_answer(header_values: list[dict[str, str]]) -> list[str]:
+    metric_names = [
+        str(x.get("contains", "")).strip()
+        for x in header_values
+        if str(x.get("header", "")).strip() == "Metric_name" and str(x.get("contains", "")).strip()
+    ]
+    if len(metric_names) <= 1:
+        return metric_names
+    support_metrics = {"quantization_bits", "quantizationbits", "bitwidth", "bits", "precision"}
+    answer_metrics = [m for m in metric_names if _norm_for_match(m) not in support_metrics]
+    return answer_metrics or metric_names
+
+
+def _answer_metrics_are_support_scalars(answer_metric_constraints: list[str]) -> bool:
+    support_metrics = {"quantization_bits", "quantizationbits", "bitwidth", "bits", "precision"}
+    return bool(answer_metric_constraints) and all(_norm_for_match(x) in support_metrics for x in answer_metric_constraints)
+
+
+def _answer_does_not_contradict_constraints(cells: dict[str, str], header_values: list[dict[str, str]]) -> bool:
+    answer_metric_constraints = _metric_constraints_for_answer(header_values)
+    for cons in header_values:
+        header = str(cons.get("header", "")).strip()
+        needle = str(cons.get("contains", "")).strip()
+        needle_norm = _norm_for_match(needle)
+        if not header or not needle_norm:
+            continue
+        if header == "Dataset" and " " not in needle.strip():
+            if needle_norm not in _norm_for_match(cells.get("Dataset", "")):
+                return False
+        if header == "Metric_name":
+            if needle not in answer_metric_constraints:
+                continue
+            metric_norm = _norm_for_match(cells.get("Metric_name", ""))
+            if needle_norm in {"performance", "score", "scores"}:
+                if not cells.get("Metric_value"):
+                    return False
+            elif needle_norm not in metric_norm:
+                return False
+        if header == "Metric_value" and _is_less_than_one_b(needle):
+            metric_norm = _norm_for_match(cells.get("Metric_name", ""))
+            value = _number_with_unit(cells.get("Metric_value", ""))
+            if "parameter" in metric_norm and value is not None and value >= 1_000_000_000:
+                return False
+        if header == "Metric_value" and _bit_constraint_value(needle) and _answer_metrics_are_support_scalars(answer_metric_constraints):
+            bit_value = _bit_constraint_value(needle)
+            value_norm = _norm_for_match(cells.get("Metric_value", ""))
+            if value_norm not in {bit_value, f"{bit_value}bit"}:
+                return False
+    return True
+
+
+def _has_parameter_threshold(header_values: list[dict[str, str]]) -> bool:
+    has_parameter = any(
+        str(x.get("header", "")).strip() == "Metric_name" and "parameter" in _norm_for_match(str(x.get("contains", "")))
+        for x in header_values
+    )
+    has_threshold = any(
+        str(x.get("header", "")).strip() == "Metric_value" and _is_less_than_one_b(str(x.get("contains", "")))
+        for x in header_values
+    )
+    return has_parameter and has_threshold
+
+
+def _relaxed_unknown_parameter_rows(candidates: list[dict[str, Any]], header_values: list[dict[str, str]]) -> list[dict[str, Any]]:
+    if not _has_parameter_threshold(header_values):
+        return []
+    rows_by_model: dict[str, list[dict[str, Any]]] = {}
+    for c in candidates:
+        model = str(c.get("cells", {}).get("Model", "")).strip()
+        if model:
+            rows_by_model.setdefault(model, []).append(c)
+    out: list[dict[str, Any]] = []
+    for model, rows in rows_by_model.items():
+        contradicted = False
+        chosen = rows[0]
+        for row in rows:
+            cells = row.get("cells", {})
+            metric_norm = _norm_for_match(str(cells.get("Metric_name", "")))
+            if "parameter" not in metric_norm:
+                continue
+            value = _number_with_unit(str(cells.get("Metric_value", "")))
+            if value is not None and value >= 1_000_000_000:
+                contradicted = True
+                break
+            chosen = row
+        if not contradicted:
+            out.append(chosen)
+    return out
 
 
 def get_subset_rows(
@@ -751,19 +935,90 @@ def build_qrels_and_run_llm_rerank(
             for x in c.get("related", []):
                 if isinstance(x, dict) and str(x.get("header", "")).strip():
                     hl_fb.append(str(x["header"]).strip())
-        candidates, csv_errors = _collect_llm_rerank_candidates(header_list or hl_fb, csv_paths)
-        picked_pairs, err_note = _llm_pick_row_indices(qtext, candidates, model=model)
+        header_values_raw = block.get("header_values", [])
+        header_values = header_values_raw if isinstance(header_values_raw, list) else []
+        candidates, csv_errors = _collect_llm_rerank_candidates([], csv_paths)
+        unfiltered_candidate_count = len(candidates)
+        picked_rows, err_note = _llm_pick_rows_with_evidence(qtext, candidates, header_values=header_values, model=model)
         cand_key = {(c["table"], c["row_idx"]): c for c in candidates}
         hits: list[dict[str, Any]] = []
         valid_rank = 0
-        for table, ri in picked_pairs:
+        for picked in picked_rows:
+            table = str(picked.get("table", "")).strip()
+            ri = picked.get("row_idx")
             key = (table, ri)
             if key not in cand_key:
                 continue
-            valid_rank += 1
             c = cand_key[key]
+            if not _answer_does_not_contradict_constraints(c["cells"], header_values):
+                continue
+            valid_rank += 1
             doc_id = f"{table}#{ri}"
-            hits.append({"doc_id": doc_id, "table": table, "row_idx": ri, "score": max(1, 200 - valid_rank), "cells": c["cells"]})
+            support: list[dict[str, Any]] = []
+            for e in picked.get("supporting_evidence", []):
+                ekey = (str(e.get("table", "")).strip(), e.get("row_idx"))
+                if ekey == key:
+                    continue
+                ec = cand_key.get(ekey)
+                if not ec:
+                    continue
+                support.append(
+                    {
+                        "doc_id": f"{ekey[0]}#{ekey[1]}",
+                        "table": ekey[0],
+                        "row_idx": ekey[1],
+                        "why": str(e.get("why", "")).strip(),
+                        "cells": ec["cells"],
+                    }
+                )
+            hits.append(
+                {
+                    "doc_id": doc_id,
+                    "table": table,
+                    "row_idx": ri,
+                    "score": max(1, 200 - valid_rank),
+                    "cells": c["cells"],
+                    "supporting_evidence": support,
+                }
+            )
+        picked_models = {str(h.get("cells", {}).get("Model", "")).strip() for h in hits}
+        hit_keys = {(h["table"], h["row_idx"]) for h in hits}
+        if picked_models:
+            for c in candidates:
+                key = (c["table"], c["row_idx"])
+                if key in hit_keys:
+                    continue
+                if str(c.get("cells", {}).get("Model", "")).strip() not in picked_models:
+                    continue
+                if not _answer_does_not_contradict_constraints(c["cells"], header_values):
+                    continue
+                valid_rank += 1
+                doc_id = f"{c['table']}#{c['row_idx']}"
+                hits.append(
+                    {
+                        "doc_id": doc_id,
+                        "table": c["table"],
+                        "row_idx": c["row_idx"],
+                        "score": max(1, 200 - valid_rank),
+                        "cells": c["cells"],
+                        "supporting_evidence": [],
+                    }
+                )
+                hit_keys.add(key)
+        if not hits:
+            for c in _relaxed_unknown_parameter_rows(candidates, header_values):
+                valid_rank += 1
+                doc_id = f"{c['table']}#{c['row_idx']}"
+                hits.append(
+                    {
+                        "doc_id": doc_id,
+                        "table": c["table"],
+                        "row_idx": c["row_idx"],
+                        "score": max(1, 200 - valid_rank),
+                        "cells": c["cells"],
+                        "supporting_evidence": [],
+                    }
+                )
         for h in hits:
             qrels.append((qid, subtopic, h["doc_id"], 1))
         for rank, h in enumerate(hits, start=1):
@@ -774,7 +1029,10 @@ def build_qrels_and_run_llm_rerank(
             "match_build": "llm_rerank",
             "hits": hits,
             "clusters": clusters,
+            "header_values": header_values,
             "llm_rerank_candidates": len(candidates),
+            "llm_rerank_candidates_before_constraints": unfiltered_candidate_count,
+            "llm_rerank_prefilter": "none_all_candidate_rows",
             "llm_rerank_note": err_note or "ok",
         }
         if csv_errors:
@@ -845,18 +1103,19 @@ def _query2nugget_batch_responses(prompts: list[str], *, model: str | None) -> t
     ts = int(time.time())
     in_path = BATCH_DIR / f"query2nugget_batch_input_{ts}.jsonl"
     out_path = BATCH_DIR / f"query2nugget_batch_output_{ts}.jsonl"
+    model_name = model or TEXT_MODEL
     with open(in_path, "w", encoding="utf-8") as f:
         for i, prompt in enumerate(prompts):
+            body: dict[str, Any] = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_completion_tokens": 800,
+            }
             payload = {
                 "custom_id": f"{i:06d}",
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
-                    "model": model or TEXT_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 800,
-                    "temperature": 0.0,
-                },
+                "body": body,
             }
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
     main_batch_query(str(in_path), str(out_path))
@@ -885,7 +1144,7 @@ def _query2nugget_iter_responses(prompts: list[str], *, model: str | None) -> di
     setup_openai("", mode="openai")
     for i, prompt in enumerate(prompts):
         try:
-            raw = query_openai(prompt, mode="openai", model=model or TEXT_MODEL, max_tokens=800, temperature=0.0) or ""
+            raw = query_openai(prompt, mode="openai", model=model or TEXT_MODEL, max_tokens=800) or ""
             by_idx[i] = (raw, "")
         except Exception as e:
             by_idx[i] = ("", str(e))
@@ -1008,7 +1267,7 @@ def main() -> None:
         default=OUTPUT_HEADER_KEYWORD_JSON,
         help=f"JSON output path (default: {OUTPUT_HEADER_KEYWORD_JSON})",
     )
-    parser.add_argument("--model", default=None, help="OpenAI chat model (default from env or gpt-4o-mini).")
+    parser.add_argument("--model", default=None, help="OpenAI chat model (default from env or gpt-5.4-mini).")
     parser.add_argument(
         "--build-qrels-run",
         action="store_true",

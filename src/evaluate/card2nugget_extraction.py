@@ -32,7 +32,7 @@ BATCH_DIR = EVAL_DIR / "batch"
 CARD2NUGGET_DIR = Path(OUTPUT_DIR) / "card2nugget"
 PROMPT_PATH = Path("src/evaluate/card2nugget_prompts.yaml")
 PROMPT_KEY = "nugget_schema_mapping"
-TEXT_EXTRACTION_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-4o-mini")
+TEXT_EXTRACTION_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-5.4-mini")
 CARD_MAX_CHARS = int(os.getenv("MODELSEARCHDEMO_CARD_MAX_CHARS", "100000"))
 
 OUTPUT_HEADERS = list(NUGGET_SCHEMA_HEADERS)
@@ -88,6 +88,57 @@ def _remove_citation_part(text: str) -> str:
             continue
         kept.append(raw_line)
     return "\n".join(kept)
+
+
+def _front_matter(text: str) -> str:
+    src = text or ""
+    if not src.startswith("---"):
+        return ""
+    end = src.find("\n---", 3)
+    return src[3:end] if end != -1 else ""
+
+
+def _metadata_values(front: str, key: str) -> list[str]:
+    lines = front.splitlines()
+    values: list[str] = []
+    collecting = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^[A-Za-z0-9_-]+:", stripped):
+            collecting = False
+        if stripped.startswith(f"{key}:"):
+            collecting = True
+            rest = stripped.split(":", 1)[1].strip()
+            if rest:
+                values.append(rest.strip("'\""))
+            continue
+        if collecting and stripped.startswith("- "):
+            values.append(stripped[2:].strip().strip("'\""))
+    return [v for v in values if v]
+
+
+def _metadata_lineage(card_text: str) -> tuple[str, str]:
+    front = _front_matter(card_text)
+    base_values = _metadata_values(front, "base_model")
+    base_model = base_values[0] if base_values else ""
+    hay = " ".join(
+        _metadata_values(front, "tags")
+        + _metadata_values(front, "library_name")
+        + _metadata_values(front, "base_model_relation")
+    ).lower()
+    if "quantized" in hay or "gguf" in hay:
+        variant = "quantized"
+    elif "peft" in hay or "lora" in hay or "adapter" in hay or "adaptor" in hay:
+        variant = "adaptor"
+    elif "merge" in hay or "merged" in hay:
+        variant = "merged"
+    elif "finetuned" in hay or "fine-tuned" in hay:
+        variant = "finetuned"
+    else:
+        variant = ""
+    return base_model, variant
 
 
 def _load_prompt_template() -> str:
@@ -149,6 +200,10 @@ def _parse_markdown_table(response_text: str) -> list[dict[str, str]]:
             if _is_markdown_separator_row(ln):
                 continue
             cells = _split_pipe_row(ln)
+            if len(header_cells) == len(OUTPUT_HEADERS) and len(cells) == 4:
+                cells = [cells[0], "", "", cells[1], cells[2], cells[3]]
+            elif len(header_cells) == len(OUTPUT_HEADERS) and len(cells) == 3:
+                cells = [cells[0], "", "", "", cells[1], cells[2]]
             row: dict[str, str] = {}
             for h in OUTPUT_HEADERS:
                 idx = header_map.get(h.lower(), -1)
@@ -164,66 +219,111 @@ def _blank_nugget_row() -> dict[str, str]:
     return {h: "" for h in OUTPUT_HEADERS}
 
 
-def _first_numeric_token(s: str) -> str:
-    m = re.search(r"[-+]?(?:\d+\.?\d*|\d*\.?\d+)(?:[eE][-+]?\d+)?", s or "")
-    return m.group(0) if m else ""
+def _is_aggregate_dataset_label(value: str) -> bool:
+    s = _norm(value).lower()
+    if not s:
+        return False
+    if re.search(r"\b(average|overall|total|aggregate|summary|recovery)\b", s):
+        return True
+    return s.startswith("openllm")
 
 
-def _extract_global_hparam_rows(card_text: str) -> list[dict[str, str]]:
-    """Heuristic extra rows when the card mentions global training hparams but the table omitted them."""
-    src = (card_text or "").strip()
-    if not src:
-        return []
-    rows: list[dict[str, str]] = []
-
-    m_epochs = re.search(r"trained\s+for\s+(\d+)\s+epochs?", src, flags=re.IGNORECASE)
-    if m_epochs:
-        r = _blank_nugget_row()
-        r["Metric_name"] = "epochs"
-        r["Metric_value"] = m_epochs.group(1)
-        rows.append(r)
-
-    m_bs = re.search(r"batch\s+sizes?\s*:\s*([^\n]+)", src, flags=re.IGNORECASE)
-    if m_bs:
-        raw = _norm(m_bs.group(1))
-        r = _blank_nugget_row()
-        r["Metric_name"] = "batch_size"
-        num = _first_numeric_token(raw)
-        r["Metric_value"] = num if num and raw == num else raw
-        rows.append(r)
-
-    m_lr = re.search(r"learning\s+rates?\s*:\s*([^\n]+)", src, flags=re.IGNORECASE)
-    if m_lr:
-        raw = _norm(m_lr.group(1))
-        r = _blank_nugget_row()
-        r["Metric_name"] = "learning_rate"
-        num = _first_numeric_token(raw)
-        r["Metric_value"] = num if num and raw == num else raw
-        rows.append(r)
-
-    return rows
+def _compact_evidence_text(text: str) -> str:
+    return re.sub(r"\s+", "", (text or "").lower())
 
 
-def _apply_hparam_fallback(rows: list[dict[str, str]], card_text: str) -> tuple[list[dict[str, str]], str]:
-    extra = _extract_global_hparam_rows(card_text)
-    if not extra:
-        return rows, ""
-    out: list[dict[str, str]] = [dict(r) for r in rows]
-    for er in extra:
-        key = (_norm(er.get("Metric_name", "")), _norm(er.get("Metric_value", "")))
-        if not key[0]:
+def _metric_value_has_evidence(value: str, card_text: str) -> bool:
+    raw_value = _norm(value)
+    if not raw_value:
+        return False
+    hay = _compact_evidence_text(card_text)
+    candidates = _metric_value_candidates(raw_value)
+    return any(_compact_evidence_text(c).rstrip("0").rstrip(".") in hay for c in candidates if c)
+
+
+def _metric_value_candidates(value: str) -> set[str]:
+    raw_value = _norm(value)
+    out = {raw_value} if raw_value else set()
+    try:
+        num = float(raw_value)
+    except ValueError:
+        return out
+    if 0 < num <= 1:
+        pct = num * 100
+        out.update({f"{pct:.1f}", f"{pct:.2f}", f"{pct:.1f}%", f"{pct:.2f}%"})
+    return out
+
+
+def _metric_value_not_from_other_model_link(value: str, card_text: str, model_id: str) -> bool:
+    candidates = [_compact_evidence_text(c).rstrip("0").rstrip(".") for c in _metric_value_candidates(value)]
+    candidates = [c for c in candidates if c]
+    if not candidates:
+        return True
+    target = _compact_evidence_text(model_id)
+    lines = [line for line in (card_text or "").splitlines() if "huggingface.co/" in line.lower()]
+    if not lines:
+        return True
+    for line in lines:
+        compact = _compact_evidence_text(line)
+        if target in compact and any(c in compact for c in candidates):
+            return True
+    for line in lines:
+        compact = _compact_evidence_text(line)
+        if target not in compact and any(c in compact for c in candidates):
+            return False
+    return True
+
+
+def _normalize_rows_with_metadata(rows: list[dict[str, str]], model_id: str, card_text: str) -> list[dict[str, str]]:
+    base_model, variant = _metadata_lineage(card_text)
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, ...]] = set()
+    has_lineage = False
+    for row in rows:
+        clean = {h: _norm(row.get(h, "")) for h in OUTPUT_HEADERS}
+        if not any(clean.values()):
             continue
-        exists = any(
-            (_norm(r.get("Metric_name", "")), _norm(r.get("Metric_value", ""))) == key for r in out
+        clean["Model"] = model_id
+        is_lineage = bool(clean["Base_model"] or clean["Model_variant_type"]) and not any(
+            clean[h] for h in ("Dataset", "Metric_name", "Metric_value")
         )
-        if not exists:
-            out.append(er)
-    summary = "; ".join(
-        f"{_norm(e.get('Metric_name', ''))}={_norm(e.get('Metric_value', ''))}"
-        for e in extra
-        if _norm(e.get("Metric_name", ""))
-    )
-    return out, summary
+        if is_lineage:
+            clean["Base_model"] = base_model
+            clean["Model_variant_type"] = variant
+            if not clean["Base_model"] and not clean["Model_variant_type"]:
+                continue
+            has_lineage = True
+        else:
+            clean["Base_model"] = ""
+            clean["Model_variant_type"] = ""
+        if clean["Metric_name"] and not clean["Metric_value"]:
+            clean["Metric_name"] = ""
+        if clean["Metric_value"] and not _metric_value_has_evidence(clean["Metric_value"], card_text):
+            if clean["Dataset"]:
+                clean["Metric_name"] = ""
+                clean["Metric_value"] = ""
+            else:
+                continue
+        if clean["Dataset"] and clean["Metric_value"] and not _metric_value_not_from_other_model_link(clean["Metric_value"], card_text, model_id):
+            clean["Metric_name"] = ""
+            clean["Metric_value"] = ""
+        if clean["Dataset"] and _is_aggregate_dataset_label(clean["Dataset"]):
+            continue
+        if any(clean[h] for h in OUTPUT_HEADERS if h != "Model"):
+            sig = tuple(clean[h] for h in OUTPUT_HEADERS)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            out.append(clean)
+    if (base_model or variant) and not has_lineage:
+        lineage = _blank_nugget_row()
+        lineage["Model"] = model_id
+        lineage["Base_model"] = base_model
+        lineage["Model_variant_type"] = variant
+        sig = tuple(lineage[h] for h in OUTPUT_HEADERS)
+        if sig not in seen:
+            out.insert(0, lineage)
+    return out
 
 
 def _write_llm_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -254,6 +354,7 @@ def _prepare_model_input(model_id: str) -> dict[str, Any]:
         "model_id": model_id,
         "prompt_key": PROMPT_KEY,
         "prompt": prompt,
+        "card_clean": card_clean,
         "card_for_hparam": card_for_hparam,
         "card_truncated": truncated,
         "card_chars_total": len(card_for_hparam),
@@ -263,7 +364,8 @@ def _prepare_model_input(model_id: str) -> dict[str, Any]:
 
 def _save_model_outputs(prepared: dict[str, Any], response: str, note: str, use_batch_dir: bool = False) -> tuple[Path, Path]:
     csv_path, meta_path = _output_paths_for_model(prepared["model_id"], use_batch_dir=use_batch_dir)
-    parsed_rows, global_hparams = _apply_hparam_fallback(_parse_markdown_table(response), prepared["card_for_hparam"])
+    parsed_rows = _parse_markdown_table(response)
+    parsed_rows = _normalize_rows_with_metadata(parsed_rows, prepared["model_id"], prepared["card_clean"])
     _write_llm_csv(csv_path, parsed_rows)
     meta = {
         "modelId": prepared["model_id"],
@@ -273,7 +375,6 @@ def _save_model_outputs(prepared: dict[str, Any], response: str, note: str, use_
         "prompt": prepared["prompt"],
         "raw_response": response,
         "parsed_rows": len(parsed_rows),
-        "global_hparams_fallback": global_hparams,
         "card_truncated": prepared.get("card_truncated", False),
         "card_chars_total": prepared.get("card_chars_total", 0),
         "card_chars_in_prompt": prepared.get("card_chars_in_prompt", 0),
@@ -314,16 +415,16 @@ def _run_batch_query(prepared_items: list[dict[str, Any]]) -> dict[str, tuple[st
 
     with open(input_path, "w", encoding="utf-8") as f:
         for item in prepared_items:
+            body: dict[str, Any] = {
+                "model": TEXT_EXTRACTION_MODEL,
+                "messages": [{"role": "user", "content": item["prompt"]}],
+                "max_completion_tokens": 4096,
+            }
             payload = {
                 "custom_id": item["model_id"],
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
-                    "model": TEXT_EXTRACTION_MODEL,
-                    "messages": [{"role": "user", "content": item["prompt"]}],
-                    "max_tokens": 4096,
-                    "temperature": 0.0,
-                },
+                "body": body,
             }
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -364,7 +465,7 @@ def _iter_openai_responses_for_cards(prepared_items: list[dict[str, Any]]) -> di
     for item in prepared_items:
         mid = item["model_id"]
         try:
-            resp = query_openai(item["prompt"], mode="openai", model=TEXT_EXTRACTION_MODEL, max_tokens=4096, temperature=0.0) or ""
+            resp = query_openai(item["prompt"], mode="openai", model=TEXT_EXTRACTION_MODEL, max_tokens=4096) or ""
             out[mid] = (resp, "")
         except Exception as e:
             out[mid] = ("", str(e))
@@ -412,7 +513,7 @@ def run_single(model_id: str) -> dict[str, Any]:
         setup_openai("", mode="openai")
         _tick("setup_openai")
         print("[llm] querying openai...")
-        response = query_openai(prepared["prompt"], mode="openai", model=TEXT_EXTRACTION_MODEL, max_tokens=4096, temperature=0.0) or ""
+        response = query_openai(prepared["prompt"], mode="openai", model=TEXT_EXTRACTION_MODEL, max_tokens=4096) or ""
         _tick(f"query_openai(response_chars={len(response)})")
 
     csv_path, meta_path = _save_model_outputs(prepared, response, note, use_batch_dir=True)
