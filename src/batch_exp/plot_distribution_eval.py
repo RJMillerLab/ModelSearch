@@ -202,11 +202,11 @@ def plot(
     from matplotlib.colors import LinearSegmentedColormap
 
     blue_cmap = LinearSegmentedColormap.from_list("hist_blue", _blue_palette())
+    dist_data = [np.log1p(np.array(method_scores[method], dtype=float)) for method in METHOD_ORDER]
 
-    dist_vals = [np.array(method_scores[method], dtype=float) for method in METHOD_ORDER]
     positions = np.arange(1, len(METHOD_ORDER) + 1)
     parts = ax_dist.violinplot(
-        dist_vals,
+        dist_data,
         positions=positions,
         vert=False,
         widths=0.72,
@@ -226,12 +226,13 @@ def plot(
         parts["cmedians"].set_color("#1d4ed8")
         parts["cmedians"].set_linewidth(1.2)
 
-    mean_vals = [float(vals.mean()) if len(vals) else 0.0 for vals in dist_vals]
+    mean_vals = [float(np.mean(np.array(method_scores[method], dtype=float))) if len(method_scores[method]) else 0.0 for method in METHOD_ORDER]
     for pos, mean_val in zip(positions, mean_vals):
-        ax_dist.plot([mean_val, mean_val], [pos - 0.18, pos + 0.18], color="#7f0000", linestyle=(0, (4, 3)), linewidth=1.5)
+        log_mean = float(np.log1p(mean_val))
+        ax_dist.plot([log_mean, log_mean], [pos - 0.18, pos + 0.18], color="#7f0000", linestyle=(0, (4, 3)), linewidth=1.5)
         ax_dist.annotate(
             f"Avg.={mean_val:.1f}",
-            xy=(mean_val, pos),
+            xy=(log_mean, pos),
             xytext=(6, 0),
             textcoords="offset points",
             ha="left",
@@ -240,12 +241,15 @@ def plot(
             color="#7f0000",
             clip_on=False,
         )
-    ax_dist.set_xlim(0.0, max(1.0, hi * 1.02))
+    max_log = float(np.log1p(max(1.0, hi)))
+    ax_dist.set_xlim(0.0, max(1.0, max_log * 1.08))
+    tick_vals = [0, 1, 2, 5, 10, 20, 50, 100, 200, 500]
+    tick_vals = [v for v in tick_vals if v <= hi]
+    ax_dist.set_xticks([np.log1p(v) for v in tick_vals], [str(v) for v in tick_vals], fontsize=8.5)
     ax_dist.set_yticks(positions, [METHOD_LABELS[m] for m in METHOD_ORDER], fontsize=8.0)
-    ax_dist.set_xlabel("Nugget count", fontsize=9)
+    ax_dist.set_xlabel("Nugget count (log1p scale)", fontsize=9)
     ax_dist.grid(axis="x", color="#eeeeee", linestyle="--", linewidth=0.6)
     ax_dist.set_axisbelow(True)
-    ax_dist.tick_params(axis="x", labelsize=8.5)
     ax_dist.tick_params(axis="y", pad=4)
     ax_dist.set_ylim(0.5, len(METHOD_ORDER) + 0.5)
     ax_dist.invert_yaxis()
@@ -301,10 +305,10 @@ def plot(
     ax_rank.grid(axis="x", color="#eeeeee", linestyle="--", linewidth=0.7)
     ax_rank.set_axisbelow(True)
     ax_rank.axhline(METHOD_ORDER.index("keyword") - 0.5, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
-    ax_rank.set_xlabel("")
+    ax_rank.set_xlabel("Share of queries", fontsize=9, labelpad=10)
     ax_rank.legend(
         loc="upper center",
-        bbox_to_anchor=(0.5, -0.010),
+        bbox_to_anchor=(0.5, -0.085),
         ncol=6,
         frameon=False,
         fontsize=8.4,
@@ -313,17 +317,17 @@ def plot(
         borderaxespad=0.0,
     )
 
-    fig.text(0.055, 0.955, "A. Nugget-Count Distribution by Method", ha="left", va="top", fontsize=13, weight="bold")
+    fig.text(0.27, 0.955, "A. Nugget-Count Distribution by Method", ha="center", va="top", fontsize=13, weight="bold")
     fig.text(
-        0.57,
+        0.76,
         0.955,
-        "B. Rank Share by Method (Top-1 to Top-6)",
-        ha="left",
+        "B. Query-Level Rank Outcomes",
+        ha="center",
         va="top",
         fontsize=13,
         weight="bold",
     )
-    fig.subplots_adjust(top=0.84, bottom=0.075, left=0.045, right=0.98)
+    fig.subplots_adjust(top=0.84, bottom=0.14, left=0.045, right=0.98)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
