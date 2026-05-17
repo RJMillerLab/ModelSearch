@@ -1,0 +1,18 @@
+# Avoid copying large or unnecessary files into the image
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+*.egg-info
+.venv
+venv
+env
+data/jobs/*
+data/card2card_embeddings.npz
+data/card2card.faiss
+data/card2card_sparse_index
+data/modellake.db
+*.log
+.DS_Store

@@ -1,0 +1,60 @@
+# Single input: full Hugging Face model card (HTML / markdown / UI text).
+
+nugget_schema_mapping: |
+  Extract atomic nugget rows for TARGET MODEL ID. Return only the final markdown table.
+
+  TARGET MODEL ID:
+  [[TARGET_MODEL_ID]]
+
+  Goal:
+  - A nugget is one reported fact or local relationship about TARGET MODEL ID.
+  - Keep only the minimum related headers needed to preserve that fact; leave unrelated headers empty.
+  - Every non-empty row must include `Model`.
+  - Output exactly 6 columns in this order: `Model`, `Base_model`, `Model_variant_type`, `Dataset`, `Metric_name`, `Metric_value`.
+  - Use evidence only from `MODEL CARD`; instructions, schema, examples, and target id are not evidence.
+  - In multi-model tables, extract only rows whose label/link/text identifies TARGET MODEL ID exactly. Ignore siblings, related checkpoints, same-base/family models, and nearby links.
+  - If the card has no explicit target facts, return only header + separator.
+  - Do not infer missing values. No extra columns, JSON, commentary, or prose.
+
+  Header rules:
+  - `Model`: TARGET MODEL ID / checkpoint identity for the row.
+  - `Base_model`: upstream model id only from fixed HF metadata/YAML/tags.
+  - `Model_variant_type`: lowercase `finetuned`, `quantized`, `adaptor`, or `merged` only from fixed HF metadata/YAML/tags such as `base_model_relation`, `library_name`, `peft`, `adapter`, `quantized`, `merge`, or equivalent official fields.
+  - `Dataset`: dataset, corpus, benchmark, or task name for this fact. Use the specific component benchmark/task, not suite/category/summary labels such as average, overall, total, OpenLLM, reasoning, multilingual, or recovery when component rows exist.
+  - `Metric_name`: expanded metric/scalar name only; no benchmark names. Include only local qualifiers needed to distinguish values, such as split, setting, shot count, language, decoding method, modality, or subset.
+  - `Metric_value`: value only. Convert percentages or 0-100 accuracy-like scores to [0,1]. Use `7B`/`32B` for very large parameter counts and plain numeric values for normal counts.
+
+  Row patterns:
+  - Lineage/variant: `Model`, `Base_model`, `Model_variant_type`.
+  - Scalar/hyperparameter/resource: `Model`, `Metric_name`, `Metric_value`.
+  - Performance: `Model`, `Dataset`, `Metric_name`, `Metric_value`.
+  - Dataset without readable score: `Model`, `Dataset`.
+  - Model metric without dataset: `Model`, `Metric_name`, `Metric_value`.
+
+  Relationship rules:
+  - Do not create lineage/variant rows from prose, tables, or model names; fixed HF metadata/YAML/tags only.
+  - Do not carry `Base_model` or `Model_variant_type` into scalar, dataset, or performance rows unless that same local row explicitly compares variants.
+  - Split mixed local evidence: model attributes, training datasets, and benchmark scores become separate atomic rows.
+  - A metric row needs a readable value; if missing/hidden/unreadable, leave metric fields empty.
+
+  Examples:
+  - Metadata `base_model: Qwen2.5-7B` plus official finetune/adaptor/quantized/merge tag => one lineage row.
+  - Prose saying "based on" or "fine-tuned" without fixed HF metadata/tags => no lineage row.
+  - "Spider execution accuracy: 68.4%" => Dataset=`Spider`, Metric_name=`execution accuracy`, Metric_value=`0.684`.
+  - Performance rows with no base/variant must still keep empty cells: `| target model |  |  | Spider | execution accuracy | 0.684 |`.
+  - Category + benchmark tables => Dataset=specific benchmark/task, not category; Metric_name=reported metric label, not benchmark name.
+  - A row with `7B` parameters, `2-bit` precision, and benchmark scores => separate scalar rows (`parameters=7B`, `quantization_bits=2`) plus separate benchmark rows.
+  - Training data plus evaluation score => dataset-only row for training data, performance row for evaluation benchmark.
+  - Multiple conditions for one metric => keep the condition in `Metric_name` and one row per value.
+  - Scores for non-target models or sibling variants => ignore.
+
+  MODEL CARD:
+  [[MODEL_CARD]]
+
+  Return exactly this fenced markdown table format:
+  ```markdown
+  | Model | Base_model | Model_variant_type | Dataset | Metric_name | Metric_value |
+  | --- | --- | --- | --- | --- | --- |
+  | ... | ... | ... | ... | ... | ... |
+  ```
+  Every output row must have exactly 6 cells.

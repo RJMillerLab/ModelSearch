@@ -1,0 +1,81 @@
+jobs_251117_260501/
+jobs_251117/
+tmp/
+bak/
+data_251117/
+others/Blend_internal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv_test/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Output files
+output/
+md/
+*.npz
+*.faiss
+*.jsonl
+*.json
+*.md
+!README.md
+!docs/*.md
+# Allow demo template and preset queries under config (versioned, not in data/)
+!config/demo_template/
+!config/demo_template/search_results.json
+!config/preset_queries.json
+
+# Backup / non-essential docs
+bak/
+
+# Data
+data/
+data_citationlake
+data_citationlake/
+.env
+*.parquet
+*.db
+
+# Blend_internal (clone separately)
+src/Blend_internal/
+src/Blend_internal
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
