@@ -23,7 +23,7 @@ METHOD_LABELS = {
     "dense": "Dense",
     "hybrid": "Hybrid",
     "keyword": "Keyword",
-    "single_column": "Single Column",
+    "single_column": "Joinable",
     "unionable": "Unionable",
 }
 
@@ -55,6 +55,21 @@ def _load_per_query_records(path: Path | None) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             records.append(item)
     return records
+
+
+def _resolve_per_query_path(summary_path: Path, summary_per_query_path: str, explicit_path: Path | None) -> Path | None:
+    candidates: list[Path] = []
+    if explicit_path is not None:
+        candidates.append(explicit_path)
+    if summary_per_query_path.strip():
+        raw = Path(summary_per_query_path.strip())
+        candidates.append(raw)
+        candidates.append(summary_path.parent / raw.name)
+    candidates.append(summary_path.parent / "per_query_method_scores.jsonl")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _safe_float(value: object) -> float | None:
@@ -101,24 +116,26 @@ def _collect_rank_counts(
     *,
     compare_key: str,
     score_field: str,
-) -> dict[str, list[int]]:
+) -> tuple[dict[str, list[int]], dict[str, int]]:
     rank_counts: dict[str, list[int]] = {method: [0] * len(METHOD_ORDER) for method in METHOD_ORDER}
+    availability: dict[str, int] = {method: 0 for method in METHOD_ORDER}
     for record in records:
         scored: list[tuple[str, float]] = []
         for method in METHOD_ORDER:
             score = _method_score(record, method, compare_key, score_field)
             if score is None:
                 continue
+            availability[method] += 1
             scored.append((method, score))
         scored.sort(key=lambda item: (-item[1], METHOD_ORDER.index(item[0])))
         for rank_idx, (method, _) in enumerate(scored):
             if rank_idx < len(METHOD_ORDER):
                 rank_counts[method][rank_idx] += 1
-    return rank_counts
+    return rank_counts, availability
 
 
 def _blue_palette() -> list[str]:
-    return ["#eff6ff", "#dbeafe", "#bfdbfe", "#93c5fd", "#60a5fa", "#2563eb"]
+    return ["#dbeafe", "#bfdbfe", "#93c5fd", "#60a5fa", "#2563eb", "#1d4ed8"]
 
 
 def _red_palette() -> list[str]:
@@ -152,28 +169,28 @@ def plot(
     score_field = str(aggregate.get("score_field", "hit_dedup"))
 
     summary_per_query_path = str(summary.get("paths", {}).get("per_query_method_scores", "") or "").strip()
-    source_path = per_query_jsonl or (Path(summary_per_query_path) if summary_per_query_path else None)
+    source_path = _resolve_per_query_path(summary_path, summary_per_query_path, per_query_jsonl)
     records = _load_per_query_records(source_path)
     if not records:
         raise RuntimeError(
-            "No per-query records found. Provide --per-query-jsonl or ensure summary.paths.per_query_method_scores is set."
+            "No per-query records found. Provide --per-query-jsonl or place per_query_method_scores.jsonl next to the summary JSON."
         )
 
     # Nugget counts are integers in the real evaluation output. We keep the
     # histogram bins aligned to whole counts so the demo and real runs share
     # the same layout.
     method_scores = _collect_scores(records, compare_key=compare_key, score_field=score_field, integer_bins=True)
-    rank_counts = _collect_rank_counts(records, compare_key=compare_key, score_field=score_field)
+    rank_counts, availability = _collect_rank_counts(records, compare_key=compare_key, score_field=score_field)
     num_queries = len(records)
 
-    # Layout: left 2x3 histogram grid, right stacked rank-share bars.
+    # Layout: left single horizontal violin panel, right stacked rank-share bars.
     fig = plt.figure(figsize=(13.6, 4.7), dpi=180)
-    outer = fig.add_gridspec(1, 2, width_ratios=[1.08, 0.92], wspace=0.16)
-    left = outer[0, 0].subgridspec(2, 3, hspace=0.14, wspace=0.16)
+    outer = fig.add_gridspec(1, 2, width_ratios=[1.00, 1.00], wspace=0.16)
     right = outer[0, 1]
+    ax_dist = fig.add_subplot(outer[0, 0])
     ax_rank = fig.add_subplot(right)
 
-    # Shared x range for the histogram family.
+    # Shared x range for the left-panel distribution family.
     all_scores = [v for vals in method_scores.values() for v in vals]
     if all_scores:
         lo = int(np.floor(min(all_scores)))
@@ -182,51 +199,67 @@ def plot(
         lo, hi = 0, 1
     lo = max(0, lo - 1)
     hi = hi + 1
-    bins = np.arange(lo - 0.5, hi + 1.5, 1.0)
     from matplotlib.colors import LinearSegmentedColormap
 
     blue_cmap = LinearSegmentedColormap.from_list("hist_blue", _blue_palette())
-    bin_centers = (bins[:-1] + bins[1:]) / 2.0
-    denom = max(1e-9, float(bin_centers.max() - bin_centers.min()))
-    bin_colors = [blue_cmap((c - bin_centers.min()) / denom) for c in bin_centers]
 
-    for idx, method in enumerate(METHOD_ORDER):
-        ax = fig.add_subplot(left[idx // 3, idx % 3])
-        vals = np.array(method_scores[method], dtype=float)
-        mean_val = float(vals.mean()) if len(vals) else 0.0
-        counts, _ = np.histogram(vals, bins=bins)
-        ax.bar(
-            bin_centers,
-            counts,
-            width=np.diff(bins),
-            color=bin_colors,
-            edgecolor="white",
-            linewidth=0.7,
-            align="center",
-        )
-        ax.axvline(mean_val, color="#7f0000", linestyle=(0, (4, 3)), linewidth=1.5)
-        ymax = ax.get_ylim()[1]
-        ax.text(
-            mean_val,
-            ymax * 0.96,
+    dist_vals = [np.array(method_scores[method], dtype=float) for method in METHOD_ORDER]
+    positions = np.arange(1, len(METHOD_ORDER) + 1)
+    parts = ax_dist.violinplot(
+        dist_vals,
+        positions=positions,
+        vert=False,
+        widths=0.72,
+        showmeans=False,
+        showmedians=True,
+        showextrema=False,
+        points=200,
+        bw_method=0.28,
+    )
+    for idx, body in enumerate(parts["bodies"]):
+        color = blue_cmap(0.25 + 0.55 * (idx / max(1, len(METHOD_ORDER) - 1)))
+        body.set_facecolor(color)
+        body.set_edgecolor("#93c5fd")
+        body.set_alpha(0.96)
+        body.set_linewidth(0.9)
+    if "cmedians" in parts:
+        parts["cmedians"].set_color("#1d4ed8")
+        parts["cmedians"].set_linewidth(1.2)
+
+    mean_vals = [float(vals.mean()) if len(vals) else 0.0 for vals in dist_vals]
+    for pos, mean_val in zip(positions, mean_vals):
+        ax_dist.plot([mean_val, mean_val], [pos - 0.18, pos + 0.18], color="#7f0000", linestyle=(0, (4, 3)), linewidth=1.5)
+        ax_dist.annotate(
             f"Avg.={mean_val:.1f}",
-            ha="center",
-            va="top",
-            fontsize=8.3,
+            xy=(mean_val, pos),
+            xytext=(6, 0),
+            textcoords="offset points",
+            ha="left",
+            va="center",
+            fontsize=8.0,
             color="#7f0000",
-            clip_on=True,
+            clip_on=False,
         )
-        ax.set_title(METHOD_LABELS[method], fontsize=10.2, weight="bold", pad=6)
-        ax.set_xlim(lo, hi)
-        ax.grid(axis="y", color="#eeeeee", linestyle="--", linewidth=0.6)
-        ax.set_axisbelow(True)
-        ax.set_xlabel("")
-        ax.set_ylabel("")
-        ax.tick_params(labelbottom=False, labelleft=False)
-        ax.tick_params(axis="both", labelsize=8.5)
+    ax_dist.set_xlim(0.0, max(1.0, hi * 1.02))
+    ax_dist.set_yticks(positions, [METHOD_LABELS[m] for m in METHOD_ORDER], fontsize=8.0)
+    ax_dist.set_xlabel("Nugget count", fontsize=9)
+    ax_dist.grid(axis="x", color="#eeeeee", linestyle="--", linewidth=0.6)
+    ax_dist.set_axisbelow(True)
+    ax_dist.tick_params(axis="x", labelsize=8.5)
+    ax_dist.tick_params(axis="y", pad=4)
+    ax_dist.set_ylim(0.5, len(METHOD_ORDER) + 0.5)
+    ax_dist.invert_yaxis()
+    ax_dist.margins(y=0.06)
+    ax_dist.spines["top"].set_visible(False)
 
     rank_matrix = np.array(
-        [[rank_counts[method][rank_idx] / num_queries for rank_idx in range(len(METHOD_ORDER))] for method in METHOD_ORDER],
+        [
+            [
+                rank_counts[method][rank_idx] / max(1, availability[method])
+                for rank_idx in range(len(METHOD_ORDER))
+            ]
+            for method in METHOD_ORDER
+        ],
         dtype=float,
     )
     rank_colors = list(reversed(_red_palette()))
@@ -248,7 +281,6 @@ def plot(
         for row_idx, val in enumerate(vals):
             pct = val * 100.0
             if pct >= 8.0:
-                text_color = "white" if rank_idx >= 3 or pct >= 18 else "#1f2937"
                 ax_rank.text(
                     left_edge[row_idx] + val / 2.0,
                     row_idx,
@@ -256,7 +288,7 @@ def plot(
                     ha="center",
                     va="center",
                     fontsize=8.3,
-                    color=text_color,
+                    color="#111111",
                 )
         left_edge += vals
 
@@ -281,15 +313,7 @@ def plot(
         borderaxespad=0.0,
     )
 
-    fig.text(
-        0.055,
-        0.955,
-        "A. Nugget-Count Distributions by Method",
-        ha="left",
-        va="top",
-        fontsize=13,
-        weight="bold",
-    )
+    fig.text(0.055, 0.955, "A. Nugget-Count Distribution by Method", ha="left", va="top", fontsize=13, weight="bold")
     fig.text(
         0.57,
         0.955,

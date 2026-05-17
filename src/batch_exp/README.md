@@ -81,12 +81,12 @@ data_251117/evaluate/query2modelcard_nugget_batch/<run_id>/query2modelcard_backe
 
 ## Distribution Plot
 
-If you want a separate figure that emphasizes per-method nugget distributions, use:
+If you want a separate figure that emphasizes per-method nugget distributions, use the copied local batch outputs:
 
 ```bash
 python src/batch_exp/plot_distribution_eval.py \
-  --summary-json src/batch_exp/fake_aggregate_summary.json \
-  --per-query-jsonl src/batch_exp/fake_per_query_method_scores_int.jsonl \
+  --summary-json data_251117/evaluate/query2modelcard_nugget_batch/aggregate_summary.json \
+  --per-query-jsonl data_251117/evaluate/query2modelcard_nugget_batch/per_query_method_scores.jsonl \
   --output data_251117/statistic.png \
   --compare-top-k 10
 ```
@@ -97,3 +97,5 @@ This alternative figure is organized as:
 - a right-side stacked bar chart showing top-1 through top-6 proportions by method;
 - blue-toned histograms on the left and red-toned rank shares on the right;
 - a separate `.png` output so it does not overwrite the current main figure.
+
+If `per_query_method_scores.jsonl` sits next to the summary JSON, `--per-query-jsonl` can be omitted and the plot script will resolve it automatically.
