@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import duckdb
+import pandas as pd
 import yaml
 from dotenv import load_dotenv
+from tqdm.auto import tqdm
 
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if _repo_root not in sys.path:
@@ -34,6 +36,7 @@ PROMPT_PATH = Path("src/evaluate/card2nugget_prompts.yaml")
 PROMPT_KEY = "nugget_schema_mapping"
 TEXT_EXTRACTION_MODEL = os.getenv("MODELSEARCHDEMO_TEXT_EXTRACTION_MODEL", "gpt-5.4-mini")
 CARD_MAX_CHARS = int(os.getenv("MODELSEARCHDEMO_CARD_MAX_CHARS", "100000"))
+CARD_BATCH_CHUNK_SIZE = int(os.getenv("MODELSEARCHDEMO_CARD_BATCH_CHUNK_SIZE", "500"))
 
 OUTPUT_HEADERS = list(NUGGET_SCHEMA_HEADERS)
 
@@ -63,6 +66,37 @@ def _read_card_by_model_id(model_id: str) -> str:
     if not row or row[0] is None:
         raise FileNotFoundError(f"No card found for modelId={model_id!r}")
     return str(row[0])
+
+
+def _read_cards_by_model_ids(model_ids: list[str], *, chunk_size: int = CARD_BATCH_CHUNK_SIZE) -> dict[str, str]:
+    clean_ids = [_norm(model_id) for model_id in model_ids if _norm(model_id)]
+    if not clean_ids:
+        return {}
+    if not Path(CARD_CONTENT_RAW).exists():
+        raise FileNotFoundError(f"CARD_CONTENT_RAW does not exist: {CARD_CONTENT_RAW}")
+
+    parquet_glob = str(Path(CARD_CONTENT_RAW) / SHARD_GLOB)
+    query = """
+        WITH cards AS (
+            SELECT CAST(modelId AS VARCHAR) AS model_id, card
+            FROM read_parquet(?, union_by_name=true)
+        )
+        SELECT c.model_id, c.card
+        FROM cards c
+        INNER JOIN wanted_ids w ON c.model_id = w.model_id
+    """
+    out: dict[str, str] = {}
+    chunk_size = max(1, int(chunk_size))
+    chunks = [clean_ids[i : i + chunk_size] for i in range(0, len(clean_ids), chunk_size)]
+    with duckdb.connect(":memory:") as con:
+        for chunk in tqdm(chunks, desc="[card2nugget] reading full cards", unit="chunk"):
+            wanted_df = pd.DataFrame({"model_id": chunk})
+            con.register("wanted_ids", wanted_df)
+            rows = con.execute(query, [parquet_glob]).fetchall()
+            for model_id, card in rows:
+                out[_norm(model_id)] = str(card or "")
+            con.unregister("wanted_ids")
+    return out
 
 
 def _remove_citation_part(text: str) -> str:
@@ -338,6 +372,10 @@ def _write_llm_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 def _prepare_model_input(model_id: str) -> dict[str, Any]:
     card_raw = _read_card_by_model_id(model_id)
+    return _prepare_model_input_from_card(model_id, card_raw)
+
+
+def _prepare_model_input_from_card(model_id: str, card_raw: str) -> dict[str, Any]:
     card_clean = _remove_citation_part(card_raw)
     card_for_hparam = _norm(card_clean)
     truncated = False
@@ -360,6 +398,22 @@ def _prepare_model_input(model_id: str) -> dict[str, Any]:
         "card_chars_total": len(card_for_hparam),
         "card_chars_in_prompt": len(card_in_prompt),
     }
+
+
+def _prepare_model_inputs(model_ids: list[str], *, chunk_size: int = CARD_BATCH_CHUNK_SIZE) -> list[dict[str, Any]]:
+    clean_ids = [_norm(m) for m in model_ids if _norm(m)]
+    if not clean_ids:
+        return []
+    cards_by_id = _read_cards_by_model_ids(clean_ids, chunk_size=chunk_size)
+    missing = [mid for mid in clean_ids if mid not in cards_by_id]
+    if missing:
+        preview = ", ".join(missing[:5])
+        suffix = "" if len(missing) <= 5 else f" ... (+{len(missing) - 5} more)"
+        raise FileNotFoundError(f"No card found for {len(missing)} model ids: {preview}{suffix}")
+    prepared: list[dict[str, Any]] = []
+    for mid in tqdm(clean_ids, desc="[card2nugget] building prompts", unit="model"):
+        prepared.append(_prepare_model_input_from_card(mid, cards_by_id[mid]))
+    return prepared
 
 
 def _save_model_outputs(prepared: dict[str, Any], response: str, note: str, use_batch_dir: bool = False) -> tuple[Path, Path]:
@@ -525,12 +579,13 @@ def run_batch(
     model_ids: list[str],
     *,
     llm_mode: Literal["batch", "iter"] = "batch",
+    batch_chunk_size: int = CARD_BATCH_CHUNK_SIZE,
 ) -> list[dict[str, str]]:
     clean_ids = [_norm(m) for m in model_ids if _norm(m)]
     if not clean_ids:
         return []
     print(f"[batch] preparing {len(clean_ids)} model prompts...")
-    prepared_items = [_prepare_model_input(m) for m in clean_ids]
+    prepared_items = _prepare_model_inputs(clean_ids, chunk_size=batch_chunk_size)
     response_map = collect_card2nugget_llm_responses(prepared_items, llm_mode)
     outputs: list[dict[str, str]] = []
     for item in prepared_items:
@@ -547,6 +602,7 @@ def main() -> None:
     parser.add_argument("--model-ids", nargs="*", default=None, help="Multiple model ids for batch mode.")
     parser.add_argument("--model-ids-file", default=None, help="Text file with one model id per line.")
     parser.add_argument("--llm-mode", choices=["batch", "iter"], default="batch", help="batch=OpenAI Batch API; iter=sync chat per model (when Batch is slow/stuck).")
+    parser.add_argument("--batch-chunk-size", type=int, default=CARD_BATCH_CHUNK_SIZE, help="Number of model cards to fetch per DuckDB chunk in batch mode.")
     parser.add_argument("--read-csv", nargs="?", const=str(CARD2NUGGET_DIR / "single_modelcard_llm.csv"), metavar="PATH", help="Print stats for parsed tuple CSV.")
     args = parser.parse_args()
 
@@ -585,7 +641,7 @@ def main() -> None:
         print(f"saved_csv = {result['csv_path']}")
         print(f"saved_meta_yaml = {result['meta_path']}")
     else:
-        outputs = run_batch(model_ids, llm_mode=args.llm_mode)
+        outputs = run_batch(model_ids, llm_mode=args.llm_mode, batch_chunk_size=max(1, int(args.batch_chunk_size)))
         if len(model_ids) == 1:
             out = outputs[0]
             print(f"saved_csv = {out['csv_path']}")

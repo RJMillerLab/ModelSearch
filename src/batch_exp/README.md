@@ -13,14 +13,14 @@ python -m src.evaluate.wrap_card_query_eval --jobs-json <jobs.json> --job-id <jo
 Unified backend batch experiment path:
 
 ```bash
-python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
+python src/batch_exp/run_batch_eval.py \
   --queries-file data_251117/query/query_rewrite_polished.jsonl
 ```
 
 Reuse an existing query2modelcard intermediate:
 
 ```bash
-python experiments/query2modelcard_nugget_batch/run_batch_eval.py --jobs-json <batch_preset_queries.json>
+python src/batch_exp/run_batch_eval.py --jobs-json <batch_preset_queries.json>
 ```
 
 ## Batch Stages
@@ -35,7 +35,7 @@ python experiments/query2modelcard_nugget_batch/run_batch_eval.py --jobs-json <b
 Use the polished model recommendation query set here, not the old smoke / 15-example files:
 
 ```bash
-python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
+python src/batch_exp/run_batch_eval.py \
   --queries-file data_251117/query/query_rewrite_polished.jsonl \
   --top-k 1 3 5 10 \
   --query-llm-mode batch \
@@ -48,7 +48,7 @@ python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
 Reuse an existing query2modelcard intermediate:
 
 ```bash
-python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
+python src/batch_exp/run_batch_eval.py \
   --jobs-json jobs_251117/batch_runs/batch_preset_queries_20260501_154026.json \
   --top-k 1 3 5 10 \
   --query-llm-mode batch \
@@ -59,7 +59,7 @@ python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
 ## Full Run
 
 ```bash
-python experiments/query2modelcard_nugget_batch/run_batch_eval.py \
+python src/batch_exp/run_batch_eval.py \
   --queries-file data_251117/query/query_rewrite_polished.jsonl \
   --top-k 1 3 5 10 \
   --query-llm-mode batch \
@@ -79,17 +79,21 @@ In backend mode the saved intermediate is:
 data_251117/evaluate/query2modelcard_nugget_batch/<run_id>/query2modelcard_backend_intermediate.json
 ```
 
-## Plot
+## Distribution Plot
+
+If you want a separate figure that emphasizes per-method nugget distributions, use:
 
 ```bash
-python experiments/query2modelcard_nugget_batch/plot_batch_eval.py \
-  --summary-json data_251117/evaluate/query2modelcard_nugget_batch/<run_id>/aggregate_summary.json \
-  --output data_251117/evaluate/query2modelcard_nugget_batch/<run_id>/nugget_eval_figure.png \
+python src/batch_exp/plot_distribution_eval.py \
+  --summary-json src/batch_exp/fake_aggregate_summary.json \
+  --per-query-jsonl src/batch_exp/fake_per_query_method_scores_int.jsonl \
+  --output data_251117/statistic.png \
   --compare-top-k 10
 ```
 
-The plot contains:
+This alternative figure is organized as:
 
-- mean nugget score by method and top-k;
-- query-wise win/tie/loss for table-search methods against the best semantic baseline;
-- one `.png` and one `.pdf` output.
+- six method-wise histogram panels on the left, one panel per method, with a mean line;
+- a right-side stacked bar chart showing top-1 through top-6 proportions by method;
+- blue-toned histograms on the left and red-toned rank shares on the right;
+- a separate `.png` output so it does not overwrite the current main figure.
