@@ -45,7 +45,7 @@ Then open `http://localhost:5001`.
 - [docs/build_index.md](docs/build_index.md) covers data preparation and index building.
 - [src/query/README.md](src/query/README.md) covers query sources, rewriting, and labeling.
 - [src/evaluate/README.md](src/evaluate/README.md) covers nugget extraction, query-to-nugget mapping, and evaluation scripts.
-- [experiments/query2modelcard_nugget_batch/README.md](experiments/query2modelcard_nugget_batch/README.md) covers the batch benchmark experiment for query-to-model-card nugget evaluation.
+- [src/batch_exp/README.md](src/batch_exp/README.md) covers the batch benchmark experiment for query-to-model-card nugget evaluation.
 
 ## Acknowledgments
 
