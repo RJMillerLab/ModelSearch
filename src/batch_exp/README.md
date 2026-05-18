@@ -93,9 +93,13 @@ python src/batch_exp/plot_distribution_eval.py \
 
 This alternative figure is organized as:
 
-- six method-wise histogram panels on the left, one panel per method, with a mean line;
-- a right-side stacked bar chart showing top-1 through top-6 proportions by method;
+- two `top-k` blocks per row, each block split into a left distribution panel and a right rank-share panel;
+- each `top-k` panel uses the corresponding `top_k` slice from `per_query_method_scores.jsonl`;
 - blue-toned histograms on the left and red-toned rank shares on the right;
 - a separate `.png` output so it does not overwrite the current main figure.
 
 If `per_query_method_scores.jsonl` sits next to the summary JSON, `--per-query-jsonl` can be omitted and the plot script will resolve it automatically.
+
+By default the script plots every `top-k` present in the summary. Pass one or more values to restrict the figure, for example `--compare-top-k 1 3 5 10`.
+
+If the ranking changes across `top-k`, keep the per-`k` panels in the figure and describe the sensitivity explicitly in the writeup instead of collapsing everything to `top-10`.
