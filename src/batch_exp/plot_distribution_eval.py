@@ -30,6 +30,8 @@ METHOD_LABELS = {
 METHOD_ORDER = ["sparse", "dense", "hybrid", "keyword", "single_column", "unionable"]
 SEMANTIC_METHODS = ("sparse", "dense", "hybrid")
 TABLE_METHODS = ("keyword", "single_column", "unionable")
+DIST_GROUP_SEPARATOR_Y = 3.5
+RANK_GROUP_SEPARATOR_Y = 2.5
 
 
 def _load_summary(path: Path) -> dict[str, Any]:
@@ -235,6 +237,7 @@ def _render_distribution_panel(
     ax_dist.invert_yaxis()
     ax_dist.margins(y=0.06)
     ax_dist.spines["top"].set_visible(False)
+    ax_dist.axhline(DIST_GROUP_SEPARATOR_Y, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
     if show_title:
         ax_dist.set_title(f"Top-{compare_k}", fontsize=11, weight="bold", pad=10)
 
@@ -307,7 +310,7 @@ def _render_rank_panel(
     ax_rank.invert_yaxis()
     ax_rank.grid(axis="x", color="#eeeeee", linestyle="--", linewidth=0.7)
     ax_rank.set_axisbelow(True)
-    ax_rank.axhline(METHOD_ORDER.index("keyword") - 0.5, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
+    ax_rank.axhline(RANK_GROUP_SEPARATOR_Y, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
     ax_rank.set_xlabel(f"Top-{compare_k}" if show_xlabel else "", fontsize=9, labelpad=10)
     if show_title:
         ax_rank.set_title(f"Top-{compare_k}", fontsize=11, weight="bold", pad=10)
