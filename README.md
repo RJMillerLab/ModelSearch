@@ -50,10 +50,7 @@ Then open `http://localhost:5001`.
 - [src/query/README.md](src/query/README.md) covers query sources, rewriting, and labeling.
 - [src/evaluate/README.md](src/evaluate/README.md) covers nugget extraction, query-to-nugget mapping, and evaluation scripts.
 - [src/batch_exp/README.md](src/batch_exp/README.md) covers the batch benchmark experiment for query-to-model-card nugget evaluation.
-
-## 示例
-
-Examples are here: [1](/Users/doradong/Repo/ModelSearch/docs/video_demo2.png) and [2](/Users/doradong/Repo/ModelSearch/docs/video_demo3_large_mini.png).
+- Examples are here: [1](docs/video_demo2.png) and [2](docs/video_demo3_large_mini.png).
 
 ## Acknowledgments
 
