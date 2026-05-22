@@ -1,6 +1,6 @@
 # ModelSearch Demo
 
-Official implementation of the paper *Diverse Model Discovery via Structured Table Discovery*.
+Official implementation of the paper *[Diversed Model Discovery via Structured Table Discovery](https://arxiv.org/abs/2605.22766)*.
 
 ModelSearch is a demo for model-card retrieval, query-to-table-to-model retrieval, and table integration over retrieved CSV tables. The current codebase is centered on the Flask demo in `src/demo/`, retrieval in `src/search/`, integration in `src/integration/`, and evaluation in `src/evaluate/`.
 
@@ -46,6 +46,14 @@ Then open `http://localhost:5001`.
 - [src/query/README.md](src/query/README.md) covers query sources, rewriting, and labeling.
 - [src/evaluate/README.md](src/evaluate/README.md) covers nugget extraction, query-to-nugget mapping, and evaluation scripts.
 - [src/batch_exp/README.md](src/batch_exp/README.md) covers the batch benchmark experiment for query-to-model-card nugget evaluation.
+
+## Demo
+
+![Pipeline overview](docs/pipeline.png)
+
+![Video demo 2](docs/video_demo2.png)
+
+![Video demo 3](docs/video_demo3_large_mini.png)
 
 ## Acknowledgments
 
