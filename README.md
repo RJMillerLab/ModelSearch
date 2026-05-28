@@ -6,7 +6,7 @@ Official implementation of the paper *[Diversed Model Discovery via Structured T
   <img src="docs/pipeline.png" alt="Pipeline overview" width="100%" />
 </p>
 
-ModelSearch is a demo for model-card retrieval, query-to-table-to-model retrieval, and table integration over retrieved CSV tables. The current codebase is centered on the Flask demo in `src/demo/`, retrieval in `src/search/`, integration in `src/integration/`, and evaluation in `src/evaluate/`.
+ModelSearch is a demo for model-card retrieval, query-to-table-to-model retrieval, and table integration over retrieved CSV tables. The current codebase is centered on the Flask demo in `src/demo/`, retrieval in `src/search/`, integration in `src/integration/`, and evaluation in `src/evaluate/`. Here is the video demo; the full version is in https://www.youtube.com/watch?v=NX2HfPxPV90.
 
 <p align="center">
   <img src="docs/demo.gif" alt="ModelSearch demo animation" width="100%" />
