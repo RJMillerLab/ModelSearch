@@ -8,6 +8,10 @@ Official implementation of the paper *[Diversed Model Discovery via Structured T
 
 ModelSearch is a demo for model-card retrieval, query-to-table-to-model retrieval, and table integration over retrieved CSV tables. The current codebase is centered on the Flask demo in `src/demo/`, retrieval in `src/search/`, integration in `src/integration/`, and evaluation in `src/evaluate/`.
 
+<p align="center">
+  <img src="docs/demo.gif" alt="ModelSearch demo animation" width="100%" />
+</p>
+
 ## Abstract
 
 Model cards describe the behavior of models through a mixture of textual descriptions and structured artifacts, including performance, configuration, and dataset tables. Existing model search systems rely predominantly on semantic similarity over text, which can produce homogeneous result sets and limit users' ability to explore alternatives and reason about trade-offs. We argue that model search is inherently comparative: users want models that are aligned at the task level yet differentiated in measurable ways.
@@ -22,6 +26,7 @@ The ModelTables benchmark data is not bundled in this repository. Download the t
 
 - [Full Dataset](https://drive.google.com/drive/folders/1YLfkknrFuE9pWFJuarb4kyX1o5NtN-Y8?usp=sharing): complete dataset with processed tables, ground-truth files, and intermediate results.
 - [Updated Tables](https://drive.google.com/drive/folders/1f2tXNLcl0Dfi88DNhAD2R655dOBwOzb8?usp=drive_link): processed tables from the newer dump snapshot.
+- Evaluation-related data are here, while the main data are still ModelTables; some nugget-based evaluation data are included in this folder: [Google Drive folder](https://drive.google.com/drive/folders/19Qxcpp5SpOkH0Yl7mVmOxU-YzT0l6mq5?usp=drive_link).
 - [ModelTables GitHub](https://github.com/RJMillerLab/ModelTables): source benchmark repository and data-generation context.
 
 ## Quick Start
@@ -61,3 +66,19 @@ This demo builds on several external tools and codebases:
 - [Blend](https://github.com/DoraDong-2023/Blend_internal) for table search
 - [ALITE](https://github.com/northeastern-datalab/alite) for table integration
 - [ModelTables](https://github.com/RJMillerLab/ModelTables) for the underlying data pipeline and datasets
+
+## Citation
+
+If you use this work, please cite:
+
+```bibtex
+@misc{dong2026diversed,
+  title={Diversed Model Discovery via Structured Table Discovery},
+  author={Dong, Zhengyuan and Miller, Ren{\'e}e J.},
+  year={2026},
+  eprint={2605.22766},
+  archivePrefix={arXiv},
+  primaryClass={cs.IR},
+  url={https://arxiv.org/abs/2605.22766}
+}
+```

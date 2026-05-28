@@ -1,5 +1,4 @@
-jobs_251117_260501/
-jobs_251117/
+jobs_251117*
 tmp/
 bak/
 data_251117/
@@ -78,4 +77,3 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
-
