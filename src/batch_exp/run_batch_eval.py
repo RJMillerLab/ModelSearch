@@ -51,7 +51,14 @@ from src.utils.batch_run_preset_queries import (
 )
 
 MODEL_METHODS = ("sparse", "dense", "hybrid")
-TABLE_METHODS = ("keyword", "single_column", "unionable")
+TABLE_METHODS = (
+    "keyword",
+    "single_column",
+    "unionable",
+    "embedding_anchor_keyword",
+    "embedding_anchor_joinable",
+    "embedding_anchor_unionable",
+)
 METHOD_ORDER = MODEL_METHODS + TABLE_METHODS
 DEFAULT_TOP_K = (1, 3, 5, 10)
 
@@ -133,6 +140,10 @@ def _table_ids_from_job_file(job_dir: Path, method: str) -> list[str]:
     return []
 
 
+def _table_job_file_exists(job_dir: Path, method: str) -> bool:
+    return (job_dir / f"card2tab2card_{method}.json").is_file()
+
+
 def extract_method_model_sets(
     item: dict[str, Any],
     *,
@@ -171,7 +182,10 @@ def extract_method_model_sets(
             ids = _first_n(_table_ids_from_job_file(job_dir, method), effective_model_cap)
             status = "success" if ids else ""
             note = "from_job_file" if ids else ""
-        if ids:
+        if ids or _table_job_file_exists(job_dir, method):
+            if not ids:
+                status = status or "empty"
+                note = note or "from_job_file_empty"
             out_by_method[method] = {"method": method, "model_ids": _first_n(ids, effective_model_cap), "status": status, "note": note}
 
     return [out_by_method[m] for m in METHOD_ORDER if m in out_by_method]
@@ -264,7 +278,7 @@ def load_jobs(
             model_cap=model_cap,
         )
         model_ids = _unique_keep(mid for method in method_model_sets for mid in method.get("model_ids", []))
-        if model_ids:
+        if method_model_sets:
             jobs.append({"job_id": job_id, "query": query, "method_model_sets": method_model_sets, "model_ids": model_ids})
         if limit_jobs and len(jobs) >= limit_jobs:
             break
@@ -389,14 +403,23 @@ def rank_methods(scores: dict[str, dict[str, Any]], *, score_field: str) -> list
 
 
 def aggregate_records(records: list[dict[str, Any]], *, top_k_values: list[int], score_field: str) -> dict[str, Any]:
-    mean_scores: dict[str, dict[str, float]] = {method: {} for method in METHOD_ORDER}
-    raw_card_rows_mean: dict[str, dict[str, float]] = {method: {} for method in METHOD_ORDER}
-    win_tie_loss: dict[str, dict[str, dict[str, int]]] = {method: {} for method in TABLE_METHODS}
-    method_rank_counts: dict[str, dict[str, dict[str, int]]] = {method: {} for method in METHOD_ORDER}
+    observed = {
+        method
+        for record in records
+        for method in record.get("method_scores", {})
+    }
+    observed_order = [method for method in METHOD_ORDER if method in observed]
+    observed_model_methods = [method for method in MODEL_METHODS if method in observed]
+    observed_table_methods = [method for method in TABLE_METHODS if method in observed]
+
+    mean_scores: dict[str, dict[str, float]] = {method: {} for method in observed_order}
+    raw_card_rows_mean: dict[str, dict[str, float]] = {method: {} for method in observed_order}
+    win_tie_loss: dict[str, dict[str, dict[str, int]]] = {method: {} for method in observed_table_methods}
+    method_rank_counts: dict[str, dict[str, dict[str, int]]] = {method: {} for method in observed_order}
 
     for k in top_k_values:
         k_key = f"top_{k}"
-        for method in METHOD_ORDER:
+        for method in observed_order:
             vals = [
                 float(r["method_scores"].get(method, {}).get(k_key, {}).get(score_field, 0))
                 for r in records
@@ -410,25 +433,30 @@ def aggregate_records(records: list[dict[str, Any]], *, top_k_values: list[int],
             method_rank_counts[method][k_key] = {}
         for r in records:
             best_semantic = max(
-                float(r["method_scores"].get(method, {}).get(k_key, {}).get(score_field, 0))
-                for method in MODEL_METHODS
+                [
+                    float(r["method_scores"].get(method, {}).get(k_key, {}).get(score_field, 0))
+                    for method in observed_model_methods
+                ],
+                default=0.0,
             )
-            for method in TABLE_METHODS:
+            for method in observed_table_methods:
                 score = float(r["method_scores"].get(method, {}).get(k_key, {}).get(score_field, 0))
                 label = "win" if score > best_semantic else "tie" if score == best_semantic else "loss"
                 win_tie_loss[method].setdefault(k_key, {"win": 0, "tie": 0, "loss": 0})
                 win_tie_loss[method][k_key][label] += 1
             for row in r["rankings"].get(k_key, []):
                 rank_key = str(row["rank"])
-                method_rank_counts[row["method"]][k_key][rank_key] = method_rank_counts[row["method"]][k_key].get(rank_key, 0) + 1
+                method = str(row["method"])
+                if method in method_rank_counts:
+                    method_rank_counts[method][k_key][rank_key] = method_rank_counts[method][k_key].get(rank_key, 0) + 1
 
     return {
         "num_queries": len(records),
         "top_k_values": top_k_values,
         "score_field": score_field,
-        "method_order": list(METHOD_ORDER),
-        "model_methods": list(MODEL_METHODS),
-        "table_methods": list(TABLE_METHODS),
+        "method_order": observed_order,
+        "model_methods": observed_model_methods,
+        "table_methods": observed_table_methods,
         "mean_scores": mean_scores,
         "mean_card_rows": raw_card_rows_mean,
         "win_tie_loss_vs_best_semantic": win_tie_loss,
@@ -440,11 +468,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run backend/query2modelcard -> nugget batch evaluation.")
     parser.add_argument("--queries-file", type=Path, default=None, help="JSON/JSONL queries file. Runs backend first and saves an intermediate JSON.")
     parser.add_argument("--jobs-json", type=Path, default=None, help="Existing query2modelcard intermediate JSON to reuse.")
+    parser.add_argument("--jobs-root", type=Path, default=None, help="Root directory containing per-query job folders for --jobs-json mode.")
     parser.add_argument("--output-root", type=Path, default=Path(OUTPUT_DIR) / "evaluate" / "query2modelcard_nugget_batch")
     parser.add_argument("--run-id", default=None, help="Run folder name. Default: timestamp.")
-    parser.add_argument("--limit-jobs", type=int, default=None, help="Smoke-test only the first N jobs.")
+    parser.add_argument("--limit-jobs", type=int, default=None, help="Only evaluate the first N jobs.")
     parser.add_argument("--top-k", type=int, nargs="+", default=list(DEFAULT_TOP_K), help="Top-k budgets to score.")
     parser.add_argument("--query-llm-mode", choices=["batch", "iter"], default="batch")
+    parser.add_argument("--query-maps-json", type=Path, default=None, help="Reuse an existing query_maps.json instead of running query2nugget.")
     parser.add_argument("--card-llm-mode", choices=["batch", "iter"], default="batch")
     parser.add_argument("--match-build", choices=["structured", "llm_rerank"], default="structured")
     parser.add_argument("--model", default=None, help="OpenAI model override for query2nugget/filter.")
@@ -505,6 +535,7 @@ def main() -> None:
         jobs_root = Path(JOBS_DIR)
     else:
         jobs_json = args.jobs_json
+        jobs_root = args.jobs_root
 
     jobs = load_jobs(
         jobs_json,
@@ -518,7 +549,16 @@ def main() -> None:
     print(f"[load] jobs={len(jobs)} from {jobs_json}")
 
     queries = [j["query"] for j in jobs]
-    query_maps = map_queries_batch(queries, model=args.model) if args.query_llm_mode == "batch" else map_queries(queries, model=args.model)
+    if args.query_maps_json:
+        query_maps_payload = json.loads(args.query_maps_json.read_text(encoding="utf-8"))
+        query_maps = query_maps_payload.get("queries", query_maps_payload) if isinstance(query_maps_payload, dict) else query_maps_payload
+        if not isinstance(query_maps, list):
+            raise ValueError(f"Expected list or {{'queries': [...]}} in {args.query_maps_json}")
+        if len(query_maps) != len(queries):
+            raise ValueError(f"query_maps length {len(query_maps)} != jobs length {len(queries)}")
+        print(f"[query2nugget] reused query maps: {args.query_maps_json.resolve()}")
+    else:
+        query_maps = map_queries_batch(queries, model=args.model) if args.query_llm_mode == "batch" else map_queries(queries, model=args.model)
     query_maps_path = out_dir / "query_maps.json"
     query_maps_path.write_text(json.dumps({"queries": query_maps}, ensure_ascii=False, indent=2), encoding="utf-8")
 

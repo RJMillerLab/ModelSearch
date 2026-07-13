@@ -165,6 +165,43 @@ python -m src.search.query2tab2card --resources hugging --query "bert base uncas
 #   --q2m_top_k 20
 ```
 
+## 2.4b query2anc_table_embed
+
+Dense table-anchor baseline:
+
+```text
+query -> dense embedding anchor table -> tab2tab -> tab2card -> related model cards
+```
+
+Precompute table embeddings:
+
+```bash
+python -m src.search.query2anc_table_embed_pre --resources hugging --batch_size 256
+```
+
+Single-query inference:
+
+```bash
+python -m src.search.query2anc_table_embed_inf --resources hugging --query "bert base uncased" --anchor_top_k 1 --search_type keyword --top_k 10 --output_json tmp/card2tab2card_embedding_anchor.json
+```
+
+Run the three paper ablations (`keyword`, `single_column`, `unionable`) and
+evaluate them:
+
+```bash
+python -m src.batch_exp.run_embedding_anchor_ablation --top-k 10 --eval-top-k 10 --query-maps-json data_251117/evaluate/query2modelcard_nugget_batch/<run_id>/query_maps.json --run-id embedding_anchor_3tab2tab_top10 --figure-output outputs/statistic.pdf
+```
+
+Main outputs:
+
+```text
+data_251117/query2anc_table_embeddings_hugging.npz
+outputs/statistic.pdf
+tmp/query2anc_table_embed_3tab2tab_jobs_top10.json
+data_251117/evaluate/query2modelcard_nugget_batch/<run_id>/query_maps.json
+data_251117/evaluate/query2modelcard_nugget_batch/<run_id>/aggregate_summary.json
+```
+
 <details><summary>Optional 2.5 tab2tab_by_type</summary>
 ## (Optional) 2.5 tab2tab_by_type (test all modes; needs 1.3) (deprecated)
 

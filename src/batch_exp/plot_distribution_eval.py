@@ -22,16 +22,30 @@ METHOD_LABELS = {
     "sparse": "Sparse",
     "dense": "Dense",
     "hybrid": "Hybrid",
-    "keyword": "Keyword",
-    "single_column": "Joinable",
-    "unionable": "Unionable",
+    "keyword": "CardAnchor-Key",
+    "single_column": "CardAnchor-Join",
+    "unionable": "CardAnchor-Union",
+    "embedding_anchor_keyword": "TabAnchor-Key",
+    "embedding_anchor_joinable": "TabAnchor-Join",
+    "embedding_anchor_unionable": "TabAnchor-Union",
 }
 
-METHOD_ORDER = ["sparse", "dense", "hybrid", "keyword", "single_column", "unionable"]
+DEFAULT_METHOD_ORDER = [
+    "sparse",
+    "dense",
+    "hybrid",
+    "keyword",
+    "single_column",
+    "unionable",
+    "embedding_anchor_keyword",
+    "embedding_anchor_joinable",
+    "embedding_anchor_unionable",
+]
+METHOD_ORDER = list(DEFAULT_METHOD_ORDER)
 SEMANTIC_METHODS = ("sparse", "dense", "hybrid")
 TABLE_METHODS = ("keyword", "single_column", "unionable")
-DIST_GROUP_SEPARATOR_Y = 3.5
-RANK_GROUP_SEPARATOR_Y = 2.5
+DIST_GROUP_SEPARATOR_YS = (3.5, 6.5)
+RANK_GROUP_SEPARATOR_YS = (2.5, 5.5)
 
 
 def _load_summary(path: Path) -> dict[str, Any]:
@@ -57,6 +71,54 @@ def _load_per_query_records(path: Path | None) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             records.append(item)
     return records
+
+
+def _merge_per_query_records(record_groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    for records in record_groups:
+        for record in records:
+            job_id = str(record.get("job_id", "") or "").strip()
+            query = str(record.get("query", "") or "").strip()
+            key = (job_id, query)
+            if not job_id and not query:
+                continue
+            if key not in merged:
+                merged[key] = dict(record)
+                order.append(key)
+            else:
+                base = merged[key]
+                base_scores = base.setdefault("method_scores", {})
+                extra_scores = record.get("method_scores")
+                if isinstance(base_scores, dict) and isinstance(extra_scores, dict):
+                    base_scores.update(extra_scores)
+                base_sets = base.setdefault("method_model_sets", [])
+                extra_sets = record.get("method_model_sets")
+                if isinstance(base_sets, list) and isinstance(extra_sets, list):
+                    seen = {
+                        str(item.get("method", ""))
+                        for item in base_sets
+                        if isinstance(item, dict)
+                    }
+                    for item in extra_sets:
+                        if not isinstance(item, dict):
+                            continue
+                        method = str(item.get("method", ""))
+                        if method and method not in seen:
+                            base_sets.append(item)
+                            seen.add(method)
+    return [merged[key] for key in order]
+
+
+def _observed_methods(records: list[dict[str, Any]]) -> list[str]:
+    observed: set[str] = set()
+    for record in records:
+        method_scores = record.get("method_scores")
+        if isinstance(method_scores, dict):
+            observed.update(str(m) for m in method_scores.keys())
+    ordered = [m for m in DEFAULT_METHOD_ORDER if m in observed]
+    ordered.extend(sorted(m for m in observed if m not in set(ordered)))
+    return ordered
 
 
 def _resolve_per_query_path(summary_path: Path, summary_per_query_path: str, explicit_path: Path | None) -> Path | None:
@@ -153,6 +215,13 @@ def _red_cmap():
     )
 
 
+def _rank_palette(n: int) -> list[Any]:
+    cmap = _red_cmap()
+    if n <= 1:
+        return [cmap(0.85)]
+    return [cmap(0.85 - 0.72 * (idx / (n - 1))) for idx in range(n)]
+
+
 def _render_distribution_panel(
     ax_dist,
     *,
@@ -217,7 +286,7 @@ def _render_distribution_panel(
             textcoords="offset points",
             ha="left",
             va="center",
-            fontsize=8.0,
+            fontsize=9.0,
             color="#7f0000",
             clip_on=False,
         )
@@ -225,11 +294,11 @@ def _render_distribution_panel(
     ax_dist.set_xlim(0.0, max(1.0, max_log * 1.08))
     tick_vals = [0, 1, 2, 5, 10, 20, 50, 100, 200, 500]
     tick_vals = [v for v in tick_vals if v <= hi]
-    ax_dist.set_xticks([np.log1p(v) for v in tick_vals], [str(v) for v in tick_vals], fontsize=8.5)
-    ax_dist.set_yticks(positions, [METHOD_LABELS[m] for m in METHOD_ORDER], fontsize=8.0)
+    ax_dist.set_xticks([np.log1p(v) for v in tick_vals], [str(v) for v in tick_vals], fontsize=9.5)
+    ax_dist.set_yticks(positions, [METHOD_LABELS[m] for m in METHOD_ORDER], fontsize=10.0)
     if not show_method_labels:
         ax_dist.set_yticklabels([])
-    ax_dist.set_xlabel("Nugget count (log1p scale)" if show_xlabel else "", fontsize=9)
+    ax_dist.set_xlabel("Nugget count (log1p scale)" if show_xlabel else "", fontsize=11)
     ax_dist.grid(axis="x", color="#eeeeee", linestyle="--", linewidth=0.6)
     ax_dist.set_axisbelow(True)
     ax_dist.tick_params(axis="y", pad=4)
@@ -237,9 +306,11 @@ def _render_distribution_panel(
     ax_dist.invert_yaxis()
     ax_dist.margins(y=0.06)
     ax_dist.spines["top"].set_visible(False)
-    ax_dist.axhline(DIST_GROUP_SEPARATOR_Y, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
+    for sep_y in DIST_GROUP_SEPARATOR_YS:
+        if sep_y < len(METHOD_ORDER) + 0.5:
+            ax_dist.axhline(sep_y, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
     if show_title:
-        ax_dist.set_title(f"Top-{compare_k}", fontsize=11, weight="bold", pad=10)
+        ax_dist.set_title(f"Top-{compare_k}", fontsize=12, weight="bold", pad=10)
 
 
 def _render_rank_panel(
@@ -268,7 +339,7 @@ def _render_rank_panel(
         ],
         dtype=float,
     )
-    rank_colors = list(reversed(_red_palette()))
+    rank_colors = _rank_palette(len(METHOD_ORDER))
     y = np.arange(len(METHOD_ORDER))
     left_edge = np.zeros(len(METHOD_ORDER), dtype=float)
     containers = []
@@ -288,32 +359,33 @@ def _render_rank_panel(
         containers.append(bars)
         for row_idx, val in enumerate(vals):
             pct = val * 100.0
-            if pct >= 8.0:
-                ax_rank.text(
-                    left_edge[row_idx] + val / 2.0,
-                    row_idx,
-                    f"{pct:.0f}%",
-                    ha="center",
-                    va="center",
-                    fontsize=8.3,
-                    color="#111111",
-                )
+            ax_rank.text(
+                left_edge[row_idx] + val / 2.0,
+                row_idx,
+                f"{pct:.0f}",
+                ha="center",
+                va="center",
+                fontsize=9.3,
+                color="#111111",
+            )
         left_edge += vals
 
-    ax_rank.set_yticks(y, [METHOD_LABELS[m] for m in METHOD_ORDER], fontsize=8.0)
+    ax_rank.set_yticks(y, [METHOD_LABELS[m] for m in METHOD_ORDER], fontsize=10.0)
     if not show_method_labels:
         ax_rank.set_yticklabels([])
     ax_rank.set_xlim(0.0, 1.0)
-    ax_rank.set_xticks(np.linspace(0.0, 1.0, 6), [f"{int(v * 100)}%" for v in np.linspace(0.0, 1.0, 6)], fontsize=9)
+    ax_rank.set_xticks(np.linspace(0.0, 1.0, 6), [f"{int(v * 100)}%" for v in np.linspace(0.0, 1.0, 6)], fontsize=10)
     ax_rank.tick_params(axis="y", length=0, pad=2)
     ax_rank.tick_params(top=False, bottom=True, labeltop=False, labelbottom=True)
     ax_rank.invert_yaxis()
     ax_rank.grid(axis="x", color="#eeeeee", linestyle="--", linewidth=0.7)
     ax_rank.set_axisbelow(True)
-    ax_rank.axhline(RANK_GROUP_SEPARATOR_Y, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
-    ax_rank.set_xlabel(f"Top-{compare_k}" if show_xlabel else "", fontsize=9, labelpad=10)
+    for sep_y in RANK_GROUP_SEPARATOR_YS:
+        if sep_y < len(METHOD_ORDER) - 0.5:
+            ax_rank.axhline(sep_y, color="#6b6b6b", linestyle=(0, (4, 3)), linewidth=1.0)
+    ax_rank.set_xlabel(f"Top-{compare_k}" if show_xlabel else "", fontsize=11, labelpad=10)
     if show_title:
-        ax_rank.set_title(f"Top-{compare_k}", fontsize=11, weight="bold", pad=10)
+        ax_rank.set_title(f"Top-{compare_k}", fontsize=12, weight="bold", pad=10)
     return containers, [bars[0] for bars in containers]
 
 
@@ -323,8 +395,11 @@ def plot(
     *,
     compare_top_ks: list[int] | None,
     per_query_jsonl: Path | None,
+    extra_per_query_jsonl: list[Path] | None = None,
+    method_order: list[str] | None = None,
 ) -> None:
-    os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplotlib-codex"))
+    global METHOD_ORDER
+    os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplotlib-modelsearch"))
     import matplotlib.pyplot as plt
 
     summary = _load_summary(summary_path)
@@ -341,13 +416,21 @@ def plot(
     summary_per_query_path = str(summary.get("paths", {}).get("per_query_method_scores", "") or "").strip()
     source_path = _resolve_per_query_path(summary_path, summary_per_query_path, per_query_jsonl)
     records = _load_per_query_records(source_path)
+    extra_records = [
+        _load_per_query_records(path)
+        for path in (extra_per_query_jsonl or [])
+        if path.is_file()
+    ]
+    if extra_records:
+        records = _merge_per_query_records([records, *extra_records])
     if not records:
         raise RuntimeError(
             "No per-query records found. Provide --per-query-jsonl or place per_query_method_scores.jsonl next to the summary JSON."
         )
+    METHOD_ORDER = method_order or _observed_methods(records)
 
     n_cols = len(compare_ks)
-    fig_height = 6.0
+    fig_height = 6.0 if len(METHOD_ORDER) <= 6 else 7.4
     fig_width = max(13.2, 3.0 * n_cols)
     fig = plt.figure(figsize=(fig_width, fig_height), dpi=180)
     outer = fig.add_gridspec(2, n_cols, hspace=0.34, wspace=0.10)
@@ -380,24 +463,25 @@ def plot(
             ax_dist.tick_params(axis="y", labelleft=False)
             ax_rank.tick_params(axis="y", labelleft=False)
 
-    fig.text(0.5, 0.975, "Nugget Count Distribution and Query-Level Rank Outcomes by Top-k", ha="center", va="top", fontsize=14, weight="bold")
-    fig.text(0.5, 0.915, "Distribution of nugget count", ha="center", va="center", fontsize=11, weight="bold")
-    fig.text(0.5, 0.455, "Query-level rank outcomes", ha="center", va="center", fontsize=11, weight="bold")
+    fig.text(0.5, 0.975, "Nugget Count Distribution and Query-Level Rank Outcomes by Top-k", ha="center", va="top", fontsize=15, weight="bold")
+    fig.text(0.5, 0.915, "Distribution of nugget count", ha="center", va="center", fontsize=12, weight="bold")
+    fig.text(0.5, 0.485, "Query-level rank outcomes", ha="center", va="center", fontsize=12, weight="bold")
 
     from matplotlib.patches import Patch
 
-    legend_handles = [Patch(facecolor=color, edgecolor="white", label=f"Rank {idx + 1}") for idx, color in enumerate(reversed(_red_palette()))]
+    rank_colors = _rank_palette(len(METHOD_ORDER))
+    legend_handles = [Patch(facecolor=color, edgecolor="white", label=f"Rank {idx + 1}") for idx, color in enumerate(rank_colors)]
     fig.legend(
         handles=legend_handles,
         loc="lower center",
         bbox_to_anchor=(0.5, 0.02),
-        ncol=6,
+        ncol=min(9, len(rank_colors)),
         frameon=False,
-        fontsize=8.5,
+        fontsize=9.5,
         columnspacing=0.8,
         handlelength=1.8,
     )
-    fig.subplots_adjust(top=0.90, bottom=0.10, left=0.085, right=0.995)
+    fig.subplots_adjust(top=0.90, bottom=0.14, left=0.085, right=0.995)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
@@ -415,12 +499,27 @@ def main() -> None:
         help="Top-k budgets to plot. Default: all top-k values in the summary.",
     )
     parser.add_argument("--per-query-jsonl", type=Path, default=None, help="Optional explicit per-query JSONL override.")
+    parser.add_argument(
+        "--extra-per-query-jsonl",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Additional per-query JSONL files to merge by job_id/query before plotting.",
+    )
+    parser.add_argument(
+        "--method-order",
+        nargs="*",
+        default=None,
+        help="Optional explicit method order. Default: observed methods in the paper order.",
+    )
     args = parser.parse_args()
     plot(
         args.summary_json,
         args.output,
         compare_top_ks=args.compare_top_k,
         per_query_jsonl=args.per_query_jsonl,
+        extra_per_query_jsonl=args.extra_per_query_jsonl,
+        method_order=args.method_order,
     )
     print(f"saved = {args.output.resolve()}")
 

@@ -42,6 +42,7 @@ ENV/
 
 # Output files
 output/
+outputs/
 md/
 *.npz
 *.faiss
